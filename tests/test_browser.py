@@ -240,17 +240,21 @@ class ViewerInFirefox(unittest.TestCase):
         self.open_viewer("tree.svg")
         got = self.m.run("""
             const rows = () => [...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
-              r.querySelector('span').textContent, r.querySelector('input').checked,
+              r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.visible === 'true',
               r.classList.contains('tpv-under-hidden')]);
             const before = rows();
+            const states = () => Object.fromEntries([...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
+              r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.state]));
+            const partly = states();
             tp.setLayerVisible('Dimensions', false);
             const parentOff = rows();
             const hiddenByParent = document.getElementById('d-w').getClientRects().length === 0;
             tp.setLayerVisible('Dimensions', true);
             tp.setLayerVisible('Dimensions / Details', true);
             const detailsOn = rows();
+            const allShown = states();
             document.querySelector('.tpv-twisty:not([disabled])').click();  // fold Dimensions
-            done({ before, parentOff, hiddenByParent, detailsOn, folded: rows() });
+            done({ before, partly, parentOff, hiddenByParent, detailsOn, allShown, folded: rows() });
         """)
         self.assertEqual(got["before"], [["Sketch", True, False], ["Dimensions", True, False],
                                          ["Details", False, False], ["Overall", True, False],
@@ -259,6 +263,10 @@ class ViewerInFirefox(unittest.TestCase):
                                                  ["Overall", True, True]])
         self.assertTrue(got["hiddenByParent"])  # a sublayer's content disappears with its parent
         self.assertEqual(got["detailsOn"][2], ["Details", True, False])
+        # A shown node with something hidden below it gets the half-crossed eye.
+        self.assertEqual((got["partly"]["Dimensions"], got["partly"]["Details"], got["partly"]["Outline"]),
+                         ("partial", "hidden", "visible"))
+        self.assertEqual(got["allShown"]["Dimensions"], "visible")
         self.assertEqual([r[0] for r in got["folded"]], ["Sketch", "Dimensions", "Outline", "Bolt"])
 
     def test_model_tree(self):
@@ -266,10 +274,10 @@ class ViewerInFirefox(unittest.TestCase):
         rows = """
             const t = window.tracepaper3d;
             const rows = () => [...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
-              r.querySelector('span').textContent, r.querySelector('input').checked]);
+              r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.visible === 'true']);
             const shown = () => Object.fromEntries(t.flatten(t.state.tree).map((n) => [n.key, n.obj.visible]));
             const click = (name) => [...document.querySelectorAll('#tpv-layers .tpv-layer')]
-              .find((r) => r.querySelector('span').textContent === name).querySelector('input').click();
+              .find((r) => r.querySelector('.tpv-node-name').textContent === name).querySelector('.tpv-eye').click();
         """
         first = self.m.run(rows + "done({ rows: rows(), shown: shown() });")
         self.assertEqual(first, {"rows": [["body", True], ["screw", False]],  # the file hides the screw

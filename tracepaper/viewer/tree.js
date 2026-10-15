@@ -7,6 +7,18 @@
 
 export const flatten = (nodes) => nodes.flatMap((n) => [n, ...flatten(n.children)]);
 
+const LEFT = '<path d="M8 3.5Q3 3.5 1.5 8Q3 12.5 8 12.5"/>';
+const RIGHT = '<path d="M8 3.5Q13 3.5 14.5 8Q13 12.5 8 12.5"/>';
+const PUPIL = '<circle cx="8" cy="8" r="2"/>';
+const EYES = {
+  visible: LEFT + RIGHT + PUPIL,
+  partial: `${LEFT}${PUPIL}<g opacity="0.3">${RIGHT}</g>`, // shown, but something below is hidden: half an eye
+  hidden: `${LEFT}${RIGHT}${PUPIL}<path d="M2.5 2.5l11 11"/>`,
+};
+const hiddenBelow = (node) => node.children.some((c) => c.hidden || hiddenBelow(c));
+const icon = (paths) => '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" '
+  + `stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+
 // collapsed: a Set of the keys of folded nodes, kept by the view.
 // topFirst: list children last-to-first, for drawings where later is on top.
 // mark(node): extra class names for a node's row.
@@ -29,15 +41,19 @@ export function renderTree(container, roots, { collapsed, onToggle, topFirst = f
     } else {
       twisty.disabled = true;
     }
-    const label = document.createElement('label');
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.checked = !node.hidden;
-    box.addEventListener('change', () => onToggle(node, !box.checked));
+    const eye = document.createElement('button');
+    const state = node.hidden ? 'hidden' : hiddenBelow(node) ? 'partial' : 'visible';
+    eye.className = 'tpv-eye';
+    eye.dataset.visible = String(!node.hidden);
+    eye.dataset.state = state;
+    eye.title = node.hidden ? 'Show' : state === 'partial' ? 'Hide (some parts below are hidden)' : 'Hide';
+    eye.setAttribute('aria-label', `${node.hidden ? 'Show' : 'Hide'} ${node.name}`);
+    eye.innerHTML = icon(EYES[state]);
+    eye.addEventListener('click', () => onToggle(node, !node.hidden));
     const name = document.createElement('span');
+    name.className = 'tpv-node-name';
     name.textContent = node.name;
-    label.append(box, name);
-    row.append(twisty, label);
+    row.append(twisty, eye, name);
     li.append(row);
     li.className = mark(node);
     if (node.children.length && open) {
