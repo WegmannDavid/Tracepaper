@@ -2,6 +2,7 @@
 // constraint labels and sketch on top, with the mouse or a tablet's pen.
 // Save writes <sheet>.sketch.svg (SPEC.md §3).
 import * as A from './annotations.js';
+import { $, CLIENT, fetchOk, listViews, renderViewsMenu, toaster, viewUrl } from './page.js';
 import * as Pen from './pen.js';
 import { flatten, renderTree } from './tree.js';
 
@@ -19,7 +20,6 @@ const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 400;
 const POLL_MS = 1000;
 
-const $ = (id) => document.getElementById(id);
 const ui = {
   bar: $('tpv-bar'), stage: $('tpv-stage'), camera: $('tpv-camera'), paper: $('tpv-paper'),
   host: $('tpv-host'), sheet: $('tpv-sheet'), layers: $('tpv-layers'), status: $('tpv-status'),
@@ -29,7 +29,7 @@ const ui = {
 };
 
 const state = {
-  views: [], viewsKey: '', name: null, sheetMtime: null, sketchMtime: null, expanded: new Set(),
+  views: [], name: null, sheetMtime: null, sketchMtime: null, expanded: new Set(),
   root: null, ref: null, ink: null, annotations: [],
   dirty: false, undo: [], moved: new Map(), layerVis: new Map(),
   // The mouse moves labels and pans unless asked to draw; the tablet's pen always draws.
@@ -47,18 +47,10 @@ let resolveReady;
 const ready = new Promise((resolve) => { resolveReady = resolve; });
 
 const api = (kind, name) => `/api/${kind}/${encodeURIComponent(name)}`;
-const viewUrl = (name) => `/view/${name.split('/').map(encodeURIComponent).join('/')}`;
 const viewInUrl = () => (location.pathname.startsWith('/view/') ? decodeURIComponent(location.pathname.slice(6)) : null);
-// Identifies this window to the server, which sends the pen to the window used last.
-const CLIENT = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const sketchName = (name) => `${name.replace(/\.svg$/i, '')}.sketch.svg`;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-
-async function fetchOk(url, init = {}) {
-  const r = await fetch(url, { cache: 'no-store', ...init });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-  return r;
-}
+const toast = toaster(ui.toast);
 
 // ---- Sheet document ---------------------------------------------------------
 
@@ -212,7 +204,7 @@ async function openSheet(name, { reload = false } = {}) {
     document.title = `${name} · Tracepaper`;
     if (viewInUrl() !== name) history.replaceState(null, '', viewUrl(name));
     renderLayers();
-    renderViews(true);
+    renderViews();
     if (!reload) fit();
     updateStatus();
     resolveReady();
@@ -258,16 +250,7 @@ function setLayerVisible(key, visible) {
   renderLayers();
 }
 
-function renderViews(force = false) {
-  const key = JSON.stringify(state.views.map((v) => [v.name, v.kind, !!v.sketch]));
-  if (force || key !== state.viewsKey) {
-    state.viewsKey = key;
-    ui.sheet.replaceChildren(...state.views.map((v) => new Option(
-      `${v.name}${v.kind === 'model' ? '  (3D)' : ''}${v.sketch ? ' ✎' : ''}`, v.name)));
-  }
-  ui.sheet.value = state.name ?? '';
-  ui.sheet.disabled = state.views.length === 0;
-}
+const renderViews = () => renderViewsMenu(ui.sheet, state.views, state.name);
 
 function updateStatus() {
   let text = '', cls = '';
@@ -284,15 +267,6 @@ function updateStatus() {
 function markDirty() {
   state.dirty = true;
   updateStatus();
-}
-
-let toastTimer;
-function toast(message, error = false) {
-  ui.toast.textContent = message;
-  ui.toast.classList.toggle('error', error);
-  ui.toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { ui.toast.hidden = true; }, error ? 6000 : 2500);
 }
 
 // ---- Camera -----------------------------------------------------------------
@@ -816,7 +790,7 @@ async function sync(listing) {
 async function poll() {
   const gen = state.gen;
   let listing = null;
-  try { listing = await (await fetchOk('/api/views')).json(); } catch { /* server stopped */ }
+  try { listing = await listViews(); } catch { /* server stopped */ }
   if (state.offline !== !listing) { state.offline = !listing; updateStatus(); }
   if (listing && gen === state.gen && !state.busy) {
     try { await sync(listing); } catch (err) { console.error(err); }
@@ -831,37 +805,34 @@ async function poll() {
 // end, whatever the mouse is doing. With several windows open, the server sends
 // it to the one used last with the mouse, or where Connect was pressed.
 
-// done: when the pen touched down for the last stroke that ended (pen.py's Decoder).
-const pen = { status: null, size: null, down: false, ignored: false, stroke: null, removed: null, done: 0 };
-const penHere = () => pen.status?.active === CLIENT;
+// What the pen is doing here. done: when the pen touched down for the last stroke that
+// ended (pen.py's Decoder).
+const pen = { down: false, ignored: false, stroke: null, removed: null, done: 0 };
 
-function connectPen() {
-  const source = new EventSource(`/api/pen?client=${encodeURIComponent(CLIENT)}&draws=1`);
-  source.addEventListener('status', (e) => {
-    pen.status = JSON.parse(e.data);
-    pen.size = { width: pen.status.width, height: pen.status.height };
-    if (pen.status.state !== 'connected' || !penHere()) {
+const tablet = new Pen.Tablet({
+  client: CLIENT, draws: true, label: ui.pen, button: ui.penButton, toast,
+  describe: (s) => {
+    const r = ui.stage.getBoundingClientRect();
+    if (!r.width || !r.height) return { text: 'reMarkable', title: s.message };
+    const a = Pen.activeArea(tablet.size, r), size = `${Math.round(a.width)} × ${Math.round(a.height)} mm`;
+    return { text: `reMarkable · ${size}`, title: `${s.message}. The middle ${size} of the tablet covers this `
+      + 'view, so drawings keep their proportions; the rest of the tablet does nothing.' };
+  },
+  onStatus: (s) => {
+    if (s?.state !== 'connected' || !tablet.here) {
       endPenTouch();
       showPenCursor(null);
     }
-    renderPen();
     viewChanged();
-  });
-  source.addEventListener('pen', (e) => onPenFrame(JSON.parse(e.data)));
-  source.addEventListener('error', () => {
-    if (source.readyState === EventSource.CLOSED) pen.status = null; // no pen on this server
-    else if (pen.status) pen.status = { ...pen.status, state: 'error', message: 'viewer server stopped' };
-    endPenTouch();
-    showPenCursor(null);
-    renderPen();
-  });
-}
+  },
+  onFrame: onPenFrame,
+});
 
 function onPenFrame(f) {
   pen.done = f.done ?? pen.done;
   const r = ui.stage.getBoundingClientRect();
-  if (!state.root || !pen.size || !penHere() || !r.width || !r.height) return;
-  const [x, y] = Pen.tabletToStage([f.x, f.y], pen.size, r);
+  if (!state.root || !tablet.here || !r.width || !r.height) return;
+  const [x, y] = Pen.tabletToStage([f.x, f.y], tablet.size, r);
   const inside = x >= 0 && y >= 0 && x <= r.width && y <= r.height;
   const clientX = r.left + x, clientY = r.top + y;
   showPenCursor(f.tool && inside ? { x, y, eraser: f.tool === 'eraser' } : null);
@@ -890,27 +861,6 @@ function endPenTouch() {
   viewChanged(); // the tablet's own ink of the stroke goes, even if nothing was drawn here
 }
 
-// The mouse was used in this window: the pen draws here from now on.
-function claimPen() {
-  if (!pen.status || penHere()) return;
-  Pen.tablet('active', CLIENT).catch(() => {});
-}
-
-// Connect the tablet to draw here, taking it from wherever it is; or let it go.
-async function togglePen() {
-  const action = ui.penButton.dataset.action;
-  ui.penButton.disabled = true;
-  if (action === 'disconnect') ui.penButton.textContent = 'Disconnecting…';
-  try {
-    await Pen.tablet(action, CLIENT);
-  } catch (err) {
-    toast(`Could not ${action} the tablet: ${err.message}`, true);
-  } finally {
-    ui.penButton.disabled = false;
-    renderPen();
-  }
-}
-
 function showPenCursor(c) {
   if (!c) { ui.penCursor.setAttribute('visibility', 'hidden'); return; }
   ui.penCursor.removeAttribute('visibility');
@@ -918,38 +868,6 @@ function showPenCursor(c) {
   ui.penCursor.setAttribute('cy', c.y);
   ui.penCursor.setAttribute('r', c.eraser ? ERASER_PX : 4);
   ui.penCursor.classList.toggle('eraser', c.eraser);
-}
-
-function renderPen() {
-  const s = pen.status;
-  ui.pen.hidden = !s || (s.state === 'off' && !s.message);
-  ui.penButton.hidden = !s;
-  if (!s) return;
-  const r = ui.stage.getBoundingClientRect();
-  const mine = s.state !== 'off' && penHere();
-  ui.penButton.dataset.action = mine ? 'disconnect' : 'connect';
-  if (!ui.penButton.disabled) {
-    ui.penButton.textContent = mine ? 'Disconnect' : s.state === 'off' ? 'Connect reMarkable' : 'Connect here';
-  }
-  ui.penButton.title = mine ? "Let the tablet go: its own app starts again"
-    : s.state === 'off' ? "Draw with the reMarkable's pen in this window. Its own app is closed until you "
-      + 'disconnect; another Tracepaper viewer that has it lets it go.'
-    : "Draw with the reMarkable's pen in this window";
-  let text = 'reMarkable: connecting…', title = s.message;
-  if (s.state === 'connected' && !penHere()) {
-    text = 'reMarkable · in another window';
-    title = 'The pen draws in the window you used last. Click into this one, or press Connect here, to draw here.';
-  } else if (s.state === 'connected' && r.width && r.height) {
-    const a = Pen.activeArea(pen.size, r);
-    text = `reMarkable · ${Math.round(a.width)} × ${Math.round(a.height)} mm`;
-    title = `${s.message}. The middle ${Math.round(a.width)} × ${Math.round(a.height)} mm of the tablet `
-      + 'covers this view, so drawings keep their proportions; the rest of the tablet does nothing.';
-  } else if (s.state === 'error' || s.state === 'off') {
-    text = `reMarkable: ${s.message || s.state}`;
-  }
-  ui.pen.textContent = text;
-  ui.pen.title = title;
-  ui.pen.className = `tpv-pen ${s.state}`;
 }
 
 // ---- The tablet's screen ---------------------------------------------------------
@@ -961,7 +879,7 @@ function renderPen() {
 const SCREEN_DELAY_MS = 400;
 let screenTimer = null;
 
-const showsHere = () => !!state.root && pen.status?.state === 'connected' && !!pen.status.screen && penHere();
+const showsHere = () => !!state.root && tablet.status?.state === 'connected' && !!tablet.status.screen && tablet.here;
 
 function viewChanged() {
   if (!showsHere()) return;
@@ -984,9 +902,9 @@ async function sendView() {
 // The tablet's whole screen as it is held, with the view where the pen's area is.
 async function renderScreen() {
   const r = ui.stage.getBoundingClientRect();
-  const [w, h] = pen.status?.pixels ?? [];
-  if (!state.root || !pen.size || !r.width || !r.height || !w || !h) return null;
-  const a = Pen.activeArea(pen.size, r), k = w / pen.size.width; // screen pixels per tablet mm
+  const [w, h] = tablet.status?.pixels ?? [];
+  if (!state.root || !r.width || !r.height || !w || !h) return null;
+  const a = Pen.activeArea(tablet.size, r), k = w / tablet.size.width; // screen pixels per tablet mm
   const copy = state.root.cloneNode(true);
   copy.querySelector(`#${REF_ID}`)?.remove();
   for (const n of copy.querySelectorAll('.tpv-hover')) n.classList.remove('tpv-hover');
@@ -1068,10 +986,9 @@ ui.sheet.addEventListener('change', () => {
   else openSheet(name);
 });
 
-ui.penButton.addEventListener('click', togglePen);
 // Using this window with the mouse (or a local pen) makes it the one the tablet draws in.
-window.addEventListener('pointerdown', claimPen, true);
-ui.stage.addEventListener('wheel', claimPen, { passive: true });
+window.addEventListener('pointerdown', () => tablet.claim(), true);
+ui.stage.addEventListener('wheel', () => tablet.claim(), { passive: true });
 
 ui.stage.addEventListener('pointerdown', onPointerDown);
 ui.stage.addEventListener('pointermove', onPointerMove);
@@ -1105,7 +1022,7 @@ window.addEventListener('keyup', (e) => {
 
 window.addEventListener('beforeunload', (e) => { if (state.dirty) e.preventDefault(); });
 
-window.addEventListener('resize', renderPen); // the tablet's drawing area follows the canvas's shape
+window.addEventListener('resize', () => tablet.render()); // the tablet's drawing area follows the canvas's shape
 window.addEventListener('resize', viewChanged);
 // Anything drawn changing changes the tablet's picture; the pointer's marks and highlights don't.
 new MutationObserver((changes) => {
@@ -1119,8 +1036,8 @@ setTool(state.tool);
 applyCamera();
 updateStatus();
 poll();
-connectPen();
+tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
-window.tracepaper = { state, ready, A, Pen, pen, CLIENT, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit,
+window.tracepaper = { state, ready, A, Pen, pen, tablet, CLIENT, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit,
   renderScreen };

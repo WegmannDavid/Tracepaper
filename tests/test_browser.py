@@ -417,7 +417,7 @@ class ViewerInFirefox(unittest.TestCase):
         client = {"a": self.m.run("done(tp.CLIENT);")}
         self.assertEqual(self.pen_ui(), [None, "Connect reMarkable"])  # nothing connects by itself
         self.m.run("document.getElementById('tpv-pen-button').click(); "
-                   "until(() => tp.pen.status?.state === 'connected', done);")
+                   "until(() => tp.tablet.status?.state === 'connected', done);")
         self.assertEqual(hub.status["active"], client["a"])
         other = self.m.call("WebDriver:NewWindow", {"type": "window"})["handle"]
         window = {"a": main, "b": other}
@@ -472,7 +472,7 @@ class ViewerInFirefox(unittest.TestCase):
             self.assertTrue(self.m.run("until(() => document.getElementById('tpv-pen-button').textContent"
                                        " === 'Disconnect', done);"))
             self.m.run("document.getElementById('tpv-pen-button').click(); "
-                       "until(() => tp.pen.status?.state === 'off', done);")
+                       "until(() => tp.tablet.status?.state === 'off', done);")
             self.assertEqual(self.pen_ui(), [None, "Connect reMarkable"])
         finally:
             self.m.call("WebDriver:SwitchToWindow", {"handle": other})
@@ -492,6 +492,20 @@ class ViewerInFirefox(unittest.TestCase):
         self.m.run("document.getElementById('tpv-pen-button').click();"
                    "until(() => document.getElementById('tpv-pen').hidden, done);")
         self.assertEqual((hub.status["state"], self.pen_ui()), ("off", [None, None]))
+
+    def test_project_page_lists_the_views(self):
+        base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.m.call("WebDriver:ExecuteScript", {"script": "if (window.tracepaper) tracepaper.state.dirty = false;",
+                                                "args": []})
+        self.m.call("WebDriver:Navigate", {"url": f"{base}/"})
+        views = self.m.run("""
+            until(() => document.querySelectorAll('.tpv-view-link').length > 3
+              && [...document.querySelectorAll('.tpv-view-link')].map((a) => [
+                   a.querySelector('.tpv-kind').textContent, a.querySelector('.tpv-view-name').textContent,
+                   new URL(a.href).pathname]), done);
+        """)
+        self.assertIn(["3D", "bracket.glb", "/view/bracket.glb"], views)
+        self.assertIn(["2D", "section-A.svg", "/view/section-A.svg"], views)
 
     def test_mouse_starts_in_move(self):
         self.open_viewer()
@@ -606,7 +620,7 @@ class ViewerInFirefox(unittest.TestCase):
         hub.publish_status("connected", "test tablet")
         view = self.m.run("""
             tp.setTool('move');  // the pen draws whatever the mouse's tool
-            until(() => tp.pen.status?.state === 'connected' && !document.getElementById('tpv-pen').hidden && (() => {
+            until(() => tp.tablet.status?.state === 'connected' && !document.getElementById('tpv-pen').hidden && (() => {
               const r = document.getElementById('tpv-stage').getBoundingClientRect();
               const m = tp.state.ref.getScreenCTM();
               return { w: r.width, h: r.height, left: r.left, top: r.top, a: m.a, d: m.d, e: m.e, f: m.f,

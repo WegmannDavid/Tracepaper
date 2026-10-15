@@ -1,6 +1,6 @@
 // The project page: every view in the project folder, each opened in a window of its own.
-const $ = (id) => document.getElementById(id);
-const viewUrl = (name) => `/view/${name.split('/').map(encodeURIComponent).join('/')}`;
+import { $, listViews, viewUrl } from './page.js';
+
 let key = '';
 
 function ago(mtimeNs) {
@@ -47,7 +47,7 @@ function render(listing) {
 
 async function refresh() {
   try {
-    render(await (await fetch('/api/views', { cache: 'no-store' })).json());
+    render(await listViews());
     $('tpv-status').textContent = '';
   } catch {
     $('tpv-status').textContent = 'Viewer server stopped';

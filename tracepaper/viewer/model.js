@@ -4,7 +4,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { CadControls } from './controls.js';
-import * as Pen from './pen.js';
+import { $, CLIENT, listViews, renderViewsMenu, toaster, viewUrl } from './page.js';
+import { Tablet } from './pen.js';
 import { flatten, renderTree } from './tree.js';
 
 const POLL_MS = 1000;
@@ -16,15 +17,12 @@ const LOOKS = {
   front: { dir: [0, -1, 0], up: [0, 0, 1] },
   right: { dir: [1, 0, 0], up: [0, 0, 1] },
 };
-const CLIENT = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-
-const $ = (id) => document.getElementById(id);
 const ui = {
   canvas: $('tpv-canvas'), view: $('tpv-view'), status: $('tpv-status'), empty: $('tpv-empty'),
   toast: $('tpv-toast'), pen: $('tpv-pen'), penButton: $('tpv-pen-button'), fit: $('tpv-fit'), tree: $('tpv-layers'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
-const viewUrl = (name) => `/view/${name.split('/').map(encodeURIComponent).join('/')}`;
+const toast = toaster(ui.toast);
 
 // glTF is y up; CAD files exported from z-up CAD carry a turn into it on their root,
 // so a CAD direction (x, y, z) is (x, z, -y) in the scene.
@@ -54,7 +52,7 @@ controls.addEventListener('change', render);
 
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x1f2328 });
 const state = {
-  model: null, mtime: null, half: 1, loads: 0, views: [], viewsKey: '',
+  model: null, mtime: null, half: 1, loads: 0,
   tree: [], expanded: new Set(),
   choices: new Map(), // key -> hidden, what this window's person switched; kept when the model reloads
 };
@@ -192,28 +190,10 @@ function setStatus(text, error = false) {
   ui.status.className = `tpv-status${error ? ' dirty' : ''}`;
 }
 
-let toastTimer;
-function toast(message) {
-  ui.toast.textContent = message;
-  ui.toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { ui.toast.hidden = true; }, 2500);
-}
-
-function renderViews() {
-  const key = JSON.stringify(state.views.map((v) => [v.name, v.kind]));
-  if (key !== state.viewsKey) {
-    state.viewsKey = key;
-    ui.view.replaceChildren(...state.views.map((v) => new Option(`${v.name}${v.kind === 'model' ? '  (3D)' : ''}`, v.name)));
-  }
-  ui.view.value = viewName;
-}
-
 async function poll() {
   try {
-    const listing = await (await fetch('/api/views', { cache: 'no-store' })).json();
-    state.views = listing.views;
-    renderViews();
+    const listing = await listViews();
+    renderViewsMenu(ui.view, listing.views, viewName);
     const me = listing.views.find((v) => v.name === viewName);
     if (!me) setStatus(`${viewName} is gone`, true);
     else if (me.mtime !== state.mtime) {
@@ -234,55 +214,18 @@ async function poll() {
 // ---- Tablet pen: it doesn't draw on 3D views yet, but using this window takes it from the
 // others, and it can be let go from here. Sheets' windows connect it.
 
-let pen = null;
-
-function connectPen() {
-  const source = new EventSource(`/api/pen?client=${encodeURIComponent(CLIENT)}&draws=0`);
-  source.addEventListener('status', (e) => { pen = JSON.parse(e.data); renderPen(); });
-  source.addEventListener('error', () => {
-    if (source.readyState === EventSource.CLOSED) { pen = null; renderPen(); }
-  });
-}
-
-function renderPen() {
-  ui.pen.hidden = !pen || (pen.state === 'off' && !pen.message);
-  ui.penButton.hidden = !pen || pen.state === 'off' || pen.active !== CLIENT;
-  if (!pen) return;
-  const here = pen.active === CLIENT;
-  ui.pen.textContent = pen.state === 'connecting' ? 'reMarkable: connecting…'
-    : pen.state !== 'connected' ? `reMarkable: ${pen.message || pen.state}`
-    : here ? 'reMarkable · not on 3D views yet' : 'reMarkable · in another window';
-  ui.pen.title = pen.message;
-  ui.pen.className = `tpv-pen ${pen.state}`;
-}
-
-function claimPen() {
-  if (!pen || pen.active === CLIENT) return;
-  Pen.tablet('active', CLIENT).catch(() => {});
-}
-
-async function disconnectPen() {
-  ui.penButton.disabled = true;
-  ui.penButton.textContent = 'Disconnecting…';
-  try {
-    await Pen.tablet('disconnect', CLIENT);
-  } catch (err) {
-    toast(`Could not disconnect the tablet: ${err.message}`);
-  } finally {
-    ui.penButton.disabled = false;
-    ui.penButton.textContent = 'Disconnect';
-    renderPen();
-  }
-}
+const tablet = new Tablet({
+  client: CLIENT, draws: false, label: ui.pen, button: ui.penButton, toast,
+  describe: (s) => ({ text: 'reMarkable · not on 3D views yet', title: s.message }),
+});
 
 // ---- Wiring
 
 for (const b of document.querySelectorAll('[data-look]')) b.addEventListener('click', () => frame(LOOKS[b.dataset.look]));
 ui.fit.addEventListener('click', () => frame(null));
-ui.penButton.addEventListener('click', disconnectPen);
 ui.view.addEventListener('change', () => { if (ui.view.value !== viewName) location.href = viewUrl(ui.view.value); });
-window.addEventListener('pointerdown', claimPen, true);
-ui.canvas.addEventListener('wheel', claimPen, { passive: true });
+window.addEventListener('pointerdown', () => tablet.claim(), true);
+ui.canvas.addEventListener('wheel', () => tablet.claim(), { passive: true });
 window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || (e.target instanceof Element && e.target.closest('select'))) return;
   const look = { 0: 'iso', 7: 'top', 1: 'front', 3: 'right' }[e.key];
@@ -293,7 +236,7 @@ new ResizeObserver(resize).observe(ui.canvas);
 document.title = `${viewName} · Tracepaper`;
 
 poll();
-connectPen();
+tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
-window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, flatten };
+window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten };
