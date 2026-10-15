@@ -20,7 +20,8 @@ python3 -m tracepaper view examples/bracket     # from this directory
 - **The project page** lists the folder's sheets and models, including up to three folders down. Each view opens in a window of its own, so you can put several side by side.
 - **Updates:** a window updates by itself when its file changes. A 3D view keeps the camera where you left it.
 - **3D views:** drag to rotate, right-drag to pan, scroll to zoom. Iso, Top, Front and Right (keys `0`, `7`, `1`, `3`) look from the standard directions, and Fit (`F`) frames what's shown.
-- **The tree panel:** both kinds of view show their named parts, a sheet's named groups and a model's assembly tree, in the same panel. Untick a node to hide it and everything in it, in that window only. What starts hidden comes from the file.
+- **The tree panel:** both kinds of view show their named parts, a sheet's named groups and a model's assembly tree, in the same panel. Click a node's eye to hide it and everything in it, in that window only. Half an eye means something below the node is hidden. What starts hidden comes from the file.
+- **After updating Tracepaper,** restart a running `tracepaper view`. Pages come fresh from disk, but the server behind them doesn't.
 
 To get a `tracepaper` command for use in other projects:
 
@@ -74,7 +75,10 @@ ln -s "$PWD/skills/tracepaper" ~/.claude/skills/tracepaper            # the Clau
 
 ## Writing sheets
 
-Anything that writes SVG following [SPEC.md](SPEC.md) works. For Python there's a small helper, `tracepaper.sheet`. It supports layers and sublayers, the layer tree in the viewer. [`examples/bracket/make_sheets.py`](examples/bracket/make_sheets.py) uses it to draw a section and a top view of a bracket.
+Anything that writes SVG following [SPEC.md](SPEC.md) works. For Python there's a small helper, `tracepaper.sheet`, which supports layers, sublayers and named parts for the viewer's tree. Two examples use it:
+
+- [`examples/bracket/make_sheets.py`](examples/bracket/make_sheets.py) draws a section and a top view of a bracket.
+- [`examples/cabinet/make_views.py`](examples/cabinet/make_views.py) writes a cabinet as a model and a section with nested groups that have the same names in both.
 
 Models are written by the CAD code itself. For CadQuery, use `tracepaper.model.export(assembly, "bracket.glb", hidden=["screw"])`: it writes the assembly and marks the listed parts as hidden at first. See [`examples/bracket/make_model.py`](examples/bracket/make_model.py), which needs CadQuery. The 3D view uses [three.js](https://threejs.org) 0.170.0, bundled in `tracepaper/viewer/vendor/` (MIT).
 

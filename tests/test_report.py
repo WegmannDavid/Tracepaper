@@ -17,6 +17,10 @@ def make_sketch(directory: Path) -> Path:
     root = ET.parse(EXAMPLE).getroot()
     root.set(f"{{{TP_NS}}}sketch-of", "section-A.svg")
     root.find(f".//{{{SVG_NS}}}g[@id='d-height']").set(f"{{{TP_NS}}}offset", "15")
+    # A named part inside an unnamed group, hidden: a node of the tree like any layer.
+    outline = root.find(f".//{{{SVG_NS}}}g[@id='layer-outline']")
+    wrapper = ET.SubElement(outline, f"{{{SVG_NS}}}g")
+    ET.SubElement(wrapper, f"{{{SVG_NS}}}g", {f"{{{INKSCAPE_NS}}}label": "Bolt", "style": "display:none"})
     ink = ET.SubElement(root, f"{{{SVG_NS}}}g", {"id": "tp-sketch", f"{{{INKSCAPE_NS}}}groupmode": "layer",
                                                  f"{{{INKSCAPE_NS}}}label": "Sketch", "transform": "scale(1,-1)"})
     ET.SubElement(ink, f"{{{SVG_NS}}}path", {"d": "M40 20 L45 25 L50 22", "stroke": "#e11d48", "fill": "none"})
@@ -38,7 +42,7 @@ class ReportTest(unittest.TestCase):
         out = self.dir / "images"
         report = inspect(self.dir, out)  # finds the sketch in the directory
         self.assertIn("of section-A.svg", report)
-        self.assertIn("hidden layers: Construction", report)
+        self.assertIn("hidden: Outline / Bolt, Construction", report)  # in the file's order
         self.assertIn("Strokes: 2", report)
         self.assertIn("#e11d48     3 pts  x 40.0..50.0  y 20.0..25.0  from (40.0, 20.0) to (50.0, 22.0)", report)
         self.assertIn("colour of d-length (Dimensions)", report)

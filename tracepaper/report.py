@@ -40,12 +40,23 @@ def _label(g: ET.Element) -> str:
     return g.get(f"{INK}label") or g.get("id") or "layer"
 
 
+NOT_DRAWN = {"defs", "metadata", "pattern", "clipPath", "mask", "marker", "symbol", "style", "script"}
+
+
+def _is_node(el: ET.Element) -> bool:
+    return el.tag == f"{SVG}g" and (el.get(f"{INK}groupmode") == "layer" or el.get(f"{INK}label") is not None)
+
+
 def _layer_tree(parent: ET.Element, above: str = "") -> list:
-    """(path, layer) for every layer and sublayer, e.g. ("Dimensions / Overall", g)."""
+    """(path, group) for every node of the tree (SPEC.md §2.4), as the viewer shows it:
+    named groups, e.g. ("Dimensions / Overall", g); unnamed groups in between don't count."""
     out = []
-    for g in _layers(parent):
-        path = f"{above} / {_label(g)}" if above else _label(g)
-        out += [(path, g), *_layer_tree(g, path)]
+    for el in parent:
+        if _is_node(el):
+            path = f"{above} / {_label(el)}" if above else _label(el)
+            out += [(path, el), *_layer_tree(el, path)]
+        elif el.tag.split("}")[-1] not in NOT_DRAWN:
+            out += _layer_tree(el, above)
     return out
 
 
@@ -138,7 +149,7 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
     if view is not None:
         lines.append("  view: " + ", ".join(f"{k}={v}" for k, v in view.attrib.items()))
     hidden = [path for path, g in _layer_tree(root) if _hidden(g)]
-    lines.append(f"  hidden layers: {', '.join(hidden) or 'none'}")
+    lines.append(f"  hidden: {', '.join(hidden) or 'nothing'}")
 
     ink = strokes(root)
     lines.append(f"\nStrokes: {len(ink)} (model mm, y up)")
