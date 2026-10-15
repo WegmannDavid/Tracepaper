@@ -51,7 +51,7 @@ scene.add(camera);
 // not only about the vertical one. Scrolling zooms about the middle of the view, so
 // the rotation centre stays put.
 const controls = new TrackballControls(camera, ui.canvas);
-Object.assign(controls, { rotateSpeed: 2.2, zoomSpeed: 2.5, panSpeed: 1, staticMoving: true, keys: [] });
+Object.assign(controls, { rotateSpeed: 2.2, zoomSpeed: 2.5, panSpeed: 0.5, staticMoving: true, keys: [] });
 controls.addEventListener('change', render);
 (function follow() { // the controls move the camera in update(); it renders only on a change
   controls.update();
