@@ -2,8 +2,8 @@
 // colours and with the edges between its faces. Rotate, pan and zoom; it reloads
 // when the file changes and keeps the camera.
 import * as THREE from 'three';
-import { TrackballControls } from 'three/addons/controls/TrackballControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { CadControls } from './controls.js';
 import { flatten, renderTree } from './tree.js';
 
 const POLL_MS = 1000;
@@ -47,16 +47,9 @@ const headlight = new THREE.DirectionalLight(0xffffff, 1.8);
 headlight.position.set(0.5, 1, 2); // follows the camera, so the side facing you is always lit
 camera.add(headlight);
 scene.add(camera);
-// A trackball, as in the OCP viewer: dragging turns the model freely about any axis,
-// not only about the vertical one. Scrolling zooms about the middle of the view, so
-// the rotation centre stays put.
-const controls = new TrackballControls(camera, ui.canvas);
-Object.assign(controls, { rotateSpeed: 2.2, zoomSpeed: 2.5, panSpeed: 0.5, staticMoving: true, keys: [] });
+// Rotate, pan and zoom as in the OCP viewer.
+const controls = new CadControls(camera, ui.canvas);
 controls.addEventListener('change', render);
-(function follow() { // the controls move the camera in update(); it renders only on a change
-  controls.update();
-  requestAnimationFrame(follow);
-})();
 
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x1f2328 });
 const state = {
@@ -75,7 +68,6 @@ function resize() {
   const w = ui.canvas.clientWidth, h = ui.canvas.clientHeight;
   if (!w || !h) return;
   renderer?.setSize(w, h, false);
-  controls.handleResize();
   const aspect = w / h, half = state.half;
   Object.assign(camera, aspect >= 1
     ? { left: -half * aspect, right: half * aspect, top: half, bottom: -half }
@@ -95,16 +87,17 @@ function frame(look) {
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   if (!(sphere.radius > 0)) return;
   const dir = look ? toScene(look.dir).normalize() : camera.position.clone().sub(controls.target).normalize();
-  if (look) camera.up.copy(toScene(look.up).normalize()); // the trackball rolls it; a standard view resets it
   controls.target.copy(sphere.center);
   camera.position.copy(sphere.center).addScaledVector(dir, sphere.radius * 4);
-  camera.lookAt(sphere.center);
+  if (look) { // upright again; the controls turn the camera without regard to its up
+    camera.up.copy(toScene(look.up).normalize());
+    camera.lookAt(sphere.center);
+  }
   camera.near = sphere.radius * 0.01;
   camera.far = sphere.radius * 10;
   camera.zoom = 1;
   state.half = sphere.radius * 1.08;
   resize();
-  controls.update();
 }
 
 function prepare(root) {

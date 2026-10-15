@@ -325,29 +325,68 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertTrue(zoomed)
         self.assertEqual(zoomed["after"], zoomed["target"])
 
-        # Dragging up and down turns the model about a horizontal axis, like a trackball:
-        # "up" on screen tilts, which a turntable never does.
-        tilted = self.m.run("""
-            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+        # The mouse works as in the OCP viewer. Rotating is its trackball: a drag through the
+        # middle tips the model over about a horizontal axis, one along the edge turns it about
+        # the line of sight, and Ctrl keeps only the up/down part. The rotation centre stays in
+        # the middle of the view. Panning moves the model with the pointer, at OCP's 0.88.
+        moves = self.m.run("""
+            const t = window.tracepaper3d, THREE = t.THREE, canvas = document.getElementById('tpv-canvas');
             canvas.setPointerCapture = () => {};  // synthetic pointers can't be captured
-            const r = canvas.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
-            const drag = (type, dy) => canvas.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1,
-              pointerType: 'mouse', isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1,
-              clientX: x, clientY: y + dy }));
-            const up0 = t.camera.up.toArray();
-            drag('pointerdown', 0); drag('pointermove', 60); drag('pointermove', 120); drag('pointerup', 120);
-            until(() => Math.abs(t.camera.up.y - 1) > 1e-3 && { up0, up: t.camera.up.toArray() }, done);  // a turntable never tilts it
+            const r = canvas.getBoundingClientRect();
+            const drag = (button, x0, y0, x1, y1, keys = {}) => {  // in fractions of the view
+              const fire = (type, x, y) => canvas.dispatchEvent(new PointerEvent(type, { bubbles: true,
+                cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button,
+                clientX: r.left + r.width * x, clientY: r.top + r.height * y, ...keys }));
+              fire('pointerdown', x0, y0);
+              for (let i = 1; i <= 4; i++) fire('pointermove', x0 + (x1 - x0) * i / 4, y0 + (y1 - y0) * i / 4);
+              fire('pointerup', x1, y1);
+            };
+            // What a drag turned, as an axis of the view before it: x right, y up, z towards you.
+            const turnOf = (...args) => {
+              const q0 = t.camera.quaternion.clone(), target = t.controls.target.clone();
+              drag(0, ...args);
+              const turn = t.camera.quaternion.clone().multiply(q0.clone().invert());
+              const axis = new THREE.Vector3(turn.x, turn.y, turn.z).normalize().applyQuaternion(q0.invert());
+              const look = new THREE.Vector3(0, 0, -1).applyQuaternion(t.camera.quaternion);
+              const toTarget = t.controls.target.clone().sub(t.camera.position).normalize();
+              return { axis: axis.toArray().map(Math.abs), angle: 2 * Math.acos(Math.min(1, Math.abs(turn.w))),
+                       centred: look.dot(toTarget) > 1 - 1e-9 && t.controls.target.equals(target) };
+            };
+            const tip = turnOf(0.5, 0.45, 0.5, 0.6);
+            const roll = turnOf(0.97, 0.5, 0.97, 0.35);
+            const ctrl = turnOf(0.4, 0.4, 0.6, 0.6, { ctrlKey: true });
+            const q = t.camera.quaternion.clone();
+            t.frame(null);
+            const fitKeepsRoll = t.camera.quaternion.angleTo(q) < 1e-9;
+            const point = t.controls.target.clone();
+            const onScreen = () => { const v = point.clone().project(t.camera);
+                                     return [(v.x + 1) / 2 * r.width, (1 - v.y) / 2 * r.height]; };
+            const before = onScreen();
+            drag(2, 0.5, 0.5, 0.6, 0.7);
+            const after = onScreen();
+            done({ tip, roll, ctrl, fitKeepsRoll, panned: [after[0] - before[0], after[1] - before[1]],
+                   pointer: [r.width * 0.1, r.height * 0.2] });
         """)
-        self.assertTrue(tilted)
-        self.assertEqual(tilted["up0"], [0, 1, 0])  # the iso view starts upright
+        for name, axis in (("tip", 0), ("roll", 2), ("ctrl", 0)):
+            turn = moves[name]
+            self.assertGreater(turn["angle"], 0.05, name)
+            self.assertTrue(turn["centred"], name)
+        self.assertGreater(moves["tip"]["axis"][0], 0.999)
+        self.assertGreater(moves["roll"]["axis"][2], 0.85)  # a stock trackball has no roll at all
+        self.assertGreater(moves["ctrl"]["axis"][0], 0.999)  # the sideways part of the drag is ignored
+        self.assertTrue(moves["fitKeepsRoll"])
+        for got, pointer in zip(moves["panned"], moves["pointer"]):
+            self.assertAlmostEqual(got, 0.88 * pointer, delta=0.5)
         self.m.run("window.tracepaper3d.frame(window.tracepaper3d.LOOKS.iso); done(true);")
 
         # The build writes the model again: it reloads and keeps the camera.
-        before = self.m.run("const t = window.tracepaper3d; t.frame(t.LOOKS.top); done(t.camera.position.toArray());")
+        before = self.m.run("const t = window.tracepaper3d; t.frame(t.LOOKS.top);"
+                            "done([...t.camera.position.toArray(), ...t.camera.quaternion.toArray()]);")
         model = self.dir / "bracket.glb"
         model.write_bytes(model.read_bytes())
         self.assertTrue(self.m.run("until(() => window.tracepaper3d.state.loads === 2, done);"))
-        after = self.m.run("done(window.tracepaper3d.camera.position.toArray());")
+        after = self.m.run("const c = window.tracepaper3d.camera;"
+                           "done([...c.position.toArray(), ...c.quaternion.toArray()]);")
         self.assertEqual(after, before)
 
     def test_pen_follows_last_used_window(self):
