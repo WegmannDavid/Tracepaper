@@ -317,10 +317,26 @@ class ViewerInFirefox(unittest.TestCase):
             const r = canvas.getBoundingClientRect(), target = t.controls.target.toArray();
             for (let i = 0; i < 3; i++) canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true,
               cancelable: true, clientX: r.left + r.width * 0.85, clientY: r.top + r.height * 0.2 }));
-            done({ target, after: t.controls.target.toArray(), zoom: t.camera.zoom });
+            until(() => t.camera.zoom > 1.1 && { target, after: t.controls.target.toArray(), zoom: t.camera.zoom }, done);
         """)
+        self.assertTrue(zoomed)
         self.assertEqual(zoomed["after"], zoomed["target"])
-        self.assertGreater(zoomed["zoom"], 1.1)  # three steps in: about 1.17
+
+        # Dragging up and down turns the model about a horizontal axis, like a trackball:
+        # "up" on screen tilts, which a turntable never does.
+        tilted = self.m.run("""
+            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+            canvas.setPointerCapture = () => {};  // synthetic pointers can't be captured
+            const r = canvas.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+            const drag = (type, dy) => canvas.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1,
+              pointerType: 'mouse', isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1,
+              clientX: x, clientY: y + dy }));
+            const up0 = t.camera.up.toArray();
+            drag('pointerdown', 0); drag('pointermove', 60); drag('pointermove', 120); drag('pointerup', 120);
+            until(() => Math.abs(t.camera.up.y - 1) > 1e-3 && { up0, up: t.camera.up.toArray() }, done);  // a turntable never tilts it
+        """)
+        self.assertTrue(tilted)
+        self.assertEqual(tilted["up0"], [0, 1, 0])  # the iso view starts upright
         self.m.run("window.tracepaper3d.frame(window.tracepaper3d.LOOKS.iso); done(true);")
 
         # The build writes the model again: it reloads and keeps the camera.

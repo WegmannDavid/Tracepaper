@@ -2,14 +2,19 @@
 // colours and with the edges between its faces. Rotate, pan and zoom; it reloads
 // when the file changes and keeps the camera.
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TrackballControls } from 'three/addons/controls/TrackballControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { flatten, renderTree } from './tree.js';
 
 const POLL_MS = 1000;
 const EDGE_ANGLE = 25; // degrees: within a face, triangles meeting at less than this get no edge line
-// Directions to look from, in CAD coordinates (z up). Fronts face -y.
-const LOOKS = { iso: [1, -1, 1], top: [0, -1e-4, 1], front: [0, -1, 0], right: [1, 0, 0] };
+// Directions to look from and which way is up on screen, in CAD coordinates (z up). Fronts face -y.
+const LOOKS = {
+  iso: { dir: [1, -1, 1], up: [0, 0, 1] },
+  top: { dir: [0, 0, 1], up: [0, 1, 0] },
+  front: { dir: [0, -1, 0], up: [0, 0, 1] },
+  right: { dir: [1, 0, 0], up: [0, 0, 1] },
+};
 const CLIENT = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 
 const $ = (id) => document.getElementById(id);
@@ -42,9 +47,16 @@ const headlight = new THREE.DirectionalLight(0xffffff, 1.8);
 headlight.position.set(0.5, 1, 2); // follows the camera, so the side facing you is always lit
 camera.add(headlight);
 scene.add(camera);
-const controls = new OrbitControls(camera, ui.canvas);
-controls.zoomToCursor = false; // zoom about the middle of the view, so the rotation centre stays put
+// A trackball, as in the OCP viewer: dragging turns the model freely about any axis,
+// not only about the vertical one. Scrolling zooms about the middle of the view, so
+// the rotation centre stays put.
+const controls = new TrackballControls(camera, ui.canvas);
+Object.assign(controls, { rotateSpeed: 2.2, zoomSpeed: 2.5, panSpeed: 1, staticMoving: true, keys: [] });
 controls.addEventListener('change', render);
+(function follow() { // the controls move the camera in update(); it renders only on a change
+  controls.update();
+  requestAnimationFrame(follow);
+})();
 
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x1f2328 });
 const state = {
@@ -62,7 +74,8 @@ function render() {
 function resize() {
   const w = ui.canvas.clientWidth, h = ui.canvas.clientHeight;
   if (!w || !h) return;
-  renderer.setSize(w, h, false);
+  renderer?.setSize(w, h, false);
+  controls.handleResize();
   const aspect = w / h, half = state.half;
   Object.assign(camera, aspect >= 1
     ? { left: -half * aspect, right: half * aspect, top: half, bottom: -half }
@@ -71,8 +84,8 @@ function resize() {
   render();
 }
 
-// Look at the whole model (what is shown of it) from a CAD direction; without one,
-// keep the current direction.
+// Look at the whole model (what is shown of it) from one of LOOKS; without one, keep
+// the current direction and roll.
 function frame(look) {
   if (!state.model) return;
   const box = new THREE.Box3();
@@ -81,9 +94,11 @@ function frame(look) {
   if (box.isEmpty()) box.setFromObject(state.model);
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   if (!(sphere.radius > 0)) return;
-  const dir = look ? toScene(look).normalize() : camera.position.clone().sub(controls.target).normalize();
+  const dir = look ? toScene(look.dir).normalize() : camera.position.clone().sub(controls.target).normalize();
+  if (look) camera.up.copy(toScene(look.up).normalize()); // the trackball rolls it; a standard view resets it
   controls.target.copy(sphere.center);
   camera.position.copy(sphere.center).addScaledVector(dir, sphere.radius * 4);
+  camera.lookAt(sphere.center);
   camera.near = sphere.radius * 0.01;
   camera.far = sphere.radius * 10;
   camera.zoom = 1;
