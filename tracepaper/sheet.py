@@ -295,8 +295,10 @@ class Layer:
         self.color = preset.get("stroke", "#1a1a1a")
         if self.color == "none":
             self.color = "#1a1a1a"
-        # Text and annotation arrows need a solid fill even when the layer's shapes have none.
+        # Text and annotation arrows need a solid fill even when the layer's shapes have none,
+        # and annotations stay thin on layers with heavy lines, such as Changes.
         self._fill = None if preset.get("fill", "").startswith("#") else self.color
+        self._thin = None if preset.get("stroke-width") == "0.25" else "0.25"
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "layer"
         self.element = ET.Element(_svg("g"), {"id": f"layer-{slug}", _ink("groupmode"): "layer",
                                               _ink("label"): name, "transform": "scale(1,-1)", **preset})
@@ -355,6 +357,8 @@ class Layer:
                 el.set(_tp(k), v)
         if self._fill:
             el.set("fill", self._fill)
+        if self._thin:
+            el.set("stroke-width", self._thin)
         _render(el, g, self.sheet.font_size)
         self.sheet._grow(_geometry_points(g))
         return el
