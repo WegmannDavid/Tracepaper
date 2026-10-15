@@ -20,7 +20,7 @@ python3 -m tracepaper view examples/bracket     # from this directory
 - **The project page** lists the folder's sheets and models, including up to three folders down. Each view opens in a window of its own, so you can put several side by side.
 - **Updates:** a window updates by itself when its file changes. A 3D view keeps the camera where you left it.
 - **3D views:** drag to rotate, right-drag to pan, scroll to zoom. Iso, Top, Front and Right (keys `0`, `7`, `1`, `3`) look from the standard directions, and Fit (`F`) frames what's shown.
-- **The tree panel:** both kinds of view show their named parts, a sheet's named groups and a model's assembly tree, in the same panel. Click a node's eye to hide it and everything in it, in that window only. Half an eye means something below the node is hidden. What starts hidden comes from the file.
+- **The tree panel:** both kinds of view show their named parts, a sheet's named groups and a model's assembly tree, in the same panel. It starts folded, showing only the top level; `▸` unfolds a node. Click a node's eye to hide it and everything in it, in that window only. Half an eye means something below the node is hidden. What starts hidden comes from the file.
 - **After updating Tracepaper,** restart a running `tracepaper view`. Pages come fresh from disk, but the server behind them doesn't.
 
 To get a `tracepaper` command for use in other projects:

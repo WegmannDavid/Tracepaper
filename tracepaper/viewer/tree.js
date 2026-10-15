@@ -19,13 +19,14 @@ const hiddenBelow = (node) => node.children.some((c) => c.hidden || hiddenBelow(
 const icon = (paths) => '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" '
   + `stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
 
-// collapsed: a Set of the keys of folded nodes, kept by the view.
+// expanded: a Set of the keys of unfolded nodes, kept by the view. Everything else
+// is folded, so a tree starts with only its top level showing.
 // topFirst: list children last-to-first, for drawings where later is on top.
 // mark(node): extra class names for a node's row.
-export function renderTree(container, roots, { collapsed, onToggle, topFirst = false, mark = () => '' }) {
+export function renderTree(container, roots, { expanded, onToggle, topFirst = false, mark = () => '' }) {
   const order = (nodes) => (topFirst ? [...nodes].reverse() : nodes);
   const item = (node, hiddenAbove) => {
-    const open = !collapsed.has(node.key);
+    const open = expanded.has(node.key);
     const li = document.createElement('li');
     const row = document.createElement('div');
     row.className = `tpv-layer${hiddenAbove ? ' tpv-under-hidden' : ''}`;
@@ -35,8 +36,8 @@ export function renderTree(container, roots, { collapsed, onToggle, topFirst = f
       twisty.textContent = open ? '▾' : '▸';
       twisty.setAttribute('aria-label', `${open ? 'Fold' : 'Unfold'} ${node.name}`);
       twisty.addEventListener('click', () => {
-        if (open) collapsed.add(node.key); else collapsed.delete(node.key);
-        renderTree(container, roots, { collapsed, onToggle, topFirst, mark });
+        if (open) expanded.delete(node.key); else expanded.add(node.key);
+        renderTree(container, roots, { expanded, onToggle, topFirst, mark });
       });
     } else {
       twisty.disabled = true;

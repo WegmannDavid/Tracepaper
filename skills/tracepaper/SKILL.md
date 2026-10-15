@@ -55,7 +55,7 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
 - At the end of the build, write the assembly the user wants to look at into the views folder with `tracepaper.model.export(assembly, "views/window.glb", hidden=[...])`. It writes a CadQuery assembly safely: to a temporary file first, then renamed, so the viewer never reads half a file.
 - `hidden` lists what starts hidden when the user opens the model, as paths in the tree (`"Steel / Z profile"`) or plain names (`"Glass"` hides every part called Glass). Set it when the user asks for a default, such as "glass hidden".
 - Write only what they'd look at, typically the coloured assembly, not every intermediate shape. Use separate files for separate things, for example the whole window and one corner joint.
-- Name the assembly's parts and group them into subassemblies, since that becomes the tree the user hides things with. The top assembly itself isn't shown, so its children are the top level. Give the parts colours.
+- Name the assembly's parts and group them into subassemblies, since that becomes the tree the user hides things with. The top assembly itself isn't shown, so its children are the top level, which is all the user sees until they unfold a node. Give the parts colours.
 - Spec §2.8 has the details: millimetres, z up, faces as separate primitives, which CadQuery all does by default.
 
 ## When the user says they sketched something

@@ -242,6 +242,8 @@ class ViewerInFirefox(unittest.TestCase):
             const rows = () => [...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
               r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.visible === 'true',
               r.classList.contains('tpv-under-hidden')]);
+            const folded = rows();  // the tree starts folded
+            for (let t; (t = document.querySelector('#tpv-layers .tpv-twisty[aria-label^="Unfold"]'));) t.click();
             const before = rows();
             const states = () => Object.fromEntries([...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
               r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.state]));
@@ -253,9 +255,10 @@ class ViewerInFirefox(unittest.TestCase):
             tp.setLayerVisible('Dimensions / Details', true);
             const detailsOn = rows();
             const allShown = states();
-            document.querySelector('.tpv-twisty:not([disabled])').click();  // fold Dimensions
-            done({ before, partly, parentOff, hiddenByParent, detailsOn, allShown, folded: rows() });
+            document.querySelector('.tpv-twisty:not([disabled])').click();  // fold Dimensions again
+            done({ folded, before, partly, parentOff, hiddenByParent, detailsOn, allShown, refolded: rows() });
         """)
+        self.assertEqual([r[0] for r in got["folded"]], ["Sketch", "Dimensions", "Outline"])
         self.assertEqual(got["before"], [["Sketch", True, False], ["Dimensions", True, False],
                                          ["Details", False, False], ["Overall", True, False],
                                          ["Outline", True, False], ["Bolt", True, False]])
@@ -267,7 +270,7 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertEqual((got["partly"]["Dimensions"], got["partly"]["Details"], got["partly"]["Outline"]),
                          ("partial", "hidden", "visible"))
         self.assertEqual(got["allShown"]["Dimensions"], "visible")
-        self.assertEqual([r[0] for r in got["folded"]], ["Sketch", "Dimensions", "Outline", "Bolt"])
+        self.assertEqual([r[0] for r in got["refolded"]], ["Sketch", "Dimensions", "Outline", "Bolt"])
 
     def test_model_tree(self):
         self.open_viewer("hidden-screw.glb")

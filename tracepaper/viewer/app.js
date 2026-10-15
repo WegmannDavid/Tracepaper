@@ -29,7 +29,7 @@ const ui = {
 };
 
 const state = {
-  views: [], viewsKey: '', name: null, sheetMtime: null, sketchMtime: null, collapsed: new Set(),
+  views: [], viewsKey: '', name: null, sheetMtime: null, sketchMtime: null, expanded: new Set(),
   root: null, ref: null, ink: null, annotations: [],
   dirty: false, undo: [], moved: new Map(), layerVis: new Map(),
   // The mouse moves labels and pans unless asked to draw; the tablet's pen always draws.
@@ -242,7 +242,7 @@ function renderLayers() {
   ui.layers.replaceChildren();
   if (!state.root) return;
   renderTree(ui.layers, buildTree(state.root), {
-    collapsed: state.collapsed, topFirst: true,
+    expanded: state.expanded, topFirst: true,
     onToggle: (node, hidden) => setLayerVisible(node.key, !hidden),
     mark: (node) => (node.el === state.ink ? 'tpv-ink' : ''),
   });

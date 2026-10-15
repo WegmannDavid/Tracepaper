@@ -61,7 +61,7 @@ controls.addEventListener('change', render);
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x1f2328 });
 const state = {
   model: null, mtime: null, half: 1, loads: 0, views: [], viewsKey: '',
-  tree: [], collapsed: new Set(),
+  tree: [], expanded: new Set(),
   choices: new Map(), // key -> hidden, what this window's person switched; kept when the model reloads
 };
 let resolveReady;
@@ -152,7 +152,7 @@ function applyTree() {
 
 function renderPanel() {
   renderTree(ui.tree, state.tree, {
-    collapsed: state.collapsed,
+    expanded: state.expanded,
     onToggle: (node, hidden) => {
       state.choices.set(node.key, hidden);
       node.hidden = hidden;

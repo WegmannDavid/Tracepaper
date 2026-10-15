@@ -245,7 +245,7 @@ If the result isn't right, the person sketches again or says so, and the loop re
 
 - lists the project's views (sheets and models in the folder and up to three folders below it) on a project page. Each view opens in a window of its own, so several can be watched side by side, and reloads when its file changes on disk;
 - shows models (§2.8) in 3D: rotate, pan, zoom, standard directions. The camera stays where it is when the model reloads;
-- shows each view's tree (§2.4, §2.8) in the same panel, where the person can hide and show nodes in that window. Their choices last while the window is open, including when the file is rewritten, and aren't stored;
+- shows each view's tree (§2.4, §2.8) in the same panel, folded at first so only the top level shows, where the person can unfold nodes and hide and show them in that window. Their choices last while the window is open, including when the file is rewritten, and aren't stored;
 - toggles layers, lets the person drag annotations (§2.6), and provides a pen with a few colours;
 - can take ink from a drawing tablet, such as a reMarkable 2 with `--remarkable`. The tablet covers the current view of the window the person used last with the mouse (or opened last), fitted at one scale for both axes so drawings keep their proportions, while the mouse keeps doing everything else;
 - writes the sketch file on Save (§3), and clears the ink once the AI has deleted that file;
