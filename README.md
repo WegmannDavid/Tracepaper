@@ -31,6 +31,20 @@ tracepaper view path/to/sheets                  # a directory, or a single sheet
 | `F` | fit the sheet |
 | `Ctrl+Z` / `Ctrl+S` | undo / save |
 
+## Drawing with a reMarkable 2
+
+```sh
+tracepaper view examples/bracket --remarkable
+```
+
+The tablet's pen then draws in the viewer, and the mouse keeps doing everything else, even at the same time. The pen's other end erases whole strokes.
+
+- **Mapping.** The tablet covers the part of the sheet in view, so zooming in with the mouse gives finer control.
+- **Aspect ratio.** The view's shape is fitted into the middle of the tablet at one scale for both axes, so a circle drawn on the tablet stays a circle. The toolbar shows how much of the tablet that is; the strips outside it do nothing.
+- **Holding the tablet.** Landscape with the power button on the right is the default. Use `--rotate 270` for the power button on the left; 0 and 180 are portrait.
+- **Connection.** The tablet is reached with `ssh remarkable`, or `--remarkable HOST` for another host name.
+- **The tablet's own app.** It's closed while Tracepaper runs, so strokes don't also land in a notebook there, and the e-ink keeps showing what it showed. The app starts again when Tracepaper stops, or by itself 20 seconds after the connection is lost.
+
 ## Writing sheets
 
 Anything that writes SVG following [SPEC.md](SPEC.md) works. For Python there's a small helper, `tracepaper.sheet`; [`examples/bracket/make_sheets.py`](examples/bracket/make_sheets.py) uses it to draw a section and a top view of an L-bracket.

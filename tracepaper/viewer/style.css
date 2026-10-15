@@ -101,6 +101,26 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 220px; min-height: 0
 /* Annotation under the pointer in the Move tool. */
 .tpv-hover { stroke: #ea580c; fill: #ea580c; }
 
+/* Where the tablet's pen is hovering. */
+#tpv-pen-cursor {
+  fill: rgba(255, 255, 255, 0.35);
+  stroke: #111827;
+  stroke-width: 1.25;
+  pointer-events: none;
+}
+#tpv-pen-cursor.eraser { stroke-dasharray: 3 2; }
+
+.tpv-pen {
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--well);
+  color: var(--muted);
+  cursor: default;
+}
+.tpv-pen.connected { color: var(--ok); }
+.tpv-pen.error, .tpv-pen.off { color: var(--warn); }
+
 .tpv-empty {
   position: absolute;
   inset: 0;

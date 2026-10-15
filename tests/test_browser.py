@@ -16,6 +16,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from tracepaper.pen import tablet_size
 from tracepaper.server import make_server
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "bracket"
@@ -57,6 +58,17 @@ const until = (cond, done, ms = 8000) => {
 };
 const done = arguments[arguments.length - 1];
 """
+
+
+class FakePen:
+    """A tablet whose frames the test publishes itself."""
+    size_mm = tablet_size(90)
+
+    def start(self, hub):
+        pass
+
+    def stop(self):
+        pass
 
 
 def free_port() -> int:
@@ -116,7 +128,7 @@ class ViewerInFirefox(unittest.TestCase):
         for f in EXAMPLE.glob("*.svg"):
             if not f.name.endswith(".sketch.svg"):
                 shutil.copy(f, cls.dir)
-        cls.server = make_server(cls.dir / "section-A.svg", 0)
+        cls.server = make_server(cls.dir / "section-A.svg", 0, FakePen())
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
 
         profile = Path(cls.tmp.name) / "profile"
@@ -146,11 +158,15 @@ class ViewerInFirefox(unittest.TestCase):
             cls.firefox.wait(timeout=10)
         except subprocess.TimeoutExpired:
             cls.firefox.kill()
+        cls.server.pen_hub.close()
         cls.server.shutdown()
         cls.server.server_close()
         cls.tmp.cleanup()
 
     def open_viewer(self):
+        # Leave without the "unsaved changes" prompt.
+        self.m.call("WebDriver:ExecuteScript", {"script": "if (window.tracepaper) tracepaper.state.dirty = false;",
+                                                "args": []})
         self.m.call("WebDriver:Navigate", {"url": self.server.url})
         self.assertTrue(self.m.run("until(() => window.tracepaper && tp.state.root && tp.state.name, done);"))
 
@@ -222,6 +238,77 @@ class ViewerInFirefox(unittest.TestCase):
             until(() => tp.state.root !== old && tp.state.ink.children.length === 1 && tp.state.dirty, done);
         """)
         self.assertTrue(kept)
+
+    def test_tablet_pen(self):
+        self.open_viewer()
+        hub = self.server.pen_hub
+        hub.publish_status("connected", "test tablet")
+        view = self.m.run("""
+            tp.setTool('move');  // the pen draws whatever the mouse's tool
+            until(() => tp.pen.status?.state === 'connected' && !document.getElementById('tpv-pen').hidden && (() => {
+              const r = document.getElementById('tpv-stage').getBoundingClientRect();
+              const m = tp.state.ref.getScreenCTM();
+              return { w: r.width, h: r.height, left: r.left, top: r.top, a: m.a, d: m.d, e: m.e, f: m.f,
+                       strokes: tp.state.ink.children.length, label: document.getElementById('tpv-pen').textContent };
+            })(), done);
+        """)
+        self.assertTrue(view)
+        tw, th = tablet_size(90)
+        k = min(tw / view["w"], th / view["h"])  # tablet mm per screen px
+        ax, ay = (tw - view["w"] * k) / 2, (th - view["h"] * k) / 2  # the unused strips
+        self.assertIn(f"{round(view['w'] * k)} × {round(view['h'] * k)} mm", view["label"])
+
+        def frame(x, y, touch=False, tool="pen"):
+            hub.publish_frame({"x": x, "y": y, "p": 0.5 if touch else 0, "tool": tool, "touch": touch})
+
+        def hover(x, y):
+            """Hover at (x, y) on the tablet and wait for the cursor there: all frames before are handled."""
+            frame(x, y)
+            sx, sy = (x - ax) / k, (y - ay) / k
+            self.assertTrue(self.m.run(f"""
+                until(() => {{ const c = document.getElementById('tpv-pen-cursor');
+                  return !c.hasAttribute('visibility') && Math.abs(c.getAttribute('cx') - {sx}) < 0.01
+                    && Math.abs(c.getAttribute('cy') - {sy}) < 0.01; }}, done);"""))
+
+        strokes = lambda: self.m.run("done(tp.state.ink.children.length);")
+        cx, cy = tw / 2, th / 2
+        hover(cx, cy)
+
+        # A 20 x 20 mm square on the tablet arrives as a square, centred in the view.
+        corners = [(cx - 10, cy - 10), (cx + 10, cy - 10), (cx + 10, cy + 10), (cx - 10, cy + 10), (cx - 10, cy - 10)]
+        points = [(x0 + (x1 - x0) * i / 10, y0 + (y1 - y0) * i / 10)
+                  for (x0, y0), (x1, y1) in zip(corners, corners[1:]) for i in range(10)] + [corners[-1]]
+        for p in points:
+            frame(*p, touch=True)
+        hover(cx + 3, cy + 3)
+        self.assertEqual(strokes(), view["strokes"] + 1)
+        d = self.m.run("done(tp.state.ink.lastElementChild.getAttribute('d'));")
+        nums = [float(v) for v in d.replace("M", " ").replace("L", " ").split()]
+        xs, ys = nums[0::2], nums[1::2]
+        side = 20 / k / abs(view["a"])  # model mm: tablet mm -> screen px -> model mm
+        self.assertAlmostEqual(max(xs) - min(xs), side, delta=side * 0.01)
+        self.assertAlmostEqual(max(ys) - min(ys), side, delta=side * 0.01)
+        mid_x = (view["left"] + view["w"] / 2 - view["e"]) / view["a"]
+        mid_y = (view["top"] + view["h"] / 2 - view["f"]) / view["d"]
+        self.assertAlmostEqual((max(xs) + min(xs)) / 2, mid_x, delta=0.02)
+        self.assertAlmostEqual((max(ys) + min(ys)) / 2, mid_y, delta=0.02)
+
+        # The eraser end removes it; undo brings it back.
+        frame(*corners[1], tool="eraser")
+        frame(*corners[1], touch=True, tool="eraser")
+        frame(*corners[1], tool="eraser")
+        hover(cx, cy)
+        self.assertEqual(strokes(), view["strokes"])
+        self.assertEqual(self.m.run("tp.undo(); done(tp.state.ink.children.length);"), view["strokes"] + 1)
+
+        # Touching down on the unused strip of the tablet draws nothing, even when moving into the view.
+        if max(ax, ay) > 0.5:
+            start = (cx, ay / 2) if ay > ax else (ax / 2, cy)
+            frame(*start, touch=True)
+            frame(cx, cy, touch=True)
+            frame(cx, cy)
+            hover(cx + 1, cy + 1)
+            self.assertEqual(strokes(), view["strokes"] + 1)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 // Tracepaper viewer: shows a sheet, toggles layers, lets the person drag dimension and
-// constraint labels and sketch on top. Save writes <sheet>.sketch.svg (SPEC.md §3).
+// constraint labels and sketch on top, with the mouse or a tablet's pen.
+// Save writes <sheet>.sketch.svg (SPEC.md §3).
 import * as A from './annotations.js';
+import * as Pen from './pen.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const INK_NS = 'http://www.inkscape.org/namespaces/inkscape';
@@ -10,6 +12,8 @@ const INK_COLORS = [['Red', '#e11d48'], ['Blue', '#2563eb'], ['Green', '#16a34a'
 const INK_WIDTH_PX = 2.2; // stroke width on screen, at the zoom it was drawn at
 const MIN_STEP_PX = 0.8;  // pointer samples closer than this to the last one are dropped
 const HIT_PX = 8;         // how close the pointer must be to grab a label
+const ERASER_PX = 10;     // radius of the pen's eraser end, on screen
+const NUMBER = /-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi;
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 400;
 const POLL_MS = 1000;
@@ -20,6 +24,7 @@ const ui = {
   host: $('tpv-host'), sheet: $('tpv-sheet'), layers: $('tpv-layers'), status: $('tpv-status'),
   coords: $('tpv-coords'), toast: $('tpv-toast'), empty: $('tpv-empty'), save: $('tpv-save'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), fit: $('tpv-fit'), swatches: $('tpv-swatches'),
+  pen: $('tpv-pen'), penCursor: $('tpv-pen-cursor'),
 };
 
 const state = {
@@ -362,7 +367,9 @@ function movePinch() {
   applyCamera();
 }
 
-function startStroke(e) {
+// Strokes and erasing take points in client coordinates, from the mouse or a tablet.
+
+function beginStroke(clientX, clientY) {
   if (isHidden(state.ink)) setLayerVisible(labelOf(state.ink), true);
   const path = document.createElementNS(SVG_NS, 'path');
   path.setAttribute('stroke', state.color);
@@ -371,28 +378,76 @@ function startStroke(e) {
   path.setAttribute('stroke-linecap', 'round');
   path.setAttribute('stroke-linejoin', 'round');
   state.ink.appendChild(path);
-  const g = { type: 'stroke', id: e.pointerId, path, inv: state.ref.getScreenCTM().inverse(), pts: [], last: null };
-  addPoint(g, e, true);
-  path.setAttribute('d', strokeD(g.pts));
-  return g;
+  const s = { path, pts: [], last: null };
+  addPoint(s, clientX, clientY, true);
+  path.setAttribute('d', strokeD(s.pts));
+  markDirty(); // now, so a sheet reloaded mid-stroke keeps it
+  return s;
 }
 
-function addPoint(g, e, force = false) {
-  if (!force && Math.hypot(e.clientX - g.last.x, e.clientY - g.last.y) < MIN_STEP_PX) return false;
-  const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(g.inv);
-  g.pts.push(`${A.fmt(p.x, 2)} ${A.fmt(p.y, 2)}`);
-  g.last = { x: e.clientX, y: e.clientY };
+function addPoint(s, clientX, clientY, force = false) {
+  if (!force && Math.hypot(clientX - s.last.x, clientY - s.last.y) < MIN_STEP_PX) return false;
+  const p = toLocal(state.ref, clientX, clientY);
+  if (!p) return false;
+  s.pts.push(`${A.fmt(p[0], 2)} ${A.fmt(p[1], 2)}`);
+  s.last = { x: clientX, y: clientY };
   return true;
 }
 
 // A single tap becomes a zero-length segment, which round caps draw as a dot.
 const strokeD = (pts) => `M${pts[0]} L${(pts.length > 1 ? pts.slice(1) : pts).join(' L')}`;
 
-function extendStroke(g, e) {
-  const events = e.getCoalescedEvents?.() ?? [];
+function extendStroke(s, points) {
   let changed = false;
-  for (const ev of events.length ? events : [e]) changed = addPoint(g, ev) || changed;
-  if (changed) g.path.setAttribute('d', strokeD(g.pts));
+  for (const [x, y] of points) changed = addPoint(s, x, y) || changed;
+  if (changed) s.path.setAttribute('d', strokeD(s.pts));
+}
+
+function commitStroke(s) {
+  state.undo.push({ type: 'stroke', el: s.path });
+  updateStatus();
+}
+
+const coalesced = (e) => {
+  const events = e.getCoalescedEvents?.() ?? [];
+  return (events.length ? events : [e]).map((ev) => [ev.clientX, ev.clientY]);
+};
+
+const strokePoints = new WeakMap(); // path -> {d, pts}, parsed once per change
+
+function pointsOf(path) {
+  const d = path.getAttribute('d') ?? '';
+  let cached = strokePoints.get(path);
+  if (cached?.d !== d) {
+    const n = d.match(NUMBER) ?? [], pts = [];
+    for (let i = 0; i + 1 < n.length; i += 2) pts.push([+n[i], +n[i + 1]]);
+    cached = { d, pts };
+    strokePoints.set(path, cached);
+  }
+  return cached.pts;
+}
+
+// Remove every stroke the eraser touches at this point; removed collects them for undo.
+function eraseAt(clientX, clientY, removed) {
+  const p = toLocal(state.ref, clientX, clientY);
+  if (!p) return;
+  const r = ERASER_PX / pxPerUnit(state.ref);
+  for (const path of [...state.ink.children]) {
+    const pts = pointsOf(path), reach = r + (parseFloat(path.getAttribute('stroke-width')) || 0) / 2;
+    const hit = pts.length === 1
+      ? Math.hypot(p[0] - pts[0][0], p[1] - pts[0][1]) <= reach
+      : pts.some((q, i) => i > 0 && A.segmentDistance(p, pts[i - 1], q) <= reach);
+    if (hit) {
+      removed.push({ el: path, next: path.nextSibling });
+      path.remove();
+    }
+  }
+}
+
+function finishErase(removed) {
+  if (!removed.length) return;
+  state.undo.push({ type: 'erase', items: removed });
+  markDirty();
 }
 
 function startDrag(hit, e) {
@@ -412,10 +467,9 @@ function moveDrag(g, e) {
 function endGesture() {
   const g = gesture;
   gesture = null;
-  if (g?.type === 'stroke') {
-    state.undo.push({ type: 'stroke', el: g.path });
-    markDirty();
-  } else if (g?.type === 'drag') {
+  if (g?.type === 'stroke') commitStroke(g);
+  else if (g?.type === 'erase') finishErase(g.removed);
+  else if (g?.type === 'drag') {
     const after = A.snapshot(g.el);
     if (!A.samePlacement(after, g.before)) {
       state.undo.push({ type: 'annot', id: g.el.id, el: g.el, before: g.before });
@@ -438,9 +492,13 @@ function onPointerDown(e) {
     return;
   }
   if (gesture) return;
-  if (e.button === 1 || (e.button === 0 && spaceHeld)) gesture = startPan(e);
+  if (e.pointerType === 'pen' && (e.button === 5 || e.buttons & 32)) {
+    // A pen's eraser end erases, whatever the tool.
+    gesture = { type: 'erase', id: e.pointerId, removed: [] };
+    eraseAt(e.clientX, e.clientY, gesture.removed);
+  } else if (e.button === 1 || (e.button === 0 && spaceHeld)) gesture = startPan(e);
   else if (e.button !== 0) return;
-  else if (state.tool === 'pen') gesture = startStroke(e);
+  else if (state.tool === 'pen') gesture = { type: 'stroke', id: e.pointerId, ...beginStroke(e.clientX, e.clientY) };
   else {
     const hit = hitTest(e.clientX, e.clientY);
     gesture = hit ? startDrag(hit, e) : startPan(e);
@@ -469,7 +527,8 @@ function onPointerMove(e) {
     state.cam.y += q.y - gesture.last.y;
     gesture.last = q;
     applyCamera();
-  } else if (gesture.type === 'stroke') extendStroke(gesture, e);
+  } else if (gesture.type === 'stroke') extendStroke(gesture, coalesced(e));
+  else if (gesture.type === 'erase') for (const [x, y] of coalesced(e)) eraseAt(x, y, gesture.removed);
   else if (gesture.type === 'drag') moveDrag(gesture, e);
 }
 
@@ -513,6 +572,11 @@ function undo() {
   if (!u) return;
   if (u.type === 'stroke') u.el.remove();
   else if (u.type === 'clear') state.ink.append(...u.els);
+  else if (u.type === 'erase') {
+    for (const { el, next } of [...u.items].reverse()) {
+      state.ink.insertBefore(el, next?.parentNode === state.ink ? next : null);
+    }
+  }
   else if (u.type === 'annot') {
     const g = findAnnotation(u.id) ?? u.el;
     A.restore(g, u.before);
@@ -533,7 +597,7 @@ function clearInk() {
 function inkBounds() {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, w = 0;
   for (const p of state.ink.querySelectorAll('path')) {
-    const n = (p.getAttribute('d') ?? '').match(/-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi) ?? [];
+    const n = (p.getAttribute('d') ?? '').match(NUMBER) ?? [];
     for (let i = 0; i + 1 < n.length; i += 2) {
       const x = +n[i], y = +n[i + 1];
       x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
@@ -637,6 +701,93 @@ async function poll() {
   setTimeout(poll, POLL_MS);
 }
 
+// ---- Tablet pen (tracepaper view --remarkable) ---------------------------------
+// Frames give the pen's position in mm on the tablet; the tablet covers the
+// canvas as pen.js fits it. The pen draws with the tip and erases with the other
+// end, whatever the mouse is doing.
+
+const pen = { status: null, size: null, down: false, ignored: false, stroke: null, removed: null };
+
+function connectPen() {
+  const source = new EventSource('/api/pen');
+  source.addEventListener('status', (e) => {
+    pen.status = JSON.parse(e.data);
+    pen.size = { width: pen.status.width, height: pen.status.height };
+    if (pen.status.state !== 'connected') {
+      endPenTouch();
+      showPenCursor(null);
+    }
+    renderPen();
+  });
+  source.addEventListener('pen', (e) => onPenFrame(JSON.parse(e.data)));
+  source.addEventListener('error', () => {
+    if (source.readyState === EventSource.CLOSED) pen.status = null; // no pen on this server
+    else if (pen.status) pen.status = { ...pen.status, state: 'error', message: 'viewer server stopped' };
+    endPenTouch();
+    showPenCursor(null);
+    renderPen();
+  });
+}
+
+function onPenFrame(f) {
+  const r = ui.stage.getBoundingClientRect();
+  if (!state.root || !pen.size || !r.width || !r.height) return;
+  const [x, y] = Pen.tabletToStage([f.x, f.y], pen.size, r);
+  const inside = x >= 0 && y >= 0 && x <= r.width && y <= r.height;
+  const clientX = r.left + x, clientY = r.top + y;
+  showPenCursor(f.tool && inside ? { x, y, eraser: f.tool === 'eraser' } : null);
+  if (f.touch && !pen.down) {
+    pen.down = true;
+    pen.ignored = !inside; // touched down on the unused part of the tablet
+    if (pen.ignored) return;
+    if (f.tool === 'eraser') {
+      pen.removed = [];
+      eraseAt(clientX, clientY, pen.removed);
+    } else {
+      pen.stroke = beginStroke(clientX, clientY);
+    }
+  } else if (f.touch && !pen.ignored) {
+    if (pen.stroke) extendStroke(pen.stroke, [[clientX, clientY]]);
+    else if (pen.removed) eraseAt(clientX, clientY, pen.removed);
+  } else if (!f.touch && pen.down) {
+    endPenTouch();
+  }
+}
+
+function endPenTouch() {
+  if (pen.stroke) commitStroke(pen.stroke);
+  if (pen.removed) finishErase(pen.removed);
+  Object.assign(pen, { down: false, ignored: false, stroke: null, removed: null });
+}
+
+function showPenCursor(c) {
+  if (!c) { ui.penCursor.setAttribute('visibility', 'hidden'); return; }
+  ui.penCursor.removeAttribute('visibility');
+  ui.penCursor.setAttribute('cx', c.x);
+  ui.penCursor.setAttribute('cy', c.y);
+  ui.penCursor.setAttribute('r', c.eraser ? ERASER_PX : 4);
+  ui.penCursor.classList.toggle('eraser', c.eraser);
+}
+
+function renderPen() {
+  const s = pen.status;
+  ui.pen.hidden = !s;
+  if (!s) return;
+  const r = ui.stage.getBoundingClientRect();
+  let text = 'reMarkable: connecting…', title = s.message;
+  if (s.state === 'connected' && r.width && r.height) {
+    const a = Pen.activeArea(pen.size, r);
+    text = `reMarkable · ${Math.round(a.width)} × ${Math.round(a.height)} mm`;
+    title = `${s.message}. The middle ${Math.round(a.width)} × ${Math.round(a.height)} mm of the tablet `
+      + 'covers the view, so drawings keep their proportions; the rest of the tablet does nothing.';
+  } else if (s.state === 'error' || s.state === 'off') {
+    text = `reMarkable: ${s.message || s.state}`;
+  }
+  ui.pen.textContent = text;
+  ui.pen.title = title;
+  ui.pen.className = `tpv-pen ${s.state}`;
+}
+
 // ---- Wiring -----------------------------------------------------------------
 
 INK_COLORS.forEach(([name, c], i) => {
@@ -699,10 +850,13 @@ window.addEventListener('keyup', (e) => {
 
 window.addEventListener('beforeunload', (e) => { if (state.dirty) e.preventDefault(); });
 
+window.addEventListener('resize', renderPen); // the tablet's drawing area follows the canvas's shape
+
 setColor(0);
 applyCamera();
 updateStatus();
 poll();
+connectPen();
 
 // For debugging from the console and for tests/test_browser.py.
-window.tracepaper = { state, ready, A, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit };
+window.tracepaper = { state, ready, A, Pen, pen, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit };

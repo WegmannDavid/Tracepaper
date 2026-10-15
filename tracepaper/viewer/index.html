@@ -21,6 +21,7 @@
     <button id="tpv-fit" title="Fit the sheet (F)">Fit</button>
   </div>
   <span class="tpv-spacer"></span>
+  <span id="tpv-pen" class="tpv-pen" hidden></span>
   <span id="tpv-status" class="tpv-status" role="status"></span>
   <button id="tpv-save" class="tpv-primary" title="Save the sketch file (Ctrl+S)">Save</button>
 </header>
@@ -31,6 +32,7 @@
         <rect id="tpv-paper" width="0" height="0"/>
         <g id="tpv-host"></g>
       </g>
+      <circle id="tpv-pen-cursor" r="4" visibility="hidden"/>
     </svg>
     <div id="tpv-empty" class="tpv-empty">Loading…</div>
     <div id="tpv-coords" class="tpv-coords"></div>

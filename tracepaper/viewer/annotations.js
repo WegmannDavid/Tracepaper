@@ -156,7 +156,7 @@ export function geometry(ann, fs) {
   return radial(ann, fs);
 }
 
-function segmentDistance(p, a, b) {
+export function segmentDistance(p, a, b) {
   const ab = sub(b, a), l2 = dot(ab, ab);
   const t = l2 > 0 ? Math.min(1, Math.max(0, dot(sub(p, a), ab) / l2)) : 0;
   return len(sub(p, add(a, mul(ab, t))));

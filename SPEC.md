@@ -229,6 +229,7 @@ If the result isn't right, the person sketches again or says so, and the loop re
 
 - shows one sheet at a time, with a picker for the other sheets in the directory, and reloads a sheet when it changes on disk;
 - toggles layers, lets the person drag annotations (§2.6), and provides a pen with a few colours;
+- can take ink from a drawing tablet, such as a reMarkable 2 with `--remarkable`. The tablet covers the current view, fitted at one scale for both axes so drawings keep their proportions, while the mouse keeps doing everything else;
 - writes the sketch file on Save (§3), and clears the ink once the AI has deleted that file;
 - shows an unhandled sketch file again when reopened;
 - never solves, checks or interprets anything, and never runs `regenerate`.

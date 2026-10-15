@@ -1,9 +1,12 @@
 """Local HTTP server behind the viewer: serves the viewer, lists and serves sheets,
-and writes sketch files when the person presses Save (SPEC.md §3, §5)."""
+writes sketch files when the person presses Save (SPEC.md §3, §5), and streams
+pen input from a tablet (pen.py)."""
 from __future__ import annotations
 
 import json
 import os
+import queue
+import signal
 import tempfile
 import threading
 import webbrowser
@@ -13,6 +16,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlsplit
 
+from .pen import PenHub
+
 SVG_NS = "http://www.w3.org/2000/svg"
 SKETCH_SUFFIX = ".sketch.svg"
 MAX_SKETCH_BYTES = 50 * 1024 * 1024
@@ -21,6 +26,7 @@ STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/viewer/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/viewer/annotations.js": ("annotations.js", "text/javascript; charset=utf-8"),
+    "/viewer/pen.js": ("pen.js", "text/javascript; charset=utf-8"),
     "/viewer/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
@@ -43,10 +49,12 @@ def _mtime(path: Path) -> Optional[str]:
 class ViewerServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, directory: Path, initial: Optional[str]):
+    def __init__(self, address, directory: Path, initial: Optional[str], pen=None):
         super().__init__(address, Handler)
         self.directory = directory
         self.initial = initial
+        self.pen = pen  # a pen source, such as pen.RemarkablePen, or None
+        self.pen_hub = PenHub(pen.size_mm) if pen is not None else None
         port = self.server_address[1]
         self.allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
@@ -106,6 +114,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, (VIEWER_DIR / name).read_bytes(), content_type)
         if path == "/api/sheets":
             return self._json(self._listing())
+        if path == "/api/pen":
+            if self.server.pen_hub is None:
+                return self._error(404, "no pen")
+            return self._stream_pen(self.server.pen_hub)
         for prefix, sketch in (("/api/sheet/", False), ("/api/sketch/", True)):
             if path.startswith(prefix):
                 sheet = self._sheet(unquote(path[len(prefix):]))
@@ -117,6 +129,34 @@ class Handler(BaseHTTPRequestHandler):
                     return self._error(404, "no sketch for this sheet")
                 return self._send(200, data, "image/svg+xml")
         self._error(404, "not found")
+
+    def _stream_pen(self, hub: PenHub) -> None:
+        """Server-sent events: "status" when the tablet connects or drops, "pen" per pen frame."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.close_connection = True
+        q = hub.subscribe()
+        try:
+            while True:
+                try:
+                    items = [q.get(timeout=15)]
+                except queue.Empty:
+                    self.wfile.write(b": keep-alive\n\n")  # notices viewers that went away
+                    self.wfile.flush()
+                    continue
+                while not q.empty() and len(items) < 64:
+                    items.append(q.get_nowait())
+                if any(kind == "close" for kind, _ in items):
+                    return
+                self.wfile.write("".join(f"event: {kind}\ndata: {json.dumps(data)}\n\n"
+                                         for kind, data in items).encode())
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            hub.unsubscribe(q)
 
     def do_PUT(self) -> None:
         if not self._allowed():
@@ -156,8 +196,12 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"mtime": _mtime(target)})
 
 
-def make_server(target: Path, port: int = 0) -> ViewerServer:
-    """A server for a sheet file or a directory of sheets. Port 0 picks a free port."""
+def make_server(target: Path, port: int = 0, pen=None) -> ViewerServer:
+    """A server for a sheet file or a directory of sheets. Port 0 picks a free port.
+
+    pen is a pen source (see pen.RemarkablePen) whose input goes to the viewer;
+    the caller starts it with server.pen.start(server.pen_hub).
+    """
     target = target.resolve()
     if target.is_dir():
         directory, initial = target, None
@@ -168,21 +212,29 @@ def make_server(target: Path, port: int = 0) -> ViewerServer:
     else:
         raise SystemExit(f"tracepaper: {target} is not a directory or an .svg file")
     try:
-        return ViewerServer(("127.0.0.1", port), directory, initial)
+        return ViewerServer(("127.0.0.1", port), directory, initial, pen)
     except OSError:
         if port == 0:
             raise
-        return ViewerServer(("127.0.0.1", 0), directory, initial)
+        return ViewerServer(("127.0.0.1", 0), directory, initial, pen)
 
 
-def serve(target: Path, port: int, open_browser: bool) -> None:
-    server = make_server(target, port)
+def serve(target: Path, port: int, open_browser: bool, pen=None) -> None:
+    server = make_server(target, port, pen)
     print(f"Tracepaper: {server.directory}\n  {server.url}  (Ctrl+C to stop)", flush=True)
+    if pen is not None:
+        pen.start(server.pen_hub)
+        print("  Pen: the tablet's app is closed while this runs; it starts again when you stop.", flush=True)
     if open_browser:
         threading.Thread(target=webbrowser.open, args=(server.url,), daemon=True).start()
+    signal.signal(signal.SIGTERM, signal.default_int_handler)  # stop the same way when killed
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if pen is not None:
+            print("Starting the tablet's app again…", flush=True)
+            pen.stop()
+            server.pen_hub.close()
         server.server_close()
