@@ -1,0 +1,183 @@
+:root {
+  --bg: #e6e4de;
+  --panel: #fbfaf7;
+  --line: #d8d5cd;
+  --well: #efede8;
+  --hover: #e4e1d9;
+  --text: #1f2328;
+  --muted: #6b6f76;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --warn: #b45309;
+  --ok: #0f766e;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body { margin: 0; height: 100%; }
+
+body {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.tpv-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.tpv-brand { font-weight: 600; margin-right: 4px; }
+.tpv-spacer { flex: 1; }
+
+select {
+  font: inherit;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  max-width: 220px;
+}
+
+.tpv-group {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--well);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: transparent;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { background: var(--hover); }
+button:disabled { opacity: 0.4; cursor: default; }
+button[aria-pressed="true"] { background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14); }
+
+.tpv-swatch { width: 26px; padding: 0; display: grid; place-items: center; }
+.tpv-swatch span { width: 14px; height: 14px; border-radius: 50%; background: var(--c); }
+.tpv-swatch[aria-pressed="true"] span { outline: 2px solid var(--c); outline-offset: 2px; }
+
+.tpv-primary { background: var(--accent); color: #fff; padding: 4px 16px; }
+.tpv-primary:hover:not(:disabled) { background: var(--accent-hover); }
+
+.tpv-status { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tpv-status.dirty { color: var(--warn); }
+.tpv-status.pending { color: var(--ok); }
+
+main { display: grid; grid-template-columns: minmax(0, 1fr) 220px; min-height: 0; }
+
+.tpv-stage-wrap { position: relative; overflow: hidden; min-height: 0; }
+
+#tpv-stage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#tpv-paper { fill: #fff; filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.18)); }
+#tpv-host > svg { overflow: visible; }
+
+/* Annotation under the pointer in the Move tool. */
+.tpv-hover { stroke: #ea580c; fill: #ea580c; }
+
+.tpv-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.tpv-coords {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  font: 12px ui-monospace, "DejaVu Sans Mono", monospace;
+  color: var(--muted);
+  pointer-events: none;
+  white-space: pre;
+}
+
+.tpv-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: #1f2328;
+  color: #fff;
+  pointer-events: none;
+}
+
+.tpv-toast.error { background: #b91c1c; }
+
+.tpv-panel {
+  padding: 12px;
+  overflow: auto;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+
+.tpv-panel h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#tpv-layers { list-style: none; margin: 0; padding: 0; }
+
+#tpv-layers label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#tpv-layers label:hover { background: var(--well); }
+#tpv-layers .tpv-ink span::after { content: " · your ink"; color: var(--muted); }
+
+.tpv-help { margin-top: 20px; font-size: 12px; color: var(--muted); }
+.tpv-help p { margin: 0 0 8px; }
+
+kbd, code {
+  font: 11px ui-monospace, "DejaVu Sans Mono", monospace;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--well);
+  border: 1px solid var(--line);
+}
+
+@media (max-width: 720px) {
+  main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+  .tpv-panel { border-left: 0; border-top: 1px solid var(--line); max-height: 30vh; }
+  .tpv-help { display: none; }
+}

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tracepaper"
+version = "0.1.0"
+description = "Layered SVG sheets an AI writes, and a viewer to sketch changes on them."
+readme = "README.md"
+requires-python = ">=3.9"
+
+[project.scripts]
+tracepaper = "tracepaper.cli:main"
+
+[tool.setuptools]
+packages = ["tracepaper"]
+
+[tool.setuptools.package-data]
+tracepaper = ["viewer/*"]

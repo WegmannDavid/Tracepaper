@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tracepaper</title>
+<link rel="stylesheet" href="/viewer/style.css">
+</head>
+<body>
+<header class="tpv-bar" id="tpv-bar">
+  <span class="tpv-brand">Tracepaper</span>
+  <select id="tpv-sheet" aria-label="Sheet"></select>
+  <div class="tpv-group" role="group" aria-label="Tool">
+    <button data-tool="move" title="Move labels, pan (V)">Move</button>
+    <button data-tool="pen" title="Pen (P)">Pen</button>
+  </div>
+  <div class="tpv-group" id="tpv-swatches" role="group" aria-label="Ink colour"></div>
+  <div class="tpv-group">
+    <button id="tpv-undo" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="tpv-clear" title="Remove all ink">Clear</button>
+    <button id="tpv-fit" title="Fit the sheet (F)">Fit</button>
+  </div>
+  <span class="tpv-spacer"></span>
+  <span id="tpv-status" class="tpv-status" role="status"></span>
+  <button id="tpv-save" class="tpv-primary" title="Save the sketch file (Ctrl+S)">Save</button>
+</header>
+<main>
+  <div class="tpv-stage-wrap">
+    <svg id="tpv-stage" xmlns="http://www.w3.org/2000/svg">
+      <g id="tpv-camera">
+        <rect id="tpv-paper" width="0" height="0"/>
+        <g id="tpv-host"></g>
+      </g>
+    </svg>
+    <div id="tpv-empty" class="tpv-empty">Loading…</div>
+    <div id="tpv-coords" class="tpv-coords"></div>
+    <div id="tpv-toast" class="tpv-toast" role="status" hidden></div>
+  </div>
+  <aside class="tpv-panel">
+    <h2>Layers</h2>
+    <ul id="tpv-layers"></ul>
+    <div class="tpv-help">
+      <p><kbd>P</kbd> pen · <kbd>V</kbd> move labels · <kbd>F</kbd> fit · <kbd>1</kbd>–<kbd>4</kbd> colour</p>
+      <p>Scroll to zoom. Pan with the middle button, <kbd>Space</kbd>&nbsp;+&nbsp;drag, or a finger.</p>
+      <p>Save writes <code>&lt;sheet&gt;.sketch.svg</code> next to the sheet. Then tell the AI what you drew.</p>
+    </div>
+  </aside>
+</main>
+<script type="module" src="/viewer/app.js"></script>
+</body>
+</html>
