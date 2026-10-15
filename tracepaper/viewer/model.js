@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { CadControls } from './controls.js';
+import * as Pen from './pen.js';
 import { flatten, renderTree } from './tree.js';
 
 const POLL_MS = 1000;
@@ -20,7 +21,7 @@ const CLIENT = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const $ = (id) => document.getElementById(id);
 const ui = {
   canvas: $('tpv-canvas'), view: $('tpv-view'), status: $('tpv-status'), empty: $('tpv-empty'),
-  toast: $('tpv-toast'), pen: $('tpv-pen'), fit: $('tpv-fit'), tree: $('tpv-layers'),
+  toast: $('tpv-toast'), pen: $('tpv-pen'), penButton: $('tpv-pen-button'), fit: $('tpv-fit'), tree: $('tpv-layers'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
 const viewUrl = (name) => `/view/${name.split('/').map(encodeURIComponent).join('/')}`;
@@ -230,7 +231,8 @@ async function poll() {
   setTimeout(poll, POLL_MS);
 }
 
-// ---- Tablet pen: it doesn't draw on 3D views yet, but using this window takes it from the others.
+// ---- Tablet pen: it doesn't draw on 3D views yet, but using this window takes it from the
+// others, and it can be let go from here. Sheets' windows connect it.
 
 let pen = null;
 
@@ -243,26 +245,41 @@ function connectPen() {
 }
 
 function renderPen() {
-  ui.pen.hidden = !pen;
+  ui.pen.hidden = !pen || (pen.state === 'off' && !pen.message);
+  ui.penButton.hidden = !pen || pen.state === 'off' || pen.active !== CLIENT;
   if (!pen) return;
   const here = pen.active === CLIENT;
-  ui.pen.textContent = pen.state !== 'connected' ? `reMarkable: ${pen.state}`
+  ui.pen.textContent = pen.state === 'connecting' ? 'reMarkable: connecting…'
+    : pen.state !== 'connected' ? `reMarkable: ${pen.message || pen.state}`
     : here ? 'reMarkable · not on 3D views yet' : 'reMarkable · in another window';
+  ui.pen.title = pen.message;
   ui.pen.className = `tpv-pen ${pen.state}`;
 }
 
 function claimPen() {
   if (!pen || pen.active === CLIENT) return;
-  fetch('/api/pen/active', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tracepaper': '1' },
-    body: JSON.stringify({ client: CLIENT }),
-  }).catch(() => {});
+  Pen.tablet('active', CLIENT).catch(() => {});
+}
+
+async function disconnectPen() {
+  ui.penButton.disabled = true;
+  ui.penButton.textContent = 'Disconnecting…';
+  try {
+    await Pen.tablet('disconnect', CLIENT);
+  } catch (err) {
+    toast(`Could not disconnect the tablet: ${err.message}`);
+  } finally {
+    ui.penButton.disabled = false;
+    ui.penButton.textContent = 'Disconnect';
+    renderPen();
+  }
 }
 
 // ---- Wiring
 
 for (const b of document.querySelectorAll('[data-look]')) b.addEventListener('click', () => frame(LOOKS[b.dataset.look]));
 ui.fit.addEventListener('click', () => frame(null));
+ui.penButton.addEventListener('click', disconnectPen);
 ui.view.addEventListener('change', () => { if (ui.view.value !== viewName) location.href = viewUrl(ui.view.value); });
 window.addEventListener('pointerdown', claimPen, true);
 ui.canvas.addEventListener('wheel', claimPen, { passive: true });

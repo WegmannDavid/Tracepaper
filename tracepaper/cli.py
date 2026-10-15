@@ -15,9 +15,9 @@ def main(argv=None) -> None:
                       help="a folder of views (.svg sheets, .glb models), or one view to open directly")
     view.add_argument("--port", type=int, default=7310, help="port to serve on (default 7310, or a free one)")
     view.add_argument("--no-browser", action="store_true", help="don't open a browser")
-    view.add_argument("--remarkable", nargs="?", const="remarkable", metavar="HOST",
-                      help="draw with a reMarkable 2's pen, reached with ssh as HOST (default: remarkable); "
-                           "the tablet's app is closed meanwhile")
+    view.add_argument("--tablet-host", default="remarkable", metavar="HOST",
+                      help="the ssh host of the reMarkable 2 that the pages' Connect button uses "
+                           "(default: remarkable)")
     view.add_argument("--rotate", type=int, choices=sorted(HOLD), default=90,
                       help="how the tablet is held, in degrees clockwise from upright: "
                            "90 (the default) is landscape with the power button on the right, 270 on the left")
@@ -27,8 +27,7 @@ def main(argv=None) -> None:
     look.add_argument("--out", type=Path, help="directory for the images (default: a new temporary one)")
     args = parser.parse_args(argv)
     if args.command == "view":
-        pen = RemarkablePen(args.remarkable, args.rotate) if args.remarkable else None
-        serve(Path(args.path), args.port, not args.no_browser, pen)
+        serve(Path(args.path), args.port, not args.no_browser, RemarkablePen(args.tablet_host, args.rotate))
     elif args.command == "inspect":
         from .report import inspect
         print(inspect(Path(args.path), args.out))

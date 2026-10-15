@@ -63,14 +63,16 @@ const done = arguments[arguments.length - 1];
 
 
 class FakePen:
-    """A tablet whose frames the test publishes itself."""
+    """A tablet that connects at once, and whose frames the test publishes itself."""
     size_mm = tablet_size(90)
+    running = False
+    hub = None  # the server's, set when it is made
 
-    def start(self, hub):
-        pass
+    def connect(self, hub):
+        hub.publish_status("connected", "test tablet")
 
-    def stop(self):
-        pass
+    def disconnect(self):
+        self.hub.publish_status("off")
 
 
 def free_port() -> int:
@@ -145,6 +147,7 @@ class ViewerInFirefox(unittest.TestCase):
         shutil.copy(cls.dir / "bracket.glb", cls.dir / "hidden-screw.glb")
         mark_hidden(cls.dir / "hidden-screw.glb", ["screw"])
         cls.server = make_server(cls.dir / "section-A.svg", 0, FakePen())
+        cls.server.pen.hub = cls.server.pen_hub
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
 
         profile = Path(cls.tmp.name) / "profile"
@@ -389,12 +392,23 @@ class ViewerInFirefox(unittest.TestCase):
                            "done([...c.position.toArray(), ...c.quaternion.toArray()]);")
         self.assertEqual(after, before)
 
+    def pen_ui(self):
+        """The toolbar's tablet status, or None if hidden, and its button's label, or None."""
+        return self.m.run("""
+            const status = document.getElementById('tpv-pen'), button = document.getElementById('tpv-pen-button');
+            done([status.hidden ? null : status.textContent, button.hidden ? null : button.textContent]);
+        """)
+
     def test_pen_follows_last_used_window(self):
         hub = self.server.pen_hub
-        hub.publish_status("connected", "test tablet")
+        hub.publish_status("off")
         self.open_viewer()
         main = self.m.call("WebDriver:GetWindowHandle")["value"]
         client = {"a": self.m.run("done(tp.CLIENT);")}
+        self.assertEqual(self.pen_ui(), [None, "Connect reMarkable"])  # nothing connects by itself
+        self.m.run("document.getElementById('tpv-pen-button').click(); "
+                   "until(() => tp.pen.status?.state === 'connected', done);")
+        self.assertEqual(hub.status["active"], client["a"])
         other = self.m.call("WebDriver:NewWindow", {"type": "window"})["handle"]
         window = {"a": main, "b": other}
         try:
@@ -436,10 +450,38 @@ class ViewerInFirefox(unittest.TestCase):
             use("b")
             before, after = draw_and_wait("b")
             self.assertEqual(after, {"a": before["a"], "b": before["b"] + 1})
+
+            # Connect here, in the other window, brings the pen back; Disconnect lets it go.
+            self.m.call("WebDriver:SwitchToWindow", {"handle": window["a"]})
+            self.assertEqual(self.pen_ui(), ["reMarkable · in another window", "Connect here"])
+            self.m.run("document.getElementById('tpv-pen-button').click(); done(true);")
+            self.wait_for(lambda: hub.status["active"] == client["a"])
+            before, after = draw_and_wait("a")
+            self.assertEqual(after, {"a": before["a"] + 1, "b": before["b"]})
+            self.m.call("WebDriver:SwitchToWindow", {"handle": window["a"]})
+            self.assertTrue(self.m.run("until(() => document.getElementById('tpv-pen-button').textContent"
+                                       " === 'Disconnect', done);"))
+            self.m.run("document.getElementById('tpv-pen-button').click(); "
+                       "until(() => tp.pen.status?.state === 'off', done);")
+            self.assertEqual(self.pen_ui(), [None, "Connect reMarkable"])
         finally:
             self.m.call("WebDriver:SwitchToWindow", {"handle": other})
             self.m.call("WebDriver:CloseWindow")
             self.m.call("WebDriver:SwitchToWindow", {"handle": main})
+
+    def test_3d_view_can_let_the_tablet_go(self):
+        hub = self.server.pen_hub
+        self.open_viewer("bracket.glb")
+        hub.publish_status("connected", "test tablet")
+        client = self.m.run("until(() => window.tracepaper3d && !document.getElementById('tpv-pen').hidden, "
+                            "() => done(window.tracepaper3d.CLIENT));")
+        self.assertEqual(self.pen_ui(), ["reMarkable · in another window", None])  # no Connect: it can't draw here
+        hub.set_active(client)  # used with the mouse
+        self.assertTrue(self.m.run("until(() => !document.getElementById('tpv-pen-button').hidden, done);"))
+        self.assertEqual(self.pen_ui(), ["reMarkable · not on 3D views yet", "Disconnect"])
+        self.m.run("document.getElementById('tpv-pen-button').click();"
+                   "until(() => document.getElementById('tpv-pen').hidden, done);")
+        self.assertEqual((hub.status["state"], self.pen_ui()), ("off", [None, None]))
 
     def test_mouse_starts_in_move(self):
         self.open_viewer()

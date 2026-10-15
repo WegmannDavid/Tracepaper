@@ -19,3 +19,15 @@ export function tabletToStage(p, tablet, stage) {
   const a = activeArea(tablet, stage);
   return [(p[0] - a.x) / a.mmPerPx, (p[1] - a.y) / a.mmPerPx];
 }
+
+// Asks the viewer server to connect the tablet and draw in this window ('connect'),
+// to only draw in this window ('active'), or to let the tablet go ('disconnect').
+// client is this window's id. Resolves to the tablet's status.
+export async function tablet(action, client) {
+  const r = await fetch(`/api/pen/${action}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tracepaper': '1' },
+    body: JSON.stringify({ client }),
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+}

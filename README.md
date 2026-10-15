@@ -43,17 +43,16 @@ tracepaper view path/to/sheets                  # a directory, or a single sheet
 
 ## Drawing with a reMarkable 2
 
-```sh
-tracepaper view examples/bracket --remarkable
-```
+Press **Connect reMarkable** in a sheet's toolbar. The tablet's pen then draws in that window, and the mouse keeps doing everything else, even at the same time. The pen's other end erases whole strokes. **Disconnect** gives the tablet back.
 
-The tablet's pen then draws in the viewer, and the mouse keeps doing everything else, even at the same time. The pen's other end erases whole strokes. With several windows open, the pen draws in the one you used last with the mouse, or the 2D view you opened last; the toolbar says where it is.
-
+- **Several windows.** The pen draws in the one you used last with the mouse, or the sheet you opened last; the toolbar says where it is. **Connect here** in another window moves it there. A 3D window shows where the pen is and can disconnect it.
+- **Several viewers.** Only one can have the tablet. Connecting in one takes the tablet from any other Tracepaper viewer that has it, which then shows "taken by another viewer" and leaves it alone. So a viewer can keep running all day without holding the tablet.
+- **Closing the windows** lets the tablet go too, ten seconds after the viewer's last window closed, and so does stopping the viewer.
 - **Mapping.** The tablet covers the part of the sheet in view, so zooming in with the mouse gives finer control.
 - **Aspect ratio.** The view's shape is fitted into the middle of the tablet at one scale for both axes, so a circle drawn on the tablet stays a circle. The toolbar shows how much of the tablet that is; the strips outside it do nothing.
 - **Holding the tablet.** Landscape with the power button on the right is the default. Use `--rotate 270` for the power button on the left; 0 and 180 are portrait.
-- **Connection.** The tablet is reached with `ssh remarkable`, or `--remarkable HOST` for another host name.
-- **The tablet's own app.** It's closed while Tracepaper runs, so strokes don't also land in a notebook there, and the e-ink keeps showing what it showed. The app starts again when Tracepaper stops, or by itself 20 seconds after the connection is lost.
+- **Connection.** The tablet is reached with `ssh remarkable`, or `tracepaper view --tablet-host HOST` for another host name. If the connection drops, the viewer reconnects by itself, unless another viewer has taken the tablet meanwhile.
+- **The tablet's own app.** It's closed while connected, so strokes don't also land in a notebook there, and the e-ink keeps showing what it showed. The app starts again on disconnecting, or by itself 20 seconds after the connection is lost.
 
 ## Using Tracepaper from other projects
 
@@ -68,7 +67,7 @@ ln -s "$PWD/skills/tracepaper" ~/.claude/skills/tracepaper            # the Clau
 - **Updates** reach other projects as soon as the files change here:
   - spec and skill edits;
   - viewer changes, after a page reload;
-  - server or `--remarkable` changes, after restarting that `tracepaper view`.
+  - server or tablet connection changes, after restarting that `tracepaper view`.
 - **New skills** are only noticed by new Claude sessions. Once a session knows the skill, it reads the current files each time it uses it.
 
 `tracepaper inspect [path]` is the AI's side of the loop. It reports on the newest sketch file under `path` (strokes, picked colours, moved labels) and renders a whole-sheet image plus close-ups of the ink.

@@ -1,4 +1,4 @@
-"""A reMarkable 2 as a drawing tablet for the viewer (``tracepaper view --remarkable``).
+"""A reMarkable 2 as a drawing tablet for the viewer, connected from its pages.
 
 The tablet's pen sensor reports through Linux's input system. Tracepaper reads
 its raw events over ssh and passes pen positions, in millimetres on the tablet
@@ -10,6 +10,10 @@ While connected, the tablet's app is stopped, so strokes don't also land in a
 document open there; the e-ink keeps showing what it showed. The app starts
 again when Tracepaper disconnects, or by itself SILENCE seconds after this
 computer goes quiet (crash, cable pulled, WiFi lost).
+
+Only one viewer can have the tablet. Connecting takes it over from any other
+Tracepaper viewer that has it, on this computer or another; that one hears it
+was taken and doesn't try to get it back.
 """
 from __future__ import annotations
 
@@ -39,13 +43,27 @@ READY = b"TRACEPAPER-READY\n"
 SILENCE = 20  # seconds without a heartbeat after which the tablet restarts its app
 HEARTBEAT = 5
 RETRY = 3.0  # seconds between connection attempts
+LOCK = "/tmp/tracepaper-pen"  # on the tablet: "<pid> <owner>" of the session that has the pen
+TAKEN, BUSY = 75, 76  # the script's exit statuses: another viewer took the tablet over / has it
 
-# Runs on the tablet: stop the app, stream the pen, start the app again when done.
+# Runs on the tablet, after "owner=<this viewer> take=<0 or 1>": take the pen over from
+# the session that has it if asked to (or if that is this viewer's own, from before a
+# dropped connection), stop the app, stream the pen, and start the app again when done.
+# A session taken over leaves the app stopped for the one taking over.
 SCRIPT = f"""
 dev=$(grep -A4 -i wacom /proc/bus/input/devices | grep -o 'event[0-9]*' | head -n 1)
 [ -n "$dev" ] || {{ echo "no pen sensor found on the tablet" >&2; exit 1; }}
-restore() {{ trap - EXIT HUP INT TERM PIPE; kill $pid 2>/dev/null; systemctl reset-failed xochitl 2>/dev/null; systemctl start xochitl; exit; }}
+if [ -f {LOCK} ] && read -r old who < {LOCK} && grep -q TRACEPAPER /proc/$old/cmdline 2>/dev/null; then
+  [ "$take" = 1 ] || [ "$who" = "$owner" ] || {{ echo "in use by another viewer" >&2; exit {BUSY}; }}
+  kill -USR1 $old
+  n=0; while kill -0 $old 2>/dev/null && [ $n -lt 100 ]; do usleep 50000; n=$((n + 1)); done
+  kill -9 $old 2>/dev/null
+fi
+echo "$$ $owner" > {LOCK}
+restore() {{ trap - EXIT HUP INT TERM PIPE USR1; kill $pid 2>/dev/null; rm -f {LOCK}; systemctl reset-failed xochitl 2>/dev/null; systemctl start xochitl; exit; }}
+taken() {{ trap - EXIT HUP INT TERM PIPE USR1; kill $pid 2>/dev/null; echo "taken by another viewer" >&2; exit {TAKEN}; }}
 trap restore EXIT HUP INT TERM PIPE
+trap taken USR1
 systemctl stop xochitl || exit 1
 printf '{READY.decode().strip()}\\n'
 cat /dev/input/$dev & pid=$!
@@ -124,7 +142,7 @@ class PenHub:
 
     def __init__(self, size_mm: tuple):
         self.size = size_mm
-        self.status = {"state": "connecting", "message": "", "width": size_mm[0], "height": size_mm[1],
+        self.status = {"state": "off", "message": "", "width": size_mm[0], "height": size_mm[1],
                        "active": None}
         self._clients: dict = {}  # client id -> (queue, whether it draws), oldest first
         self._lock = threading.Lock()
@@ -152,6 +170,10 @@ class PenHub:
             del self._clients[client]
             if self.status["active"] == client:
                 self._activate(self._fallback())
+
+    def has_clients(self) -> bool:
+        with self._lock:
+            return bool(self._clients)
 
     def set_active(self, client: str) -> None:
         with self._lock:
@@ -194,64 +216,95 @@ def _put(q: queue.Queue, item) -> None:
 
 
 class RemarkablePen:
-    """Streams a reMarkable 2's pen into a PenHub, reconnecting when the tablet comes back."""
+    """Streams a reMarkable 2's pen into a PenHub between connect and disconnect,
+    reconnecting by itself when the connection drops."""
 
     def __init__(self, host: str = "remarkable", rotation: int = 90, command: Optional[list] = None):
         self.host = host
         self.rotation = rotation
         self.size_mm = tablet_size(rotation)
-        self.command = command or [*SSH, host, SCRIPT]
-        self._stop = threading.Event()
-        self._proc: Optional[subprocess.Popen] = None
+        self.command = command or [*SSH, host]  # runs the script on the tablet, given as last argument
+        self.owner = os.urandom(8).hex()  # tells this viewer's sessions on the tablet from other viewers'
         self._lock = threading.Lock()
+        self._running = False  # a connection is up or being tried
+        self._connected = False
+        self._take = False  # the next attempt takes the tablet over from another viewer
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._proc: Optional[subprocess.Popen] = None
         self._thread: Optional[threading.Thread] = None
 
-    def start(self, hub: PenHub) -> None:
-        self._thread = threading.Thread(target=self._run, args=(hub,), name="tracepaper-pen", daemon=True)
-        self._thread.start()
+    @property
+    def running(self) -> bool:
+        return self._running
 
-    def stop(self, timeout: float = 15) -> None:
-        """Disconnect; the tablet starts its app again."""
-        self._stop.set()
+    def connect(self, hub: PenHub) -> None:
+        """Connect, taking the tablet over from any other viewer that has it."""
         with self._lock:
-            proc = self._proc
+            if self._running and not self._stop.is_set():
+                if not self._connected:  # waiting to try again: try now
+                    self._take = True
+                    self._wake.set()
+                return
+            self._running, self._take = True, True
+            self._stop, self._wake = threading.Event(), threading.Event()
+            self._thread = threading.Thread(target=self._run, args=(hub, self._stop, self._wake),
+                                            name="tracepaper-pen", daemon=True)
+            self._thread.start()
+
+    def disconnect(self, timeout: float = 15) -> None:
+        """Disconnect; the tablet starts its app again."""
+        with self._lock:
+            self._stop.set()
+            self._wake.set()
+            proc, thread = self._proc, self._thread
         if proc is not None:
             _close(proc.stdin)  # the script on the tablet sees the end of its input and cleans up
             try:
                 proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
+        if thread is not None:
+            thread.join(timeout=5)
 
-    def _run(self, hub: PenHub) -> None:
-        while not self._stop.is_set():
+    def _run(self, hub: PenHub, stop: threading.Event, wake: threading.Event) -> None:
+        message = ""
+        while not stop.is_set():
+            with self._lock:
+                take, self._take = self._take, False
             hub.publish_status("connecting", f"connecting to {self.host}")
-            message = self._session(hub)
-            if self._stop.is_set():
+            message, again = self._session(hub, stop, take)
+            if stop.is_set() or not again:
                 break
             hub.publish_status("error", message)
-            self._stop.wait(RETRY)
-        hub.publish_status("off", "disconnected")
+            wake.wait(RETRY)
+            wake.clear()
+        with self._lock:  # before a new connect() can announce itself
+            self._running = False
+            hub.publish_status("off", "" if stop.is_set() else message)
 
-    def _session(self, hub: PenHub) -> str:
-        """One connection; returns why it ended."""
+    def _session(self, hub: PenHub, stop: threading.Event, take: bool) -> tuple:
+        """One connection; returns why it ended and whether to try again."""
         try:
-            proc = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE)
+            proc = subprocess.Popen([*self.command, f"owner={self.owner} take={int(take)}\n{SCRIPT}"],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError as e:
-            return f"cannot run ssh: {e}"
+            return f"cannot run ssh: {e}", False
         with self._lock:
             self._proc = proc
-        threading.Thread(target=self._heartbeat, args=(proc,), daemon=True).start()
+        threading.Thread(target=self._heartbeat, args=(proc, stop), daemon=True).start()
         fd = proc.stdout.fileno()
         try:
+            if stop.is_set():  # disconnected before the process was known
+                return "", False
             head = b""
             while not head.endswith(READY):
                 chunk = os.read(fd, 1)
                 if not chunk:
                     return _why(proc, "the tablet closed the connection")
                 head += chunk
+            with self._lock:
+                self._connected = True
             hub.publish_status("connected", f"{self.host}, held {HOLD[self.rotation]}")
             decoder = Decoder(self.rotation)
             while chunk := os.read(fd, 4096):
@@ -267,9 +320,10 @@ class RemarkablePen:
                 proc.kill()
             with self._lock:
                 self._proc = None
+                self._connected = False
 
-    def _heartbeat(self, proc: subprocess.Popen) -> None:
-        while proc.poll() is None and not self._stop.wait(HEARTBEAT):
+    def _heartbeat(self, proc: subprocess.Popen, stop: threading.Event) -> None:
+        while proc.poll() is None and not stop.wait(HEARTBEAT):
             try:
                 proc.stdin.write(b"\n")
                 proc.stdin.flush()
@@ -284,11 +338,12 @@ def _close(f) -> None:
         pass
 
 
-def _why(proc: subprocess.Popen, fallback: str) -> str:
+def _why(proc: subprocess.Popen, fallback: str) -> tuple:
+    """Why the session ended, and whether to try again: not when another viewer has the tablet."""
     _close(proc.stdin)
     try:
         _, err = proc.communicate(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
-        return fallback
-    return err.decode(errors="replace").strip() or fallback
+        return fallback, True
+    return err.decode(errors="replace").strip() or fallback, proc.returncode not in (TAKEN, BUSY)

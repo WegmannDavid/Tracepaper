@@ -25,7 +25,7 @@ const ui = {
   host: $('tpv-host'), sheet: $('tpv-sheet'), layers: $('tpv-layers'), status: $('tpv-status'),
   coords: $('tpv-coords'), toast: $('tpv-toast'), empty: $('tpv-empty'), save: $('tpv-save'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), fit: $('tpv-fit'), swatches: $('tpv-swatches'),
-  pen: $('tpv-pen'), penCursor: $('tpv-pen-cursor'), pickBox: $('tpv-pick-box'),
+  pen: $('tpv-pen'), penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), pickBox: $('tpv-pick-box'),
 };
 
 const state = {
@@ -824,11 +824,12 @@ async function poll() {
   setTimeout(poll, POLL_MS);
 }
 
-// ---- Tablet pen (tracepaper view --remarkable) ---------------------------------
+// ---- Tablet pen --------------------------------------------------------------
+// The toolbar's button connects the reMarkable (tracepaper/pen.py) and lets it go.
 // Frames give the pen's position in mm on the tablet; the tablet covers the
 // canvas as pen.js fits it. The pen draws with the tip and erases with the other
 // end, whatever the mouse is doing. With several windows open, the server sends
-// it to the one used last with the mouse.
+// it to the one used last with the mouse, or where Connect was pressed.
 
 const pen = { status: null, size: null, down: false, ignored: false, stroke: null, removed: null };
 const penHere = () => pen.status?.active === CLIENT;
@@ -888,10 +889,22 @@ function endPenTouch() {
 // The mouse was used in this window: the pen draws here from now on.
 function claimPen() {
   if (!pen.status || penHere()) return;
-  fetch('/api/pen/active', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tracepaper': '1' },
-    body: JSON.stringify({ client: CLIENT }),
-  }).catch(() => {});
+  Pen.tablet('active', CLIENT).catch(() => {});
+}
+
+// Connect the tablet to draw here, taking it from wherever it is; or let it go.
+async function togglePen() {
+  const action = ui.penButton.dataset.action;
+  ui.penButton.disabled = true;
+  if (action === 'disconnect') ui.penButton.textContent = 'Disconnecting…';
+  try {
+    await Pen.tablet(action, CLIENT);
+  } catch (err) {
+    toast(`Could not ${action} the tablet: ${err.message}`, true);
+  } finally {
+    ui.penButton.disabled = false;
+    renderPen();
+  }
 }
 
 function showPenCursor(c) {
@@ -905,13 +918,23 @@ function showPenCursor(c) {
 
 function renderPen() {
   const s = pen.status;
-  ui.pen.hidden = !s;
+  ui.pen.hidden = !s || (s.state === 'off' && !s.message);
+  ui.penButton.hidden = !s;
   if (!s) return;
   const r = ui.stage.getBoundingClientRect();
+  const mine = s.state !== 'off' && penHere();
+  ui.penButton.dataset.action = mine ? 'disconnect' : 'connect';
+  if (!ui.penButton.disabled) {
+    ui.penButton.textContent = mine ? 'Disconnect' : s.state === 'off' ? 'Connect reMarkable' : 'Connect here';
+  }
+  ui.penButton.title = mine ? "Let the tablet go: its own app starts again"
+    : s.state === 'off' ? "Draw with the reMarkable's pen in this window. Its own app is closed until you "
+      + 'disconnect; another Tracepaper viewer that has it lets it go.'
+    : "Draw with the reMarkable's pen in this window";
   let text = 'reMarkable: connecting…', title = s.message;
   if (s.state === 'connected' && !penHere()) {
     text = 'reMarkable · in another window';
-    title = 'The pen draws in the window you used last. Click here to draw in this one.';
+    title = 'The pen draws in the window you used last. Click into this one, or press Connect here, to draw here.';
   } else if (s.state === 'connected' && r.width && r.height) {
     const a = Pen.activeArea(pen.size, r);
     text = `reMarkable · ${Math.round(a.width)} × ${Math.round(a.height)} mm`;
@@ -977,6 +1000,7 @@ ui.sheet.addEventListener('change', () => {
   else openSheet(name);
 });
 
+ui.penButton.addEventListener('click', togglePen);
 // Using this window with the mouse (or a local pen) makes it the one the tablet draws in.
 window.addEventListener('pointerdown', claimPen, true);
 ui.stage.addEventListener('wheel', claimPen, { passive: true });

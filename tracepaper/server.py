@@ -2,8 +2,8 @@
 
 It lists a project's views (2D sheets, .svg, and 3D models, .glb) and serves
 them with the pages that show them, writes sketch files when the person presses
-Save (SPEC.md §3, §5), and passes pen input from a tablet (pen.py) to the view
-the person last used.
+Save (SPEC.md §3, §5), and connects a tablet (pen.py) when a page asks, passing
+its pen input to the view the person last used.
 """
 from __future__ import annotations
 
@@ -29,6 +29,8 @@ KINDS = {".svg": "sheet", ".glb": "model"}
 SKIP_DIRS = {"node_modules", "__pycache__"}
 MAX_DEPTH = 3  # how many folders below the project folder are searched for views
 MAX_SKETCH_BYTES = 50 * 1024 * 1024
+KEEPALIVE = 5  # seconds between keep-alives on the pen stream, which notice closed windows
+LAST_WINDOW = 10  # seconds after the last window closed that the tablet is let go
 VIEWER_DIR = Path(__file__).resolve().parent / "viewer"
 PAGES = {"sheet": "index.html", "model": "model.html"}
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -75,10 +77,20 @@ class ViewerServer(ThreadingHTTPServer):
         super().__init__(address, Handler)
         self.directory = directory
         self.initial = initial
-        self.pen = pen  # a pen source, such as pen.RemarkablePen, or None
+        self.pen = pen  # a tablet the pages can connect, such as pen.RemarkablePen, or None
         self.pen_hub = PenHub(pen.size_mm) if pen is not None else None
         port = self.server_address[1]
         self.allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+    def window_closed(self) -> None:
+        """A page's pen stream ended: let the tablet go if no window comes back soon."""
+        def check():
+            if not self.pen_hub.has_clients():
+                self.pen.disconnect()
+        if not self.pen_hub.has_clients():
+            timer = threading.Timer(LAST_WINDOW, check)
+            timer.daemon = True
+            timer.start()
 
     @property
     def url(self) -> str:
@@ -187,7 +199,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             while True:
                 try:
-                    items = [q.get(timeout=5)]
+                    items = [q.get(timeout=KEEPALIVE)]
                 except queue.Empty:
                     self.wfile.write(b": keep-alive\n\n")  # notices viewers that went away
                     self.wfile.flush()
@@ -203,6 +215,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
         finally:
             hub.unsubscribe(q)
+            self.server.window_closed()
 
     def _body(self, limit: int) -> Optional[bytes]:
         try:
@@ -216,9 +229,14 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(length)
 
     def do_POST(self) -> None:
+        """/api/pen/connect connects the tablet and makes the asking view the one it draws in,
+        taking the tablet over from any other viewer; /api/pen/active only does the latter, and
+        /api/pen/disconnect lets the tablet go. Each takes {"client": id} and returns the status."""
         if not self._allowed() or not self._from_page():
             return
-        if urlsplit(self.path).path != "/api/pen/active" or self.server.pen_hub is None:
+        action = urlsplit(self.path).path.removeprefix("/api/pen/")
+        hub, pen = self.server.pen_hub, self.server.pen
+        if hub is None or action not in ("connect", "active", "disconnect"):
             return self._error(404, "not found")
         body = self._body(1024)
         if body is None:
@@ -227,8 +245,13 @@ class Handler(BaseHTTPRequestHandler):
             client = str(json.loads(body)["client"])[:64]
         except (ValueError, KeyError, TypeError):
             return self._error(400, "expected {\"client\": id}")
-        self.server.pen_hub.set_active(client)
-        self._json({"active": client})
+        if action == "disconnect":
+            pen.disconnect()
+        else:
+            hub.set_active(client)
+            if action == "connect":
+                pen.connect(hub)
+        self._json(hub.status)
 
     def do_PUT(self) -> None:
         if not self._allowed() or not self._from_page():
@@ -264,8 +287,8 @@ class Handler(BaseHTTPRequestHandler):
 def make_server(target: Path, port: int = 0, pen=None) -> ViewerServer:
     """A server for a project folder, or for the folder of one view (which it then opens).
 
-    Port 0 picks a free port. pen is a pen source (see pen.RemarkablePen) whose
-    input goes to the viewer; the caller starts it with server.pen.start(server.pen_hub).
+    Port 0 picks a free port. pen is a tablet (see pen.RemarkablePen) that the pages can
+    connect and whose input then goes to the viewer.
     """
     target = target.resolve()
     if target.is_dir():
@@ -287,9 +310,6 @@ def make_server(target: Path, port: int = 0, pen=None) -> ViewerServer:
 def serve(target: Path, port: int, open_browser: bool, pen=None) -> None:
     server = make_server(target, port, pen)
     print(f"Tracepaper: {server.directory}\n  {server.url}  (Ctrl+C to stop)", flush=True)
-    if pen is not None:
-        pen.start(server.pen_hub)
-        print("  Pen: the tablet's app is closed while this runs; it starts again when you stop.", flush=True)
     if open_browser:
         threading.Thread(target=webbrowser.open, args=(server.url,), daemon=True).start()
     signal.signal(signal.SIGTERM, signal.default_int_handler)  # stop the same way when killed
@@ -299,7 +319,8 @@ def serve(target: Path, port: int, open_browser: bool, pen=None) -> None:
         pass
     finally:
         if pen is not None:
-            print("Starting the tablet's app again…", flush=True)
-            pen.stop()
+            if pen.running:
+                print("Starting the tablet's app again…", flush=True)
+            pen.disconnect()
             server.pen_hub.close()
         server.server_close()

@@ -131,6 +131,8 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 220px; min-height: 0
   cursor: default;
 }
 .tpv-pen.connected { color: var(--ok); }
+#tpv-pen-button { background: var(--well); border-radius: 8px; padding: 6px 12px; }
+#tpv-pen-button:hover:not(:disabled) { background: var(--hover); }
 .tpv-pen.error, .tpv-pen.off { color: var(--warn); }
 
 .tpv-empty {

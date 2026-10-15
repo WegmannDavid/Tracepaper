@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from tracepaper import pen as P
+from tracepaper import server as S
 from tracepaper.server import make_server
 
 PEN_JS = Path(__file__).resolve().parents[1] / "tracepaper" / "viewer" / "pen.js"
@@ -30,13 +31,18 @@ TOUCH = report((P.EV_KEY, P.BTN_TOUCH, 1), (P.EV_ABS, P.ABS_PRESSURE, 4095))
 
 
 class FakePen:
+    """Notes what the server asks of the tablet."""
     size_mm = P.tablet_size(90)
+    running = False
 
-    def start(self, hub):
-        pass
+    def __init__(self):
+        self.calls = []
 
-    def stop(self):
-        pass
+    def connect(self, hub):
+        self.calls.append("connect")
+
+    def disconnect(self):
+        self.calls.append("disconnect")
 
 
 class DecoderTest(unittest.TestCase):
@@ -190,6 +196,16 @@ class StreamTest(unittest.TestCase):
         self.addCleanup(conn.close)
         return conn.getresponse()
 
+    def post(self, path, client, page=True):
+        port = self.server.server_address[1]
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        headers = {"Host": f"127.0.0.1:{port}", **({"X-Tracepaper": "1"} if page else {})}
+        conn.request("POST", path, body=json.dumps({"client": client}).encode(), headers=headers)
+        r = conn.getresponse()
+        body = r.read()
+        conn.close()
+        return r.status, json.loads(body) if r.status == 200 else body
+
     @staticmethod
     def next_event(response):
         kind = data = None
@@ -205,6 +221,7 @@ class StreamTest(unittest.TestCase):
     def test_no_pen(self):
         self.start_server(None)
         self.assertEqual(self.get("/api/pen").status, 404)
+        self.assertEqual(self.post("/api/pen/connect", "a")[0], 404)
 
     def test_streams_status_and_frames(self):
         self.start_server(FakePen())
@@ -212,17 +229,55 @@ class StreamTest(unittest.TestCase):
         self.assertEqual((r.status, r.getheader("Content-Type")), (200, "text/event-stream"))
         kind, status = self.next_event(r)
         self.assertEqual((kind, status["state"], status["width"], status["height"]),
-                         ("status", "connecting", 209.67, 157.25))
+                         ("status", "off", 209.67, 157.25))  # nothing connects until a page asks
         self.server.pen_hub.publish_status("connected", "test")
         self.server.pen_hub.publish_frame({"x": 1, "y": 2, "p": 0, "tool": "pen", "touch": False})
         self.assertEqual(self.next_event(r)[1]["state"], "connected")
         self.assertEqual(self.next_event(r), ("pen", {"x": 1, "y": 2, "p": 0, "tool": "pen", "touch": False}))
 
+    def test_pages_connect_and_disconnect(self):
+        pen = FakePen()
+        self.start_server(pen)
+        self.assertEqual(self.post("/api/pen/connect", "a", page=False)[0], 403)  # only from a page
+        status, body = self.post("/api/pen/connect", "a")
+        self.assertEqual((status, body["active"], pen.calls), (200, "a", ["connect"]))  # and it draws there
+        self.assertEqual(self.post("/api/pen/active", "b")[1]["active"], "b")
+        self.assertEqual(self.post("/api/pen/disconnect", "b")[0], 200)
+        self.assertEqual(pen.calls, ["connect", "disconnect"])
+        self.assertEqual(self.post("/api/pen/nonsense", "b")[0], 404)
 
-# Stands in for the script on the tablet: says it is ready, sends a pen report,
+    def test_lets_the_tablet_go_after_the_last_window_closes(self):
+        for name, value in (("KEEPALIVE", 0.05), ("LAST_WINDOW", 0.3)):
+            self.addCleanup(setattr, S, name, getattr(S, name))
+            setattr(S, name, value)
+        pen = FakePen()
+        self.start_server(pen)
+        r = self.get("/api/pen?client=a")
+        self.next_event(r)
+        r.close()  # the window closes
+        deadline = time.monotonic() + 5
+        while "disconnect" not in pen.calls and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(pen.calls, ["disconnect"])
+
+        # A window that reloads comes back before the tablet is let go.
+        r = self.get("/api/pen?client=b")
+        self.next_event(r)
+        r.close()
+        again = self.get("/api/pen?client=b")
+        self.next_event(again)
+        time.sleep(1)
+        self.assertEqual(pen.calls, ["disconnect"])
+
+
+# Stands in for ssh running the script on the tablet: notes how it was started (the
+# script's first line, "owner=... take=..."), says it is ready, sends a pen report,
 # then waits for Tracepaper to disconnect and notes that it cleaned up.
 FAKE_TABLET = f"""
 import struct, sys
+log = open(sys.argv[1], "a")
+log.write("start " + sys.argv[-1].splitlines()[0].split()[-1] + "\\n")
+log.flush()
 E = struct.Struct("<IIHHi")
 out = sys.stdout.buffer
 out.write({P.READY!r})
@@ -230,42 +285,93 @@ for kind, code, value in [(1, 0x140, 1), (3, 0, 1000), (3, 1, 2000), (0, 0, 0), 
     out.write(E.pack(0, 0, kind, code, value))
 out.flush()
 sys.stdin.read()
-open(sys.argv[1], "w").write("app started again")
+log.write("app started again\\n")
+"""
+
+# Notes how it was started, then fails like ssh does: with a message and an exit status.
+FAILING = """
+import sys
+open(sys.argv[1], "a").write("start " + sys.argv[-1].splitlines()[0].split()[-1] + "\\n")
+sys.stderr.write(sys.argv[2])
+sys.exit(int(sys.argv[3]))
 """
 
 
 class ConnectionTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.log = Path(tmp.name) / "log"
+        self.addCleanup(setattr, P, "RETRY", P.RETRY)
+        P.RETRY = 0.05
+
+    def starts(self):
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
     def collect(self, q, until, timeout=10):
         got, deadline = [], time.monotonic() + timeout
         while not until(got):
             got.append(q.get(timeout=max(0.01, deadline - time.monotonic())))
         return got
 
-    def test_session_streams_and_disconnects_cleanly(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            marker = Path(tmp) / "restored"
-            pen = P.RemarkablePen(rotation=90, command=[sys.executable, "-c", FAKE_TABLET, str(marker)])
-            hub = P.PenHub(pen.size_mm)
-            q = hub.subscribe()
-            pen.start(hub)
-            got = self.collect(q, lambda g: sum(k == "pen" for k, _ in g) == 2)
-            frames = [d for k, d in got if k == "pen"]
-            self.assertEqual([(f["x"], f["y"], f["touch"]) for f in frames], [(10, 20, False), (10, 20, True)])
-            self.assertIn(("status", "connected"), [(k, d["state"]) for k, d in got if k == "status"])
-            pen.stop()
-            self.assertEqual(marker.read_text(), "app started again")
-            self.assertEqual(hub.status["state"], "off")
+    @staticmethod
+    def ended(got):
+        """An attempt to connect, then off."""
+        states = [d["state"] for k, d in got if k == "status"]
+        return "connecting" in states and states[-1] == "off"
 
-    def test_reports_errors_and_retries(self):
-        old, P.RETRY = P.RETRY, 0.05
-        self.addCleanup(setattr, P, "RETRY", old)
-        pen = P.RemarkablePen(command=[sys.executable, "-c", "import sys; sys.exit('no route to host')"])
+    def failing(self, message, status):
+        return P.RemarkablePen(command=[sys.executable, "-c", FAILING, str(self.log), message, str(status)])
+
+    def test_session_streams_and_disconnects_cleanly(self):
+        pen = P.RemarkablePen(rotation=90, command=[sys.executable, "-c", FAKE_TABLET, str(self.log)])
         hub = P.PenHub(pen.size_mm)
         q = hub.subscribe()
-        pen.start(hub)
-        got = self.collect(q, lambda g: sum(k == "status" and d["state"] == "error" for k, d in g) >= 2)
-        pen.stop()
+        self.assertEqual(hub.status["state"], "off")
+        pen.connect(hub)
+        got = self.collect(q, lambda g: sum(k == "pen" for k, _ in g) == 2)
+        frames = [d for k, d in got if k == "pen"]
+        self.assertEqual([(f["x"], f["y"], f["touch"]) for f in frames], [(10, 20, False), (10, 20, True)])
+        self.assertIn(("status", "connected"), [(k, d["state"]) for k, d in got if k == "status"])
+        pen.connect(hub)  # from another window: already connected
+        pen.disconnect()
+        self.assertEqual(self.starts(), ["start take=1", "app started again"])  # one session, cleaned up
+        self.assertEqual((hub.status["state"], hub.status["message"], pen.running), ("off", "", False))
+
+    def test_retries_without_taking_the_tablet_over(self):
+        pen = self.failing("no route to host", 255)
+        hub = P.PenHub(pen.size_mm)
+        q = hub.subscribe()
+        pen.connect(hub)
+        got = self.collect(q, lambda g: sum(k == "status" and d["state"] == "error" for k, d in g) >= 3)
+        pen.disconnect()
         self.assertIn("no route to host", [d["message"] for k, d in got if d["state"] == "error"])
+        starts = self.starts()
+        # Only pressing Connect takes the tablet from another viewer; trying again doesn't.
+        self.assertEqual((starts[0], set(starts[1:])), ("start take=1", {"start take=0"}))
+
+    def test_stops_when_another_viewer_has_the_tablet(self):
+        for status, message in ((P.TAKEN, "taken by another viewer"), (P.BUSY, "in use by another viewer")):
+            with self.subTest(message):
+                self.log.unlink(missing_ok=True)
+                pen = self.failing(message, status)
+                hub = P.PenHub(pen.size_mm)
+                q = hub.subscribe()
+                pen.connect(hub)
+                self.collect(q, self.ended)
+                self.assertEqual((hub.status["message"], pen.running), (message, False))
+                time.sleep(4 * P.RETRY)
+                self.assertEqual(self.starts(), ["start take=1"])  # and doesn't try again
+                pen.connect(hub)  # until Connect is pressed again
+                self.collect(q, self.ended)
+                self.assertEqual(self.starts(), ["start take=1"] * 2)
+
+    def test_script_takes_over_and_steps_aside(self):
+        # The parts of the script that decide, as far as they can be read here.
+        self.assertIn(f'[ "$take" = 1 ] || [ "$who" = "$owner" ] || {{ echo "in use by another viewer" >&2; '
+                      f"exit {P.BUSY}; }}", P.SCRIPT)
+        self.assertIn("trap taken USR1", P.SCRIPT)
+        self.assertLess(P.SCRIPT.index('echo "$$ $owner" >'), P.SCRIPT.index("systemctl stop xochitl"))
 
 
 if __name__ == "__main__":
