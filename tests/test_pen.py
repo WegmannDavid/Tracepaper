@@ -118,6 +118,56 @@ print(JSON.stringify({json.dumps(stages)}.map((s) => {{
                 close(dx, 10 / a["mmPerPx"])
 
 
+class RoutingTest(unittest.TestCase):
+    """Frames go to the view used last; every view hears who that is."""
+
+    FRAME = {"x": 1, "y": 2, "p": 0, "tool": "pen", "touch": False}
+
+    @staticmethod
+    def drain(q):
+        items = []
+        while not q.empty():
+            items.append(q.get_nowait())
+        return items
+
+    def frames(self, q):
+        return [d for k, d in self.drain(q) if k == "pen"]
+
+    def test_routing(self):
+        hub = P.PenHub((209.67, 157.25))
+        a = hub.subscribe("a")
+        self.assertEqual(hub.status["active"], "a")
+        b = hub.subscribe("b")  # a newly opened view that draws takes the pen
+        model = hub.subscribe("m", draws=False)  # a 3D view doesn't
+        self.assertEqual(hub.status["active"], "b")
+        self.drain(a), self.drain(b), self.drain(model)
+
+        hub.publish_frame(self.FRAME)
+        self.assertEqual((self.frames(a), self.frames(b)), ([], [self.FRAME]))
+
+        hub.set_active("a")  # the mouse was used in a
+        self.assertTrue(all(("status", hub.status) in self.drain(q) for q in (a, b, model)))
+        hub.publish_frame(self.FRAME)
+        self.assertEqual((self.frames(a), self.frames(b)), ([self.FRAME], []))
+
+        hub.set_active("m")  # in the 3D view: nobody draws
+        hub.publish_frame(self.FRAME)
+        self.assertEqual((self.frames(a), self.frames(b), self.frames(model)), ([], [], []))
+
+        hub.unsubscribe(model)  # closed: the newest view that draws takes over
+        self.assertEqual(hub.status["active"], "b")
+
+    def test_reconnecting_view_replaces_its_old_stream(self):
+        hub = P.PenHub((1, 1))
+        old = hub.subscribe("a")
+        new = hub.subscribe("a")
+        self.assertIn(("close", None), self.drain(old))
+        hub.publish_frame(self.FRAME)
+        self.assertEqual(self.frames(new), [self.FRAME])
+        hub.unsubscribe(old)  # its stream ending late doesn't take the view away
+        self.assertEqual(hub.status["active"], "a")
+
+
 class StreamTest(unittest.TestCase):
     def start_server(self, pen):
         self.tmp = tempfile.TemporaryDirectory()

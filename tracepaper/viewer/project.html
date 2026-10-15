@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tracepaper</title>
+<link rel="stylesheet" href="/viewer/style.css">
+</head>
+<body>
+<header class="tpv-bar">
+  <span class="tpv-brand">Tracepaper</span>
+  <span id="tpv-dir" class="tpv-status"></span>
+  <span class="tpv-spacer"></span>
+  <span id="tpv-status" class="tpv-status" role="status"></span>
+</header>
+<main class="tpv-project">
+  <div class="tpv-project-inner">
+    <h2>Views</h2>
+    <ul id="tpv-list" class="tpv-list"></ul>
+    <p id="tpv-empty" class="tpv-help" hidden></p>
+    <p class="tpv-help">Each view opens in a window of its own: put them side by side. The tablet's pen draws in
+      the window you used last with the mouse. Views update by themselves when their files change.</p>
+  </div>
+</main>
+<script type="module" src="/viewer/project.js"></script>
+</body>
+</html>

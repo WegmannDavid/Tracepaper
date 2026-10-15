@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tracepaper</title>
+<link rel="stylesheet" href="/viewer/style.css">
+<script type="importmap">
+{ "imports": { "three": "/viewer/vendor/three/three.module.js", "three/addons/": "/viewer/vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<header class="tpv-bar" id="tpv-bar">
+  <a class="tpv-brand" href="/" title="All views in this project">Tracepaper</a>
+  <select id="tpv-view" aria-label="View"></select>
+  <div class="tpv-group" role="group" aria-label="Look from">
+    <button data-look="iso" title="Isometric (0)">Iso</button>
+    <button data-look="top" title="From above (7)">Top</button>
+    <button data-look="front" title="From the front (1)">Front</button>
+    <button data-look="right" title="From the right (3)">Right</button>
+  </div>
+  <div class="tpv-group">
+    <button id="tpv-fit" title="Fit the model, keeping the direction (F)">Fit</button>
+  </div>
+  <span class="tpv-spacer"></span>
+  <span id="tpv-pen" class="tpv-pen" hidden></span>
+  <span id="tpv-status" class="tpv-status" role="status"></span>
+</header>
+<main class="tpv-main-3d">
+  <div class="tpv-stage-wrap">
+    <canvas id="tpv-canvas"></canvas>
+    <div id="tpv-empty" class="tpv-empty">Loading…</div>
+    <div class="tpv-coords">Drag to rotate · right-drag to pan · scroll to zoom</div>
+    <div id="tpv-toast" class="tpv-toast" role="status" hidden></div>
+  </div>
+</main>
+<script type="module" src="/viewer/model.js"></script>
+</body>
+</html>

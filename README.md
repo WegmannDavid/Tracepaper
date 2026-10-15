@@ -2,7 +2,10 @@
 
 A visual aid for working on CAD geometry with an AI.
 
-The AI draws **sheets**: plain, layered SVG files showing geometry, dimensions and the constraints worth seeing. You open them in the viewer, toggle layers, drag labels out of the way and sketch roughly what you want changed. Press Save, then tell the AI what you drew. It finds `<sheet>.sketch.svg` next to the sheet, makes the change in the real CAD pipeline and regenerates the sheet, and the viewer reloads.
+The AI's build writes **views** of the model into a project folder:
+
+- **Sheets:** plain, layered SVG files showing geometry, dimensions and the constraints worth seeing. In the viewer you toggle layers, drag labels out of the way and sketch roughly what you want changed. Press Save, then tell the AI what you drew. It finds `<sheet>.sketch.svg` next to the sheet, makes the change in the real CAD pipeline and rebuilds, and the viewer reloads.
+- **Models:** 3D `.glb` files, such as a CadQuery assembly's export. For now the viewer shows them so you can look at the build's result, with no debugger needed.
 
 Tracepaper doesn't care which CAD tool or constraint solver is behind a sheet. The format is described in [SPEC.md](SPEC.md).
 
@@ -14,6 +17,10 @@ Needs Python 3.9 or newer and a browser; there are no other dependencies.
 python3 -m tracepaper view examples/bracket     # from this directory
 ```
 
+- **The project page** lists the folder's sheets and models, including up to three folders down. Each view opens in a window of its own, so you can put several side by side.
+- **Updates:** a window updates by itself when its file changes. A 3D view keeps the camera where you left it.
+- **3D views:** drag to rotate, right-drag to pan, scroll to zoom. Iso, Top, Front and Right (keys `0`, `7`, `1`, `3`) look from the standard directions, and Fit (`F`) frames the model.
+
 To get a `tracepaper` command for use in other projects:
 
 ```sh
@@ -23,8 +30,9 @@ tracepaper view path/to/sheets                  # a directory, or a single sheet
 
 | | |
 |---|---|
-| `P` / `V` | pen / move labels |
+| `P` / `V` | mouse draws / mouse moves labels and pans (the default) |
 | `1`–`4` | ink colour |
+| `I`, then click | pick the ink colour from something on the sheet; `5` selects it again later |
 | scroll | zoom |
 | middle drag, `Space` + drag, one finger | pan |
 | two fingers | pinch zoom |
@@ -37,7 +45,7 @@ tracepaper view path/to/sheets                  # a directory, or a single sheet
 tracepaper view examples/bracket --remarkable
 ```
 
-The tablet's pen then draws in the viewer, and the mouse keeps doing everything else, even at the same time. The pen's other end erases whole strokes.
+The tablet's pen then draws in the viewer, and the mouse keeps doing everything else, even at the same time. The pen's other end erases whole strokes. With several windows open, the pen draws in the one you used last with the mouse, or the 2D view you opened last; the toolbar says where it is.
 
 - **Mapping.** The tablet covers the part of the sheet in view, so zooming in with the mouse gives finer control.
 - **Aspect ratio.** The view's shape is fitted into the middle of the tablet at one scale for both axes, so a circle drawn on the tablet stays a circle. The toolbar shows how much of the tablet that is; the strips outside it do nothing.
@@ -45,9 +53,29 @@ The tablet's pen then draws in the viewer, and the mouse keeps doing everything 
 - **Connection.** The tablet is reached with `ssh remarkable`, or `--remarkable HOST` for another host name.
 - **The tablet's own app.** It's closed while Tracepaper runs, so strokes don't also land in a notebook there, and the e-ink keeps showing what it showed. The app starts again when Tracepaper stops, or by itself 20 seconds after the connection is lost.
 
+## Using Tracepaper from other projects
+
+Link this checkout in, rather than copying it, so other projects always use the current code, spec and skill:
+
+```sh
+pip install --user --no-build-isolation -e .                          # `tracepaper` and `import tracepaper` run from here
+ln -s "$PWD/skills/tracepaper" ~/.claude/skills/tracepaper            # the Claude Code skill
+```
+
+- **The skill** (`skills/tracepaper/SKILL.md`) teaches Claude in any project how to make sheets, run the viewer and act on your sketches. Its `SPEC.md` is a link to the spec here, and the skill tells Claude to read it fresh each session.
+- **Updates** reach other projects as soon as the files change here:
+  - spec and skill edits;
+  - viewer changes, after a page reload;
+  - server or `--remarkable` changes, after restarting that `tracepaper view`.
+- **New skills** are only noticed by new Claude sessions. Once a session knows the skill, it reads the current files each time it uses it.
+
+`tracepaper inspect [path]` is the AI's side of the loop. It reports on the newest sketch file under `path` (strokes, picked colours, moved labels) and renders a whole-sheet image plus close-ups of the ink.
+
 ## Writing sheets
 
-Anything that writes SVG following [SPEC.md](SPEC.md) works. For Python there's a small helper, `tracepaper.sheet`; [`examples/bracket/make_sheets.py`](examples/bracket/make_sheets.py) uses it to draw a section and a top view of an L-bracket.
+Anything that writes SVG following [SPEC.md](SPEC.md) works. For Python there's a small helper, `tracepaper.sheet`. It supports layers and sublayers, the layer tree in the viewer. [`examples/bracket/make_sheets.py`](examples/bracket/make_sheets.py) uses it to draw a section and a top view of a bracket.
+
+Models are written by the CAD code itself, e.g. CadQuery's `assembly.export("bracket.glb")`; see [`examples/bracket/make_model.py`](examples/bracket/make_model.py), which needs CadQuery. The 3D view uses [three.js](https://threejs.org) 0.170.0, bundled in `tracepaper/viewer/vendor/` (MIT).
 
 ## Tests
 

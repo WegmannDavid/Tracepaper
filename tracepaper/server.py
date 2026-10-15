@@ -1,6 +1,10 @@
-"""Local HTTP server behind the viewer: serves the viewer, lists and serves sheets,
-writes sketch files when the person presses Save (SPEC.md §3, §5), and streams
-pen input from a tablet (pen.py)."""
+"""Local HTTP server behind the viewer.
+
+It lists a project's views (2D sheets, .svg, and 3D models, .glb) and serves
+them with the pages that show them, writes sketch files when the person presses
+Save (SPEC.md §3, §5), and passes pen input from a tablet (pen.py) to the view
+the person last used.
+"""
 from __future__ import annotations
 
 import json
@@ -9,34 +13,52 @@ import queue
 import signal
 import tempfile
 import threading
+import uuid
 import webbrowser
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from .pen import PenHub
 
 SVG_NS = "http://www.w3.org/2000/svg"
 SKETCH_SUFFIX = ".sketch.svg"
+KINDS = {".svg": "sheet", ".glb": "model"}
+SKIP_DIRS = {"node_modules", "__pycache__"}
+MAX_DEPTH = 3  # how many folders below the project folder are searched for views
 MAX_SKETCH_BYTES = 50 * 1024 * 1024
 VIEWER_DIR = Path(__file__).resolve().parent / "viewer"
-STATIC = {
-    "/": ("index.html", "text/html; charset=utf-8"),
-    "/viewer/app.js": ("app.js", "text/javascript; charset=utf-8"),
-    "/viewer/annotations.js": ("annotations.js", "text/javascript; charset=utf-8"),
-    "/viewer/pen.js": ("pen.js", "text/javascript; charset=utf-8"),
-    "/viewer/style.css": ("style.css", "text/css; charset=utf-8"),
-}
+PAGES = {"sheet": "index.html", "model": "model.html"}
+CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+                 ".css": "text/css; charset=utf-8"}
+VIEW_TYPES = {"sheet": "image/svg+xml", "model": "model/gltf-binary"}
 
 
 def sketch_path(sheet: Path) -> Path:
     return sheet.with_name(sheet.name[: -len(".svg")] + SKETCH_SUFFIX)
 
 
-def list_sheets(directory: Path) -> list:
-    return sorted(p for p in directory.glob("*.svg") if not p.name.endswith(SKETCH_SUFFIX) and p.is_file())
+def list_views(directory: Path) -> list:
+    """(name, path, kind) of the sheets and models in directory and the folders below it.
+
+    name is the path relative to directory, with "/" between folders.
+    """
+    found = []
+    for root, dirs, files in os.walk(directory):
+        rel = Path(root).relative_to(directory)
+        depth = len(rel.parts)
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS] if depth < MAX_DEPTH else []
+        for f in files:
+            kind = KINDS.get(Path(f).suffix.lower())
+            if kind and not f.startswith(".") and not f.endswith(SKETCH_SUFFIX):
+                found.append(((rel / f).as_posix(), Path(root) / f, kind))
+    return sorted(found)
+
+
+def view_url(name: str) -> str:
+    return "/view/" + quote(name)
 
 
 def _mtime(path: Path) -> Optional[str]:
@@ -60,7 +82,9 @@ class ViewerServer(ThreadingHTTPServer):
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self.server_address[1]}/"
+        """The page to open first: the view asked for, or the project's list of views."""
+        base = f"http://127.0.0.1:{self.server_address[1]}"
+        return base + (view_url(self.initial) if self.initial else "/")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -91,57 +115,79 @@ class Handler(BaseHTTPRequestHandler):
         self._error(403, "unexpected Host header")
         return False
 
-    def _sheet(self, name: str) -> Optional[Path]:
-        # Only names from the listing, so nothing outside the directory is reachable.
-        return next((p for p in list_sheets(self.server.directory) if p.name == name), None)
+    def _from_page(self) -> bool:
+        # Browsers only send custom headers cross-origin after a preflight we never approve.
+        if self.headers.get("X-Tracepaper") == "1":
+            return True
+        self._error(403, "missing X-Tracepaper header")
+        return False
+
+    def _view(self, name: str) -> Optional[tuple]:
+        """(path, kind) of a listed view. Only listed names, so nothing outside the project is reachable."""
+        return next(((p, kind) for n, p, kind in list_views(self.server.directory) if n == name), None)
 
     def _listing(self) -> dict:
-        sheets = []
-        for p in list_sheets(self.server.directory):
-            mtime = _mtime(p)
+        views = []
+        for name, path, kind in list_views(self.server.directory):
+            mtime = _mtime(path)
             if mtime is None:
                 continue
-            sketch = _mtime(sketch_path(p))
-            sheets.append({"name": p.name, "mtime": mtime, "sketch": {"mtime": sketch} if sketch else None})
-        return {"dir": str(self.server.directory), "initial": self.server.initial, "sheets": sheets}
+            sketch = _mtime(sketch_path(path)) if kind == "sheet" else None
+            views.append({"name": name, "kind": kind, "mtime": mtime,
+                          "sketch": {"mtime": sketch} if sketch else None})
+        return {"dir": str(self.server.directory), "initial": self.server.initial, "views": views}
+
+    def _static(self, rel: str) -> None:
+        path = (VIEWER_DIR / rel).resolve()
+        if not path.is_relative_to(VIEWER_DIR) or path.suffix not in CONTENT_TYPES or not path.is_file():
+            return self._error(404, "not found")
+        self._send(200, path.read_bytes(), CONTENT_TYPES[path.suffix])
 
     def do_GET(self) -> None:
         if not self._allowed():
             return
-        path = urlsplit(self.path).path
-        if path in STATIC:
-            name, content_type = STATIC[path]
-            return self._send(200, (VIEWER_DIR / name).read_bytes(), content_type)
-        if path == "/api/sheets":
+        url = urlsplit(self.path)
+        path = url.path
+        if path == "/":
+            return self._static("project.html")
+        if path.startswith("/view/"):
+            view = self._view(unquote(path[len("/view/"):]))
+            return self._static(PAGES[view[1]]) if view else self._error(404, "no such view")
+        if path.startswith("/viewer/"):
+            return self._static(path[len("/viewer/"):])
+        if path == "/api/views":
             return self._json(self._listing())
         if path == "/api/pen":
             if self.server.pen_hub is None:
                 return self._error(404, "no pen")
-            return self._stream_pen(self.server.pen_hub)
-        for prefix, sketch in (("/api/sheet/", False), ("/api/sketch/", True)):
+            query = parse_qs(url.query)
+            client = query.get("client", [""])[0][:64] or uuid.uuid4().hex
+            return self._stream_pen(self.server.pen_hub, client, query.get("draws", ["1"])[0] == "1")
+        for prefix, sketch in (("/api/file/", False), ("/api/sketch/", True)):
             if path.startswith(prefix):
-                sheet = self._sheet(unquote(path[len(prefix):]))
-                if sheet is None:
-                    return self._error(404, "no such sheet")
+                view = self._view(unquote(path[len(prefix):]))
+                if view is None or (sketch and view[1] != "sheet"):
+                    return self._error(404, "no such view")
                 try:
-                    data = (sketch_path(sheet) if sketch else sheet).read_bytes()
+                    data = (sketch_path(view[0]) if sketch else view[0]).read_bytes()
                 except FileNotFoundError:
                     return self._error(404, "no sketch for this sheet")
-                return self._send(200, data, "image/svg+xml")
+                return self._send(200, data, VIEW_TYPES["sheet" if sketch else view[1]])
         self._error(404, "not found")
 
-    def _stream_pen(self, hub: PenHub) -> None:
-        """Server-sent events: "status" when the tablet connects or drops, "pen" per pen frame."""
+    def _stream_pen(self, hub: PenHub, client: str, draws: bool) -> None:
+        """Server-sent events: "status" when the tablet connects or drops or another view
+        becomes active, "pen" per pen frame (only to the active view)."""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.close_connection = True
-        q = hub.subscribe()
+        q = hub.subscribe(client, draws)
         try:
             while True:
                 try:
-                    items = [q.get(timeout=15)]
+                    items = [q.get(timeout=5)]
                 except queue.Empty:
                     self.wfile.write(b": keep-alive\n\n")  # notices viewers that went away
                     self.wfile.flush()
@@ -158,32 +204,51 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             hub.unsubscribe(q)
 
-    def do_PUT(self) -> None:
-        if not self._allowed():
-            return
-        # Browsers only send custom headers cross-origin after a preflight we never approve.
-        if self.headers.get("X-Tracepaper") != "1":
-            return self._error(403, "missing X-Tracepaper header")
-        path = urlsplit(self.path).path
-        if not path.startswith("/api/sketch/"):
-            return self._error(404, "not found")
-        sheet = self._sheet(unquote(path[len("/api/sketch/"):]))
-        if sheet is None:
-            return self._error(404, "no such sheet")
+    def _body(self, limit: int) -> Optional[bytes]:
         try:
             length = int(self.headers.get("Content-Length", ""))
         except ValueError:
-            return self._error(411, "Content-Length required")
-        if length > MAX_SKETCH_BYTES:
-            return self._error(413, "sketch too large")
-        body = self.rfile.read(length)
+            self._error(411, "Content-Length required")
+            return None
+        if length > limit:
+            self._error(413, "too large")
+            return None
+        return self.rfile.read(length)
+
+    def do_POST(self) -> None:
+        if not self._allowed() or not self._from_page():
+            return
+        if urlsplit(self.path).path != "/api/pen/active" or self.server.pen_hub is None:
+            return self._error(404, "not found")
+        body = self._body(1024)
+        if body is None:
+            return
+        try:
+            client = str(json.loads(body)["client"])[:64]
+        except (ValueError, KeyError, TypeError):
+            return self._error(400, "expected {\"client\": id}")
+        self.server.pen_hub.set_active(client)
+        self._json({"active": client})
+
+    def do_PUT(self) -> None:
+        if not self._allowed() or not self._from_page():
+            return
+        path = urlsplit(self.path).path
+        if not path.startswith("/api/sketch/"):
+            return self._error(404, "not found")
+        view = self._view(unquote(path[len("/api/sketch/"):]))
+        if view is None or view[1] != "sheet":
+            return self._error(404, "no such sheet")
+        body = self._body(MAX_SKETCH_BYTES)
+        if body is None:
+            return
         try:
             root = ET.fromstring(body)
         except ET.ParseError as err:
             return self._error(400, f"not well-formed XML: {err}")
         if root.tag != f"{{{SVG_NS}}}svg":
             return self._error(400, "not an SVG document")
-        target = sketch_path(sheet)
+        target = sketch_path(view[0])
         fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".tracepaper-", suffix=".tmp")
         try:
             with os.fdopen(fd, "wb") as f:
@@ -197,20 +262,20 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(target: Path, port: int = 0, pen=None) -> ViewerServer:
-    """A server for a sheet file or a directory of sheets. Port 0 picks a free port.
+    """A server for a project folder, or for the folder of one view (which it then opens).
 
-    pen is a pen source (see pen.RemarkablePen) whose input goes to the viewer;
-    the caller starts it with server.pen.start(server.pen_hub).
+    Port 0 picks a free port. pen is a pen source (see pen.RemarkablePen) whose
+    input goes to the viewer; the caller starts it with server.pen.start(server.pen_hub).
     """
     target = target.resolve()
     if target.is_dir():
         directory, initial = target, None
-    elif target.is_file() and target.suffix == ".svg":
+    elif target.is_file() and target.suffix.lower() in KINDS:
         directory, initial = target.parent, target.name
         if initial.endswith(SKETCH_SUFFIX):
             initial = initial[: -len(SKETCH_SUFFIX)] + ".svg"
     else:
-        raise SystemExit(f"tracepaper: {target} is not a directory or an .svg file")
+        raise SystemExit(f"tracepaper: {target} is not a directory, an .svg or a .glb file")
     try:
         return ViewerServer(("127.0.0.1", port), directory, initial, pen)
     except OSError:

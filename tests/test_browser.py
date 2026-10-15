@@ -18,6 +18,7 @@ from pathlib import Path
 
 from tracepaper.pen import tablet_size
 from tracepaper.server import make_server
+from tracepaper.sheet import PathBuilder, Sheet
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "bracket"
 SVG = "{http://www.w3.org/2000/svg}"
@@ -125,9 +126,15 @@ class ViewerInFirefox(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.dir = Path(cls.tmp.name) / "sheets"
         cls.dir.mkdir()
-        for f in EXAMPLE.glob("*.svg"):
+        for f in [*EXAMPLE.glob("*.svg"), *EXAMPLE.glob("*.glb")]:
             if not f.name.endswith(".sketch.svg"):
                 shutil.copy(f, cls.dir)
+        tree = Sheet("Layer tree")
+        tree.layer("Outline").path("box", PathBuilder().move(0, 0).line(40, 0).line(40, 20).line(0, 20).close())
+        dims = tree.layer("Dimensions")
+        dims.sublayer("Overall").linear("d-w", (0, 0), (40, 0), "40", dir="x", offset=-8)
+        dims.sublayer("Details", visible=False).linear("d-h", (40, 0), (40, 20), "20", dir="y", offset=-8)
+        tree.save(cls.dir / "tree.svg")
         cls.server = make_server(cls.dir / "section-A.svg", 0, FakePen())
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
 
@@ -163,15 +170,172 @@ class ViewerInFirefox(unittest.TestCase):
         cls.server.server_close()
         cls.tmp.cleanup()
 
-    def open_viewer(self):
+    def open_viewer(self, view=None):
+        """Open the server's first page, or the given view, and wait until it shows."""
         # Leave without the "unsaved changes" prompt.
         self.m.call("WebDriver:ExecuteScript", {"script": "if (window.tracepaper) tracepaper.state.dirty = false;",
                                                 "args": []})
-        self.m.call("WebDriver:Navigate", {"url": self.server.url})
-        self.assertTrue(self.m.run("until(() => window.tracepaper && tp.state.root && tp.state.name, done);"))
+        base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.m.call("WebDriver:Navigate", {"url": f"{base}/view/{view}" if view else self.server.url})
+        if view and view.endswith(".glb"):
+            self.assertTrue(self.m.run("until(() => !!window.tracepaper3d?.state.model, done);"))
+        else:
+            self.assertTrue(self.m.run(f"until(() => window.tracepaper && tp.state.root && tp.state.name"
+                                       f"{f' === {json.dumps(view)}' if view else ''}, done);"))
+
+    def wait_for(self, condition, timeout=8):
+        deadline = time.monotonic() + timeout
+        while not condition():
+            if time.monotonic() > deadline:
+                self.fail("timed out")
+            time.sleep(0.05)
 
     def sketch(self) -> ET.Element:
         return ET.parse(self.dir / "section-A.sketch.svg").getroot()
+
+    def test_colour_picker(self):
+        self.open_viewer()
+        got = self.m.run("""
+            const pick = (p) => {
+              tp.setTool('pick');
+              fire('pointerdown', p, 'mouse');
+              fire('pointerup', p, 'mouse');
+              return { color: tp.state.color, from: tp.state.colorFrom, tool: tp.state.tool };
+            };
+            const g = document.getElementById('d-length');
+            const c = tp.A.geometry(tp.A.read(g), tp.fontSizeOf(g)).box.center;
+            const dim = pick(screen(g.parentNode, c[0], c[1]));  // a dimension, by its label
+            stroke([[30, 50], [35, 52]]);
+            const s = tp.state.ink.lastElementChild;
+            const ink = { stroke: s.getAttribute('stroke'), from: s.getAttributeNS(tp.A.TP_NS, 'color-from') };
+            const e = screen(tp.state.ref, 20, 0);
+            const edge = pick({ x: e.x, y: e.y + 3 });  // a thin outline edge, clicked beside it
+            tp.setTool('move');
+            tp.setColor(1);
+            const toolAfterColour = tp.state.tool;
+            stroke([[30, 55], [35, 57]]);
+            done({ dim, ink, edge, swatch: !document.querySelector('.tpv-picked').hidden, toolAfterColour,
+                   plain: tp.state.ink.lastElementChild.hasAttributeNS(tp.A.TP_NS, 'color-from') });
+        """)
+        # Picking returns the mouse to its tool, Move by default; the tablet's pen draws anyway.
+        self.assertEqual(got["dim"], {"color": "#475569", "from": {"id": "d-length", "layer": "Dimensions"},
+                                      "tool": "move"})
+        self.assertEqual(got["ink"], {"stroke": "#475569", "from": "d-length"})
+        self.assertEqual(got["edge"]["color"], "#1a1a1a")
+        self.assertEqual(got["edge"]["from"], {"id": "cut-upright", "layer": "Outline"})
+        self.assertTrue(got["swatch"])
+        self.assertEqual(got["toolAfterColour"], "move")  # choosing a colour doesn't switch the mouse to Pen
+        self.assertFalse(got["plain"])  # a fixed colour names no source
+
+    def test_layer_tree(self):
+        self.open_viewer("tree.svg")
+        got = self.m.run("""
+            const rows = () => [...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
+              r.querySelector('span').textContent, r.querySelector('input').checked,
+              r.classList.contains('tpv-under-hidden')]);
+            const before = rows();
+            tp.setLayerVisible('Dimensions', false);
+            const parentOff = rows();
+            const hiddenByParent = document.getElementById('d-w').getClientRects().length === 0;
+            tp.setLayerVisible('Dimensions', true);
+            tp.setLayerVisible('Dimensions / Details', true);
+            const detailsOn = rows();
+            document.querySelector('.tpv-twisty:not([disabled])').click();  // fold Dimensions
+            done({ before, parentOff, hiddenByParent, detailsOn, folded: rows() });
+        """)
+        self.assertEqual(got["before"], [["Sketch", True, False], ["Dimensions", True, False],
+                                         ["Details", False, False], ["Overall", True, False],
+                                         ["Outline", True, False]])
+        self.assertEqual(got["parentOff"][1:4], [["Dimensions", False, False], ["Details", False, True],
+                                                 ["Overall", True, True]])
+        self.assertTrue(got["hiddenByParent"])  # a sublayer's content disappears with its parent
+        self.assertEqual(got["detailsOn"][2], ["Details", True, False])
+        self.assertEqual([r[0] for r in got["folded"]], ["Sketch", "Dimensions", "Outline"])
+
+    def test_model_view(self):
+        self.open_viewer("bracket.glb")
+        look = """
+            const t = window.tracepaper3d;
+            let meshes = 0, edges = 0;
+            const names = [];
+            t.state.model.traverse((o) => { if (o.isMesh) meshes++; if (o.isLineSegments) edges++;
+                                             if (o.name) names.push(o.name); });
+            const dir = t.camera.position.clone().sub(t.controls.target).normalize();
+        """
+        first = self.m.run(look + "done({ meshes, edges, names, dir: dir.toArray(), loads: t.state.loads });")
+        self.assertGreater(first["meshes"], 6)
+        self.assertEqual(first["edges"], first["meshes"])  # every face outlined
+        self.assertTrue({"bracket", "body", "screw"} <= set(first["names"]))
+        for got in first["dir"]:  # isometric: CAD (1, -1, 1) is (1, 1, 1) in the y-up scene
+            self.assertAlmostEqual(got, 3 ** -0.5, places=6)
+        if os.environ.get("TRACEPAPER_SCREENSHOT"):
+            png = self.m.call("WebDriver:TakeScreenshot", {"full": False, "hash": False})["value"]
+            Path(os.environ["TRACEPAPER_SCREENSHOT"]).with_suffix(".3d.png").write_bytes(base64.b64decode(png))
+
+        # The build writes the model again: it reloads and keeps the camera.
+        before = self.m.run("const t = window.tracepaper3d; t.frame(t.LOOKS.top); done(t.camera.position.toArray());")
+        model = self.dir / "bracket.glb"
+        model.write_bytes(model.read_bytes())
+        self.assertTrue(self.m.run("until(() => window.tracepaper3d.state.loads === 2, done);"))
+        after = self.m.run("done(window.tracepaper3d.camera.position.toArray());")
+        self.assertEqual(after, before)
+
+    def test_pen_follows_last_used_window(self):
+        hub = self.server.pen_hub
+        hub.publish_status("connected", "test tablet")
+        self.open_viewer()
+        main = self.m.call("WebDriver:GetWindowHandle")["value"]
+        client = {"a": self.m.run("done(tp.CLIENT);")}
+        other = self.m.call("WebDriver:NewWindow", {"type": "window"})["handle"]
+        window = {"a": main, "b": other}
+        try:
+            self.m.call("WebDriver:SwitchToWindow", {"handle": other})
+            self.open_viewer("top.svg")
+            client["b"] = self.m.run("done(tp.CLIENT);")
+            self.wait_for(lambda: hub.status["active"] == client["b"])  # the window opened last
+
+            def use(name):  # click into a window's sheet with the mouse
+                self.m.call("WebDriver:SwitchToWindow", {"handle": window[name]})
+                self.m.run("const p = screen(tp.state.ref, 0, 0); fire('pointerdown', p, 'mouse');"
+                           "fire('pointerup', p, 'mouse'); done(true);")
+                self.wait_for(lambda: hub.status["active"] == client[name])
+
+            def strokes():
+                counts = {}
+                for name in ("a", "b"):
+                    self.m.call("WebDriver:SwitchToWindow", {"handle": window[name]})
+                    counts[name] = self.m.run("done(tp.state.ink.children.length);")
+                return counts
+
+            def draw_and_wait(name):
+                before = strokes()
+                w, h = tablet_size(90)
+                for x in range(10):
+                    hub.publish_frame({"x": w / 2 + x, "y": h / 2, "p": 0.5, "tool": "pen", "touch": True})
+                hub.publish_frame({"x": w / 2 + 10, "y": h / 2, "p": 0, "tool": "pen", "touch": False})
+                self.m.call("WebDriver:SwitchToWindow", {"handle": window[name]})
+                self.assertTrue(self.m.run(f"until(() => !tp.pen.down && tp.state.ink.children.length === "
+                                           f"{before[name] + 1}, done);"))
+                return before, strokes()
+
+            use("a")
+            before, after = draw_and_wait("a")
+            self.assertEqual(after, {"a": before["a"] + 1, "b": before["b"]})
+            self.m.call("WebDriver:SwitchToWindow", {"handle": window["b"]})
+            self.assertEqual(self.m.run("done(document.getElementById('tpv-pen').textContent);"),
+                             "reMarkable · in another window")
+            use("b")
+            before, after = draw_and_wait("b")
+            self.assertEqual(after, {"a": before["a"], "b": before["b"] + 1})
+        finally:
+            self.m.call("WebDriver:SwitchToWindow", {"handle": other})
+            self.m.call("WebDriver:CloseWindow")
+            self.m.call("WebDriver:SwitchToWindow", {"handle": main})
+
+    def test_mouse_starts_in_move(self):
+        self.open_viewer()
+        self.assertEqual(self.m.run("done([tp.state.tool, document.querySelector('[data-tool=move]')"
+                                    ".getAttribute('aria-pressed')]);"), ["move", "true"])
 
     def test_sketch_round_trip(self):
         self.open_viewer()

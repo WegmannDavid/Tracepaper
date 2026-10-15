@@ -115,42 +115,82 @@ class Decoder:
 
 
 class PenHub:
-    """Hands pen frames and connection status to every viewer that listens."""
+    """Hands the connection status to every open view, and pen frames to the active one.
+
+    The active view is the one the person last used with the mouse (set_active),
+    or the view that can draw that they opened last. When it closes, the newest
+    other view that can draw takes over.
+    """
 
     def __init__(self, size_mm: tuple):
         self.size = size_mm
-        self.status = {"state": "connecting", "message": "", "width": size_mm[0], "height": size_mm[1]}
-        self._queues: set = set()
+        self.status = {"state": "connecting", "message": "", "width": size_mm[0], "height": size_mm[1],
+                       "active": None}
+        self._clients: dict = {}  # client id -> (queue, whether it draws), oldest first
         self._lock = threading.Lock()
 
-    def subscribe(self) -> queue.Queue:
+    def subscribe(self, client: Optional[str] = None, draws: bool = True) -> queue.Queue:
+        client = client or os.urandom(8).hex()
         q = queue.Queue(maxsize=5000)
         with self._lock:
-            self._queues.add(q)
-            q.put(("status", self.status))
+            old = self._clients.pop(client, None)
+            if old is not None:  # the same view reconnecting: end its old stream
+                _put(old[0], ("close", None))
+            self._clients[client] = (q, draws)
+            before = self.status["active"]
+            if draws or before not in self._clients:
+                self._activate(client if draws else self._fallback())
+            if self.status["active"] == before:  # otherwise _activate has sent everyone the status
+                q.put(("status", self.status))
         return q
 
     def unsubscribe(self, q: queue.Queue) -> None:
         with self._lock:
-            self._queues.discard(q)
+            client = next((c for c, (cq, _) in self._clients.items() if cq is q), None)
+            if client is None:
+                return
+            del self._clients[client]
+            if self.status["active"] == client:
+                self._activate(self._fallback())
 
-    def _send(self, item) -> None:
+    def set_active(self, client: str) -> None:
         with self._lock:
-            for q in self._queues:
-                try:
-                    q.put_nowait(item)
-                except queue.Full:  # a viewer that stopped reading
-                    pass
+            self._activate(client)
+
+    def _fallback(self) -> Optional[str]:
+        drawing = [c for c, (_, draws) in self._clients.items() if draws]
+        return drawing[-1] if drawing else None
+
+    def _activate(self, client: Optional[str]) -> None:
+        if self.status["active"] != client:
+            self.status = {**self.status, "active": client}
+            self._broadcast(("status", self.status))
+
+    def _broadcast(self, item) -> None:
+        for q, _ in self._clients.values():
+            _put(q, item)
 
     def publish_status(self, state: str, message: str = "") -> None:
-        self.status = {**self.status, "state": state, "message": message}
-        self._send(("status", self.status))
+        with self._lock:
+            self.status = {**self.status, "state": state, "message": message}
+            self._broadcast(("status", self.status))
 
     def publish_frame(self, frame: dict) -> None:
-        self._send(("pen", frame))
+        with self._lock:
+            active = self._clients.get(self.status["active"])
+            if active is not None and active[1]:  # a 3D view, say, takes the pen but doesn't draw
+                _put(active[0], ("pen", frame))
 
     def close(self) -> None:
-        self._send(("close", None))
+        with self._lock:
+            self._broadcast(("close", None))
+
+
+def _put(q: queue.Queue, item) -> None:
+    try:
+        q.put_nowait(item)
+    except queue.Full:  # a view that stopped reading
+        pass
 
 
 class RemarkablePen:

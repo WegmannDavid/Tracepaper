@@ -15,6 +15,7 @@ MUST, SHOULD and MAY are used as in RFC 2119.
 
 - Both are plain SVG 1.1 and open in any browser or in Inkscape.
 - The sketch file sits next to its sheet. A sheet's file name MUST NOT end in `.sketch.svg`.
+- A project folder can also hold 3D models, `.glb` files (§2.8). Sheets and models are the project's **views**; the viewer shows each in a window of its own (§5).
 - Tracepaper attributes and elements use the namespace `urn:tracepaper:0`, by convention with the prefix `tp`. The `0` is the format version (§6).
 - An existing sketch file means "not handled yet". The AI deletes it once it has acted on it.
 
@@ -72,11 +73,12 @@ Every attribute is optional free text unless stated otherwise.
    transform="scale(1,-1)" stroke="#1a1a1a" stroke-width="0.5" fill="none">
 ```
 
-- Layers are the root's child `<g>` elements with `inkscape:groupmode="layer"`. `inkscape:label` is the name the person sees. This is Inkscape's convention, so Inkscape shows the same layers.
-- Every layer MUST have exactly `transform="scale(1,-1)"`.
+- Layers are `<g>` elements with `inkscape:groupmode="layer"`. `inkscape:label` is the name the person sees. This is Inkscape's convention, so Inkscape shows the same layers.
+- Layers form a tree. The root's layers are the top level; a layer MAY contain **sublayers**, nested to any depth, which group related layers (for example Dimensions › Overall, Dimensions › Details). Order is drawing order: later layers are drawn on top. The viewer shows the tree with the topmost layer first, and switching a layer off hides everything in it.
+- Every top-level layer MUST have exactly `transform="scale(1,-1)"`. Sublayers MUST NOT have a `transform`, since they're already inside the flip.
 - A layer that starts hidden has `style="display:none"`. The AI decides what starts visible, and the person can toggle any layer.
 - All drawing SHOULD be inside layers.
-- The label `Sketch` and the id `tp-sketch` are reserved for the person's ink (§3).
+- The label `Sketch` and the id `tp-sketch` are reserved for the person's ink (§3). It is always a top-level layer.
 
 Suggested layer names (others are fine):
 
@@ -184,6 +186,16 @@ Sizes are multiples of the font size fs (3.5 mm by default).
 
 The reference implementations are `tracepaper/sheet.py` (for writing sheets) and `tracepaper/viewer/annotations.js` (in the viewer). They produce the same paths for the same attributes, which `tests/test_sheet.py` checks.
 
+### 2.8 3D models
+
+A model is a glTF 2.0 binary file (`.glb`) showing a part or an assembly in 3D. For now the viewer only shows it. There's no sketching on models and no Tracepaper metadata in them yet.
+
+- **What to write:** only what the person should look at, typically one coloured assembly per file, not every intermediate shape. With CadQuery: `assembly.export("views/frame.glb")`.
+- **Units and orientation:** millimetres. CAD's z-up coordinates are turned into glTF's y-up by a rotation on the root node, as CadQuery (OpenCascade) writes it. Fronts face −y in CAD coordinates.
+- **Structure:** the node tree is the assembly tree, with names. Colours come from the materials.
+- **Faces:** each CAD face SHOULD be its own primitive, as OpenCascade writes it. The viewer draws each primitive's outline as the model's edges.
+- **Writing:** write to a temporary file and rename it into place, so the viewer never reads half a model.
+
 ## 3. Sketch files
 
 When the person presses Save, the viewer writes `<name>.sketch.svg` next to `<name>.svg`:
@@ -202,6 +214,8 @@ When the person presses Save, the viewer writes `<name>.sketch.svg` next to `<na
 
 Each stroke is one `path` in model coordinates, using only `M` and `L` commands. `stroke-width` is in millimetres.
 
+The person can also ink in a colour picked from the sheet. A stroke drawn that way carries `tp:color-from`: the id of the element the colour was picked from. That's the nearest element with an id: the shape itself, the dimension it belongs to, or its layer. It usually means the stroke belongs with that element, for example an extension of it.
+
 Strokes are rough by design. They show the general shape of a change and where it goes. Exact sizes are negotiated afterwards. A handwritten number or note next to a sketch is just more strokes. Colours mean only what the person says they mean.
 
 ## 4. Working with an AI (informative)
@@ -215,8 +229,8 @@ Strokes are rough by design. They show the general shape of a change and where i
 **Acting on a sketch**
 
 1. Find the newest `*.sketch.svg` in the project.
-2. Look at it, for example with `rsvg-convert -b white -z 6 X.sketch.svg -o x.png`. For a close-up of the ink, render a copy whose root `viewBox` is set to the Sketch layer's bounds (with y negated), plus a margin.
-3. Work out what the sketch is and where it goes. Stroke coordinates are model coordinates. Nearby ids and `tp:source` pointers say what the strokes touch, and `tp:view` maps them into 3D.
+2. Look at it. `tracepaper inspect` does both steps: it lists the strokes, picked colours and moved labels, and renders the whole sheet, a close-up of the ink, and the close-up with the drawing faded. Without it, render with `rsvg-convert -b white -z 6 X.sketch.svg -o x.png`; for a close-up, render a copy whose root `viewBox` is set to the Sketch layer's bounds (with y negated), plus a margin.
+3. Work out what the sketch is and where it goes. Stroke coordinates are model coordinates. Nearby ids and `tp:source` pointers say what the strokes touch, and `tp:view` maps them into 3D. A stroke's `tp:color-from` names the element whose colour it was drawn in. Ink in a sheet colour can be hard to tell apart from the drawing; rendering the Sketch layer alone helps.
 4. Change the real model, in its own pipeline. The sketch gives the shape and a rough size. Exact values come from what the person said or wrote, or from a sensible choice.
 5. Regenerate the sheet. Put the new feature and its dimensions on a `Changes` layer. Keep any label positions the person dragged: compare the sketch file's placement attributes with the sheet's.
 6. Delete the sketch file.
@@ -225,11 +239,12 @@ If the result isn't right, the person sketches again or says so, and the loop re
 
 ## 5. The viewer (informative)
 
-`tracepaper view <sheet.svg or directory>` serves the viewer on 127.0.0.1 and opens it in a browser. The viewer:
+`tracepaper view <project folder, or one view>` serves the viewer on 127.0.0.1 and opens it in a browser. The viewer:
 
-- shows one sheet at a time, with a picker for the other sheets in the directory, and reloads a sheet when it changes on disk;
+- lists the project's views (sheets and models in the folder and up to three folders below it) on a project page. Each view opens in a window of its own, so several can be watched side by side, and reloads when its file changes on disk;
+- shows models (§2.8) in 3D: rotate, pan, zoom, standard directions. The camera stays where it is when the model reloads;
 - toggles layers, lets the person drag annotations (§2.6), and provides a pen with a few colours;
-- can take ink from a drawing tablet, such as a reMarkable 2 with `--remarkable`. The tablet covers the current view, fitted at one scale for both axes so drawings keep their proportions, while the mouse keeps doing everything else;
+- can take ink from a drawing tablet, such as a reMarkable 2 with `--remarkable`. The tablet covers the current view of the window the person used last with the mouse (or opened last), fitted at one scale for both axes so drawings keep their proportions, while the mouse keeps doing everything else;
 - writes the sketch file on Save (§3), and clears the ink once the AI has deleted that file;
 - shows an unhandled sketch file again when reopened;
 - never solves, checks or interprets anything, and never runs `regenerate`.

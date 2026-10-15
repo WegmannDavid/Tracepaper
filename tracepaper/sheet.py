@@ -286,24 +286,43 @@ class PathBuilder:
 
 
 class Layer:
-    def __init__(self, sheet: "Sheet", name: str, style: Union[str, dict], visible: bool, extra: dict):
+    def __init__(self, sheet: "Sheet", name: str, style: Union[str, dict], visible: bool, extra: dict,
+                 parent: Optional["Layer"] = None):
         self.sheet = sheet
         self.name = name
         preset = dict(STYLES[style]) if isinstance(style, str) else dict(style)
         preset.update(_attrs(extra))
-        self.uses_hatch = preset.get("fill") == f"url(#{HATCH_ID})"
-        self.color = preset.get("stroke", "#1a1a1a")
-        if self.color == "none":
-            self.color = "#1a1a1a"
+        if preset.get("fill") == f"url(#{HATCH_ID})":
+            sheet.uses_hatch = True
+        # What the layer draws with, set here or inherited from the layer above.
+        stroke = preset.get("stroke") or (parent.color if parent else "#1a1a1a")
+        self.color = "#1a1a1a" if stroke == "none" else stroke
+        self._fill_attr = preset.get("fill", parent._fill_attr if parent else "")
+        self._width = preset.get("stroke-width", parent._width if parent else None)
         # Text and annotation arrows need a solid fill even when the layer's shapes have none,
         # and annotations stay thin on layers with heavy lines, such as Changes.
-        self._fill = None if preset.get("fill", "").startswith("#") else self.color
-        self._thin = None if preset.get("stroke-width") == "0.25" else "0.25"
+        self._fill = None if self._fill_attr.startswith("#") else self.color
+        self._thin = None if self._width == "0.25" else "0.25"
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "layer"
-        self.element = ET.Element(_svg("g"), {"id": f"layer-{slug}", _ink("groupmode"): "layer",
-                                              _ink("label"): name, "transform": "scale(1,-1)", **preset})
+        attrs = {"id": f"{parent.element.get('id')}-{slug}" if parent else f"layer-{slug}",
+                 _ink("groupmode"): "layer", _ink("label"): name}
+        if parent is None:
+            attrs["transform"] = "scale(1,-1)"  # only top-level layers flip: SPEC.md §2.4
+            self.element = ET.Element(_svg("g"), {**attrs, **preset})
+        else:
+            self.element = ET.SubElement(parent.element, _svg("g"), {**attrs, **preset})
         if not visible:
             self.element.set("style", "display:none")
+
+    def sublayer(self, name: str, *, style: Union[str, dict, None] = None, visible: bool = True,
+                 **attrs) -> "Layer":
+        """A layer inside this one, shown as a branch of the viewer's layer tree.
+
+        Without a style it draws like this layer, unless its name is one of the
+        suggested layer names (LAYER_STYLES).
+        """
+        style = style or LAYER_STYLES.get(name) or {}
+        return Layer(self.sheet, name, style, visible, attrs, parent=self)
 
     def _shape(self, tag: str, id: str, attrs: dict, source: Optional[str], extra: dict,
                points: Iterable[Point]) -> ET.Element:
@@ -427,7 +446,8 @@ class Sheet:
         self.font_family = font_family
         self.margin = margin
         self.bounds = bounds
-        self.layers: list = []
+        self.layers: list = []  # the top-level layers
+        self.uses_hatch = False
         self._lo = [math.inf, math.inf]
         self._hi = [-math.inf, -math.inf]
 
@@ -460,7 +480,7 @@ class Sheet:
             "font-family": self.font_family, "font-size": fmt(self.font_size)})
         meta = ET.SubElement(root, _svg("metadata"))
         ET.SubElement(meta, _tp("view"), {k: v for k, v in self.view.items() if v is not None})
-        if any(layer.uses_hatch for layer in self.layers):
+        if self.uses_hatch:
             defs = ET.SubElement(root, _svg("defs"))
             pattern = ET.SubElement(defs, _svg("pattern"), {
                 "id": HATCH_ID, "patternUnits": "userSpaceOnUse", "width": "2", "height": "2",

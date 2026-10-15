@@ -8,6 +8,7 @@ from pathlib import Path
 from tracepaper.server import make_server
 
 SHEET = '<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 -10 10 10"/>'
+MODEL = b"glTF fake model"
 
 
 class ServerTest(unittest.TestCase):
@@ -18,6 +19,10 @@ class ServerTest(unittest.TestCase):
         (self.dir / "b.svg").write_text(SHEET)
         (self.dir / "b.sketch.svg").write_text(SHEET)
         (self.dir / "notes.txt").write_text("secret")
+        (self.dir / "models").mkdir()
+        (self.dir / "models" / "part.glb").write_bytes(MODEL)
+        (self.dir / ".git").mkdir()
+        (self.dir / ".git" / "hidden.svg").write_text(SHEET)
         self.server = make_server(self.dir / "b.svg", 0)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -40,26 +45,37 @@ class ServerTest(unittest.TestCase):
         return self.request("PUT", f"/api/sketch/{name}", body.encode(), {"X-Tracepaper": "1", **headers})
 
     def test_listing(self):
-        status, data = self.request("GET", "/api/sheets")
+        status, data = self.request("GET", "/api/views")
         listing = json.loads(data)
         self.assertEqual(status, 200)
         self.assertEqual(listing["initial"], "b.svg")
-        self.assertEqual([s["name"] for s in listing["sheets"]], ["a.svg", "b.svg"])
-        self.assertIsNone(listing["sheets"][0]["sketch"])
-        self.assertIsNotNone(listing["sheets"][1]["sketch"])
+        self.assertEqual([(v["name"], v["kind"]) for v in listing["views"]],
+                         [("a.svg", "sheet"), ("b.svg", "sheet"), ("models/part.glb", "model")])
+        self.assertEqual([bool(v["sketch"]) for v in listing["views"]], [False, True, False])
+        self.assertTrue(self.server.url.endswith("/view/b.svg"))
 
-    def test_serves_viewer_sheets_and_sketches(self):
-        self.assertEqual(self.request("GET", "/")[0], 200)
-        self.assertEqual(self.request("GET", "/viewer/app.js")[0], 200)
-        self.assertEqual(self.request("GET", "/api/sheet/a.svg"), (200, SHEET.encode()))
+    def test_pages(self):
+        self.assertIn(b"project.js", self.request("GET", "/")[1])
+        self.assertIn(b"app.js", self.request("GET", "/view/a.svg")[1])
+        self.assertIn(b"model.js", self.request("GET", "/view/models/part.glb")[1])
+        self.assertEqual(self.request("GET", "/view/notes.txt")[0], 404)
+        self.assertEqual(self.request("GET", "/viewer/vendor/three/three.module.js")[0], 200)
+
+    def test_files(self):
+        self.assertEqual(self.request("GET", "/api/file/a.svg"), (200, SHEET.encode()))
+        self.assertEqual(self.request("GET", "/api/file/models%2Fpart.glb"), (200, MODEL))
         self.assertEqual(self.request("GET", "/api/sketch/b.svg")[0], 200)
         self.assertEqual(self.request("GET", "/api/sketch/a.svg")[0], 404)
+        self.assertEqual(self.request("GET", "/api/sketch/models%2Fpart.glb")[0], 404)
 
-    def test_only_listed_sheets_are_reachable(self):
-        for name in ("notes.txt", "..%2Fa.svg", "b.sketch.svg", "%2Fetc%2Fpasswd", "missing.svg"):
+    def test_only_listed_files_are_reachable(self):
+        for name in ("notes.txt", "..%2Fa.svg", "b.sketch.svg", "%2Fetc%2Fpasswd", "missing.svg",
+                     ".git%2Fhidden.svg"):
             with self.subTest(name=name):
-                self.assertEqual(self.request("GET", f"/api/sheet/{name}")[0], 404)
-        self.assertEqual(self.request("GET", "/viewer/../server.py")[0], 404)
+                self.assertEqual(self.request("GET", f"/api/file/{name}")[0], 404)
+        for path in ("/viewer/../server.py", "/viewer/%2E%2E/server.py", "/viewer/vendor/three/README.md"):
+            with self.subTest(path=path):
+                self.assertEqual(self.request("GET", path)[0], 404)
 
     def test_save_writes_sketch_next_to_sheet(self):
         status, data = self.put_sketch("a.svg", SHEET)
@@ -72,10 +88,15 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.put_sketch("a.svg", "<svg")[0], 400)
         self.assertEqual(self.put_sketch("a.svg", "<html/>")[0], 400)
         self.assertEqual(self.put_sketch("notes.txt", SHEET)[0], 404)
+        self.assertEqual(self.put_sketch("models%2Fpart.glb", SHEET)[0], 404)
         self.assertFalse((self.dir / "a.sketch.svg").exists())
 
     def test_rejects_foreign_host(self):
-        self.assertEqual(self.request("GET", "/api/sheets", host="evil.example:80")[0], 403)
+        self.assertEqual(self.request("GET", "/api/views", host="evil.example:80")[0], 403)
+
+    def test_no_pen_without_a_tablet(self):
+        self.assertEqual(self.request("GET", "/api/pen")[0], 404)
+        self.assertEqual(self.request("POST", "/api/pen/active", b'{"client": "x"}', {"X-Tracepaper": "1"})[0], 404)
 
 
 if __name__ == "__main__":

@@ -125,6 +125,28 @@ class SheetOutput(unittest.TestCase):
         self.assertEqual(dim.find("svg:text", ns).text, "40")
         self.assertEqual(layers[0].find("svg:path", ns).get(f"{{{S.TP_NS}}}source"), "tag:plate")
 
+    def test_sublayers(self):
+        sheet = S.Sheet("Tree", margin=5)
+        dims = sheet.layer("Dimensions")
+        dims.sublayer("Overall").linear("d-w", (0, 0), (40, 0), "40", dir="x", offset=-8)
+        dims.sublayer("Details", visible=False, stroke="#ff0000").line("tick", (0, 0), (1, 1))
+        sheet.layer("Changes").sublayer("Flange").linear("d-f", (0, 0), (0, 5), "5", dir="y", offset=3)
+        root = ET.fromstring(sheet.tostring().split("\n", 1)[1])
+        ns, ink = {"svg": S.SVG_NS}, f"{{{S.INKSCAPE_NS}}}"
+        top = root.findall("svg:g", ns)
+        self.assertEqual([g.get(ink + "label") for g in top], ["Dimensions", "Changes"])
+        overall, details = top[0].findall("svg:g", ns)
+        self.assertEqual([g.get(ink + "groupmode") for g in (overall, details)], ["layer", "layer"])
+        self.assertEqual((overall.get("id"), details.get("id")), ("layer-dimensions-overall", "layer-dimensions-details"))
+        self.assertIsNone(overall.get("transform"))  # only top-level layers flip
+        self.assertEqual((details.get("style"), details.get("stroke")), ("display:none", "#ff0000"))
+        # Annotations draw like their parent layer: thin and filled on Dimensions...
+        dim = overall.find("svg:g", ns)
+        self.assertEqual((dim.get("fill"), dim.get("stroke-width")), (None, None))
+        # ...and thin with a solid fill on Changes, whose lines are heavy and unfilled.
+        flange_dim = top[1].find("svg:g/svg:g", ns)
+        self.assertEqual((flange_dim.get("fill"), flange_dim.get("stroke-width")), ("#d97706", "0.25"))
+
 
 if __name__ == "__main__":
     unittest.main()

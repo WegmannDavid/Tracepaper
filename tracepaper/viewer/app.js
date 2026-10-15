@@ -24,14 +24,17 @@ const ui = {
   host: $('tpv-host'), sheet: $('tpv-sheet'), layers: $('tpv-layers'), status: $('tpv-status'),
   coords: $('tpv-coords'), toast: $('tpv-toast'), empty: $('tpv-empty'), save: $('tpv-save'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), fit: $('tpv-fit'), swatches: $('tpv-swatches'),
-  pen: $('tpv-pen'), penCursor: $('tpv-pen-cursor'),
+  pen: $('tpv-pen'), penCursor: $('tpv-pen-cursor'), pickBox: $('tpv-pick-box'),
 };
 
 const state = {
-  sheets: [], sheetsKey: '', name: null, sheetMtime: null, sketchMtime: null,
+  views: [], viewsKey: '', name: null, sheetMtime: null, sketchMtime: null, collapsed: new Set(),
   root: null, ref: null, ink: null, annotations: [],
   dirty: false, undo: [], moved: new Map(), layerVis: new Map(),
-  tool: 'pen', color: INK_COLORS[0][1], cam: { s: 1, x: 0, y: 0 },
+  // The mouse moves labels and pans unless asked to draw; the tablet's pen always draws.
+  tool: 'move', prevTool: 'move', color: INK_COLORS[0][1], cam: { s: 1, x: 0, y: 0 },
+  colorFrom: null, // {id, layer} when the ink colour was picked from the sheet
+  picked: null,    // the last picked colour: {color, from}
   gen: 0, busy: false, offline: false,
 };
 
@@ -43,6 +46,10 @@ let resolveReady;
 const ready = new Promise((resolve) => { resolveReady = resolve; });
 
 const api = (kind, name) => `/api/${kind}/${encodeURIComponent(name)}`;
+const viewUrl = (name) => `/view/${name.split('/').map(encodeURIComponent).join('/')}`;
+const viewInUrl = () => (location.pathname.startsWith('/view/') ? decodeURIComponent(location.pathname.slice(6)) : null);
+// Identifies this window to the server, which sends the pen to the window used last.
+const CLIENT = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const sketchName = (name) => `${name.replace(/\.svg$/i, '')}.sketch.svg`;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -55,8 +62,19 @@ async function fetchOk(url, init = {}) {
 // ---- Sheet document ---------------------------------------------------------
 
 const isLayer = (n) => n.namespaceURI === SVG_NS && n.localName === 'g' && n.getAttributeNS(INK_NS, 'groupmode') === 'layer';
-const layersOf = (root) => [...root.children].filter(isLayer);
+const layersOf = (parent) => [...parent.children].filter(isLayer); // its direct sublayers
 const labelOf = (g) => g.getAttributeNS(INK_NS, 'label') || g.id || 'Layer';
+
+// A layer's place in the tree, e.g. "Dimensions / Overall": how its visibility is remembered.
+function pathOf(g) {
+  const names = [];
+  for (let n = g; n && n !== state.root; n = n.parentNode) if (isLayer(n)) names.unshift(labelOf(n));
+  return names.join(' / ');
+}
+
+function allLayers(parent) {
+  return layersOf(parent).flatMap((g) => [g, ...allLayers(g)]);
+}
 const isHidden = (n) => n.getAttribute('display') === 'none' || n.style?.display === 'none';
 
 function setHidden(g, hidden) {
@@ -133,7 +151,7 @@ function fontSizeOf(el) {
 const findAnnotation = (id) => (id ? state.annotations.find((g) => g.id === id) ?? null : null);
 
 async function openSheet(name, { reload = false } = {}) {
-  const info = state.sheets.find((s) => s.name === name);
+  const info = state.views.find((v) => v.name === name && v.kind === 'sheet');
   if (!info) return;
   state.gen++;
   state.busy = true;
@@ -144,7 +162,7 @@ async function openSheet(name, { reload = false } = {}) {
       ? { strokes: [...state.ink.children], moved: state.moved, undo: state.undo }
       : null;
     const sketchMtime = info.sketch?.mtime ?? null;
-    let base = await (await fetchOk(api('sheet', name))).text();
+    let base = await (await fetchOk(api('file', name))).text();
     let inkFrom = null;
     if (sketchMtime && !carry) {
       const sketch = await fetchOk(api('sketch', name)).then((r) => r.text(), () => null);
@@ -169,14 +187,15 @@ async function openSheet(name, { reload = false } = {}) {
     } else {
       Object.assign(state, { moved: new Map(), undo: [], dirty: false });
     }
-    for (const g of layersOf(root)) {
-      const visible = state.layerVis.get(labelOf(g));
+    for (const g of allLayers(root)) {
+      const visible = state.layerVis.get(pathOf(g));
       if (visible !== undefined) setHidden(g, !visible);
     }
     Object.assign(state, { name, sheetMtime: info.mtime, sketchMtime });
     document.title = `${name} · Tracepaper`;
+    if (viewInUrl() !== name) history.replaceState(null, '', viewUrl(name));
     renderLayers();
-    renderSheets(true);
+    renderViews(true);
     if (!reload) fit();
     updateStatus();
     resolveReady();
@@ -201,42 +220,67 @@ function showEmpty(message) {
 
 // ---- Panels and status ------------------------------------------------------
 
+// The layer tree, topmost first as drawn. Sublayers fold away under their layer.
 function renderLayers() {
   ui.layers.replaceChildren();
   if (!state.root) return;
-  for (const g of layersOf(state.root).reverse()) {
+  const item = (g, hiddenAbove) => {
+    const key = pathOf(g), kids = layersOf(g).reverse(), open = !state.collapsed.has(key);
     const li = document.createElement('li');
+    const row = document.createElement('div');
+    row.className = `tpv-layer${hiddenAbove ? ' tpv-under-hidden' : ''}`;
+    const twisty = document.createElement('button');
+    twisty.className = 'tpv-twisty';
+    if (kids.length) {
+      twisty.textContent = open ? '▾' : '▸';
+      twisty.setAttribute('aria-label', `${open ? 'Fold' : 'Unfold'} ${labelOf(g)}`);
+      twisty.addEventListener('click', () => {
+        if (open) state.collapsed.add(key); else state.collapsed.delete(key);
+        renderLayers();
+      });
+    } else {
+      twisty.disabled = true;
+    }
     const label = document.createElement('label');
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.checked = !isHidden(g);
-    box.addEventListener('change', () => setLayerVisible(labelOf(g), box.checked));
+    box.addEventListener('change', () => setLayerVisible(key, box.checked));
     const name = document.createElement('span');
     name.textContent = labelOf(g);
-    if (g === state.ink) li.className = 'tpv-ink';
     label.append(box, name);
-    li.append(label);
-    ui.layers.append(li);
-  }
+    row.append(twisty, label);
+    li.append(row);
+    if (g === state.ink) li.className = 'tpv-ink';
+    if (kids.length && open) {
+      const ul = document.createElement('ul');
+      ul.append(...kids.map((k) => item(k, hiddenAbove || isHidden(g))));
+      li.append(ul);
+    }
+    return li;
+  };
+  ui.layers.append(...layersOf(state.root).reverse().map((g) => item(g, false)));
 }
 
-function setLayerVisible(label, visible) {
-  const g = state.root && layersOf(state.root).find((l) => labelOf(l) === label);
+// key is a layer's path in the tree (pathOf); a top-level layer's path is its name.
+function setLayerVisible(key, visible) {
+  const g = state.root && allLayers(state.root).find((l) => pathOf(l) === key);
   if (!g) return;
   setHidden(g, !visible);
-  state.layerVis.set(label, visible);
+  state.layerVis.set(key, visible);
   if (!visible && hover && g.contains(hover)) setHover(null);
   renderLayers();
 }
 
-function renderSheets(force = false) {
-  const key = JSON.stringify(state.sheets.map((s) => [s.name, !!s.sketch]));
-  if (force || key !== state.sheetsKey) {
-    state.sheetsKey = key;
-    ui.sheet.replaceChildren(...state.sheets.map((s) => new Option(s.sketch ? `${s.name} ✎` : s.name, s.name)));
+function renderViews(force = false) {
+  const key = JSON.stringify(state.views.map((v) => [v.name, v.kind, !!v.sketch]));
+  if (force || key !== state.viewsKey) {
+    state.viewsKey = key;
+    ui.sheet.replaceChildren(...state.views.map((v) => new Option(
+      `${v.name}${v.kind === 'model' ? '  (3D)' : ''}${v.sketch ? ' ✎' : ''}`, v.name)));
   }
   ui.sheet.value = state.name ?? '';
-  ui.sheet.disabled = state.sheets.length === 0;
+  ui.sheet.disabled = state.views.length === 0;
 }
 
 function updateStatus() {
@@ -339,7 +383,7 @@ function updateCursor() {
   const t = gesture?.type;
   ui.stage.style.cursor = t === 'pan' || t === 'pinch' || t === 'drag' ? 'grabbing'
     : spaceHeld ? 'grab'
-    : state.tool === 'pen' ? 'crosshair'
+    : state.tool === 'pen' || state.tool === 'pick' ? 'crosshair'
     : hover ? 'grab' : 'default';
 }
 
@@ -373,6 +417,7 @@ function beginStroke(clientX, clientY) {
   if (isHidden(state.ink)) setLayerVisible(labelOf(state.ink), true);
   const path = document.createElementNS(SVG_NS, 'path');
   path.setAttribute('stroke', state.color);
+  if (state.colorFrom?.id) path.setAttributeNS(A.TP_NS, 'tp:color-from', state.colorFrom.id);
   path.setAttribute('stroke-width', A.fmt(INK_WIDTH_PX / pxPerUnit(state.ref), 3));
   path.setAttribute('fill', 'none');
   path.setAttribute('stroke-linecap', 'round');
@@ -498,7 +543,11 @@ function onPointerDown(e) {
     eraseAt(e.clientX, e.clientY, gesture.removed);
   } else if (e.button === 1 || (e.button === 0 && spaceHeld)) gesture = startPan(e);
   else if (e.button !== 0) return;
-  else if (state.tool === 'pen') gesture = { type: 'stroke', id: e.pointerId, ...beginStroke(e.clientX, e.clientY) };
+  else if (state.tool === 'pick') {
+    pickColor(e.clientX, e.clientY);
+    e.preventDefault();
+    return;
+  } else if (state.tool === 'pen') gesture = { type: 'stroke', id: e.pointerId, ...beginStroke(e.clientX, e.clientY) };
   else {
     const hit = hitTest(e.clientX, e.clientY);
     gesture = hit ? startDrag(hit, e) : startPan(e);
@@ -514,9 +563,9 @@ function onPointerMove(e) {
   if (p) ui.coords.textContent = `x ${p[0].toFixed(2)}   y ${p[1].toFixed(2)} mm`;
   if (e.pointerType === 'touch' && touches.has(e.pointerId)) touches.set(e.pointerId, stagePoint(e));
   if (!gesture) {
-    if (state.tool === 'move' && e.pointerType !== 'touch' && !spaceHeld) {
-      setHover(hitTest(e.clientX, e.clientY)?.el ?? null);
-    }
+    if (e.pointerType === 'touch' || spaceHeld) return;
+    if (state.tool === 'move') setHover(hitTest(e.clientX, e.clientY)?.el ?? null);
+    else if (state.tool === 'pick') previewPick(e.clientX, e.clientY);
     return;
   }
   if (gesture.type === 'pinch') { movePinch(); return; }
@@ -553,18 +602,104 @@ function onWheel(e) {
 // ---- Commands ---------------------------------------------------------------
 
 function setTool(tool) {
+  if (tool === 'pick' && state.tool !== 'pick') state.prevTool = state.tool;
   state.tool = tool;
   for (const b of document.querySelectorAll('[data-tool]')) b.setAttribute('aria-pressed', String(b.dataset.tool === tool));
   if (tool !== 'move') setHover(null);
+  if (tool !== 'pick') showPickBox(null);
   updateCursor();
+}
+
+function selectInk(color, from) {
+  Object.assign(state, { color, colorFrom: from });
+  for (const b of ui.swatches.querySelectorAll('.tpv-swatch')) {
+    b.setAttribute('aria-pressed', String(from ? b === ui.picked : b.dataset.color === color && b !== ui.picked));
+  }
 }
 
 function setColor(i) {
   const c = INK_COLORS[i]?.[1];
-  if (!c) return;
-  state.color = c;
-  for (const b of ui.swatches.children) b.setAttribute('aria-pressed', String(b.dataset.color === c));
-  setTool('pen');
+  if (c) selectInk(c, null);
+}
+
+function usePicked() {
+  if (state.picked) selectInk(state.picked.color, state.picked.from);
+}
+
+// ---- Colour picker: ink in the colour of something on the sheet ----------------
+
+const SHAPES = new Set(['path', 'line', 'polyline', 'polygon', 'circle', 'ellipse', 'rect', 'text', 'tspan']);
+// The point itself first, then rings out to 6 px, so thin lines are easy to hit.
+const PICK_OFFSETS = [[0, 0], ...[2, 4, 6].flatMap((r) => Array.from({ length: 8 },
+  (_, i) => [r * Math.cos(i * Math.PI / 4), r * Math.sin(i * Math.PI / 4)]))];
+
+function toHex(css) {
+  const m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+)(%?))?\s*\)$/.exec(css);
+  if (!m || (m[4] !== undefined && +m[4] === 0)) return null; // not a plain colour, or transparent
+  return `#${[m[1], m[2], m[3]].map((v) => Math.round(+v).toString(16).padStart(2, '0')).join('')}`;
+}
+
+// The colour an element is drawn in: text by its fill, other shapes by their outline, else their fill.
+function paintOf(el) {
+  const cs = getComputedStyle(el);
+  const paints = el.localName === 'text' || el.localName === 'tspan' ? [cs.fill] : [cs.stroke, cs.fill];
+  for (const p of paints) {
+    const hex = toHex(p);
+    if (hex) return hex;
+  }
+  return null;
+}
+
+// The visible shape under the pointer and its colour; from names the nearest element
+// with an id (the shape, its dimension, or its layer) and the layer.
+function pickAt(clientX, clientY) {
+  for (const [dx, dy] of PICK_OFFSETS) {
+    for (const el of document.elementsFromPoint(clientX + dx, clientY + dy)) {
+      if (!SHAPES.has(el.localName) || !state.root.contains(el)) continue;
+      const color = paintOf(el);
+      if (!color) continue; // e.g. the hatching's pattern fill: look further down
+      const named = el.closest('[id]');
+      const id = named && named !== state.root && state.root.contains(named) ? named.id : null;
+      const layer = allLayers(state.root).filter((g) => g.contains(el)).pop(); // the innermost
+      return { el, color, from: { id, layer: layer ? pathOf(layer) : null } };
+    }
+  }
+  return null;
+}
+
+const describe = (from) => [from.id, from.layer && `(${from.layer})`].filter(Boolean).join(' ');
+
+function showPickBox(el) {
+  const box = ui.pickBox;
+  if (!el) { box.setAttribute('visibility', 'hidden'); return; }
+  const r = el.getBoundingClientRect(), s = ui.stage.getBoundingClientRect(), pad = 3;
+  box.setAttribute('x', r.left - s.left - pad);
+  box.setAttribute('y', r.top - s.top - pad);
+  box.setAttribute('width', r.width + 2 * pad);
+  box.setAttribute('height', r.height + 2 * pad);
+  box.removeAttribute('visibility');
+}
+
+function previewPick(clientX, clientY) {
+  const hit = pickAt(clientX, clientY);
+  showPickBox(hit?.el ?? null);
+  if (hit) ui.coords.textContent += `   ${hit.color}  ${describe(hit.from)}`;
+}
+
+function pickColor(clientX, clientY) {
+  const hit = pickAt(clientX, clientY);
+  if (!hit) {
+    toast('Nothing to pick a colour from here');
+    return;
+  }
+  state.picked = { color: hit.color, from: hit.from };
+  ui.picked.dataset.color = hit.color;
+  ui.picked.style.setProperty('--c', hit.color);
+  ui.picked.title = `${hit.color} from ${describe(hit.from) || 'the sheet'} (5)`;
+  ui.picked.hidden = false;
+  selectInk(hit.color, hit.from);
+  setTool(state.prevTool);
+  toast(`Ink: ${hit.color} from ${describe(hit.from) || 'the sheet'}`);
 }
 
 function undo() {
@@ -660,15 +795,17 @@ async function save() {
 // ---- Following the files on disk ---------------------------------------------
 
 async function sync(listing) {
-  state.sheets = listing.sheets;
-  renderSheets();
+  state.views = listing.views;
+  renderViews();
   if (!state.name) {
-    const first = listing.sheets.find((s) => s.name === listing.initial) ?? listing.sheets[0];
+    const sheets = listing.views.filter((v) => v.kind === 'sheet');
+    const wanted = viewInUrl() ?? listing.initial;
+    const first = sheets.find((v) => v.name === wanted) ?? sheets[0];
     if (first) await openSheet(first.name);
     else if (ui.empty.hidden || ui.empty.textContent === 'Loading…') showEmpty(`No sheets in ${listing.dir}`);
     return;
   }
-  const cur = listing.sheets.find((s) => s.name === state.name);
+  const cur = listing.views.find((v) => v.name === state.name);
   if (!cur) return;
   const sketch = cur.sketch?.mtime ?? null;
   if (cur.mtime !== state.sheetMtime) {
@@ -693,7 +830,7 @@ async function sync(listing) {
 async function poll() {
   const gen = state.gen;
   let listing = null;
-  try { listing = await (await fetchOk('/api/sheets')).json(); } catch { /* server stopped */ }
+  try { listing = await (await fetchOk('/api/views')).json(); } catch { /* server stopped */ }
   if (state.offline !== !listing) { state.offline = !listing; updateStatus(); }
   if (listing && gen === state.gen && !state.busy) {
     try { await sync(listing); } catch (err) { console.error(err); }
@@ -704,16 +841,18 @@ async function poll() {
 // ---- Tablet pen (tracepaper view --remarkable) ---------------------------------
 // Frames give the pen's position in mm on the tablet; the tablet covers the
 // canvas as pen.js fits it. The pen draws with the tip and erases with the other
-// end, whatever the mouse is doing.
+// end, whatever the mouse is doing. With several windows open, the server sends
+// it to the one used last with the mouse.
 
 const pen = { status: null, size: null, down: false, ignored: false, stroke: null, removed: null };
+const penHere = () => pen.status?.active === CLIENT;
 
 function connectPen() {
-  const source = new EventSource('/api/pen');
+  const source = new EventSource(`/api/pen?client=${encodeURIComponent(CLIENT)}&draws=1`);
   source.addEventListener('status', (e) => {
     pen.status = JSON.parse(e.data);
     pen.size = { width: pen.status.width, height: pen.status.height };
-    if (pen.status.state !== 'connected') {
+    if (pen.status.state !== 'connected' || !penHere()) {
       endPenTouch();
       showPenCursor(null);
     }
@@ -731,7 +870,7 @@ function connectPen() {
 
 function onPenFrame(f) {
   const r = ui.stage.getBoundingClientRect();
-  if (!state.root || !pen.size || !r.width || !r.height) return;
+  if (!state.root || !pen.size || !penHere() || !r.width || !r.height) return;
   const [x, y] = Pen.tabletToStage([f.x, f.y], pen.size, r);
   const inside = x >= 0 && y >= 0 && x <= r.width && y <= r.height;
   const clientX = r.left + x, clientY = r.top + y;
@@ -760,6 +899,15 @@ function endPenTouch() {
   Object.assign(pen, { down: false, ignored: false, stroke: null, removed: null });
 }
 
+// The mouse was used in this window: the pen draws here from now on.
+function claimPen() {
+  if (!pen.status || penHere()) return;
+  fetch('/api/pen/active', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tracepaper': '1' },
+    body: JSON.stringify({ client: CLIENT }),
+  }).catch(() => {});
+}
+
 function showPenCursor(c) {
   if (!c) { ui.penCursor.setAttribute('visibility', 'hidden'); return; }
   ui.penCursor.removeAttribute('visibility');
@@ -775,11 +923,14 @@ function renderPen() {
   if (!s) return;
   const r = ui.stage.getBoundingClientRect();
   let text = 'reMarkable: connecting…', title = s.message;
-  if (s.state === 'connected' && r.width && r.height) {
+  if (s.state === 'connected' && !penHere()) {
+    text = 'reMarkable · in another window';
+    title = 'The pen draws in the window you used last. Click here to draw in this one.';
+  } else if (s.state === 'connected' && r.width && r.height) {
     const a = Pen.activeArea(pen.size, r);
     text = `reMarkable · ${Math.round(a.width)} × ${Math.round(a.height)} mm`;
     title = `${s.message}. The middle ${Math.round(a.width)} × ${Math.round(a.height)} mm of the tablet `
-      + 'covers the view, so drawings keep their proportions; the rest of the tablet does nothing.';
+      + 'covers this view, so drawings keep their proportions; the rest of the tablet does nothing.';
   } else if (s.state === 'error' || s.state === 'off') {
     text = `reMarkable: ${s.message || s.state}`;
   }
@@ -802,6 +953,24 @@ INK_COLORS.forEach(([name, c], i) => {
   ui.swatches.append(b);
 });
 
+// The last colour picked from the sheet, shown once there is one, and the picker itself.
+ui.picked = document.createElement('button');
+ui.picked.className = 'tpv-swatch tpv-picked';
+ui.picked.hidden = true;
+ui.picked.setAttribute('aria-label', 'Picked ink colour');
+ui.picked.append(document.createElement('span'));
+ui.picked.addEventListener('click', usePicked);
+const pipette = document.createElement('button');
+pipette.className = 'tpv-pipette';
+pipette.dataset.tool = 'pick';
+pipette.title = 'Pick an ink colour from the sheet (I)';
+pipette.setAttribute('aria-label', 'Pick an ink colour from the sheet');
+pipette.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" '
+  + 'stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M10.2 3.2l1.3-1.3a1.8 1.8 0 0 1 2.6 2.6l-1.3 1.3"/><path d="M8.6 3.6l3.8 3.8"/>'
+  + '<path d="M10.5 5.5l-6.6 6.6-.6 2.6 2.6-.6 6.6-6.6"/></svg>';
+ui.swatches.append(ui.picked, pipette);
+
 for (const b of document.querySelectorAll('[data-tool]')) b.addEventListener('click', () => setTool(b.dataset.tool));
 ui.undo.addEventListener('click', undo);
 ui.clear.addEventListener('click', clearInk);
@@ -818,8 +987,13 @@ ui.sheet.addEventListener('change', () => {
     return;
   }
   state.dirty = false;
-  openSheet(name);
+  if (state.views.find((v) => v.name === name)?.kind === 'model') location.href = viewUrl(name); // the 3D page
+  else openSheet(name);
 });
+
+// Using this window with the mouse (or a local pen) makes it the one the tablet draws in.
+window.addEventListener('pointerdown', claimPen, true);
+ui.stage.addEventListener('wheel', claimPen, { passive: true });
 
 ui.stage.addEventListener('pointerdown', onPointerDown);
 ui.stage.addEventListener('pointermove', onPointerMove);
@@ -840,8 +1014,11 @@ window.addEventListener('keydown', (e) => {
     if (!spaceHeld) { spaceHeld = true; setHover(null); updateCursor(); }
   } else if (key === 'p') setTool('pen');
   else if (key === 'v' || key === 'm') setTool('move');
+  else if (key === 'i') setTool('pick');
+  else if (key === 'escape' && state.tool === 'pick') setTool(state.prevTool);
   else if (key === 'f') fit();
   else if (['1', '2', '3', '4'].includes(e.key)) setColor(Number(e.key) - 1);
+  else if (e.key === '5') usePicked();
 });
 
 window.addEventListener('keyup', (e) => {
@@ -853,10 +1030,11 @@ window.addEventListener('beforeunload', (e) => { if (state.dirty) e.preventDefau
 window.addEventListener('resize', renderPen); // the tablet's drawing area follows the canvas's shape
 
 setColor(0);
+setTool(state.tool);
 applyCamera();
 updateStatus();
 poll();
 connectPen();
 
 // For debugging from the console and for tests/test_browser.py.
-window.tracepaper = { state, ready, A, Pen, pen, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit };
+window.tracepaper = { state, ready, A, Pen, pen, CLIENT, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit };
