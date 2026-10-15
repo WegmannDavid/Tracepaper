@@ -43,7 +43,7 @@ headlight.position.set(0.5, 1, 2); // follows the camera, so the side facing you
 camera.add(headlight);
 scene.add(camera);
 const controls = new OrbitControls(camera, ui.canvas);
-controls.zoomToCursor = true;
+controls.zoomToCursor = false; // zoom about the middle of the view, so the rotation centre stays put
 controls.addEventListener('change', render);
 
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x1f2328 });

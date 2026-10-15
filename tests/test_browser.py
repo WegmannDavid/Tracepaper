@@ -311,6 +311,18 @@ class ViewerInFirefox(unittest.TestCase):
             png = self.m.call("WebDriver:TakeScreenshot", {"full": False, "hash": False})["value"]
             Path(os.environ["TRACEPAPER_SCREENSHOT"]).with_suffix(".3d.png").write_bytes(base64.b64decode(png))
 
+        # Scrolling with the mouse off centre zooms about the middle: the rotation centre stays.
+        zoomed = self.m.run("""
+            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+            const r = canvas.getBoundingClientRect(), target = t.controls.target.toArray();
+            for (let i = 0; i < 3; i++) canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true,
+              cancelable: true, clientX: r.left + r.width * 0.85, clientY: r.top + r.height * 0.2 }));
+            done({ target, after: t.controls.target.toArray(), zoom: t.camera.zoom });
+        """)
+        self.assertEqual(zoomed["after"], zoomed["target"])
+        self.assertGreater(zoomed["zoom"], 1.1)  # three steps in: about 1.17
+        self.m.run("window.tracepaper3d.frame(window.tracepaper3d.LOOKS.iso); done(true);")
+
         # The build writes the model again: it reloads and keeps the camera.
         before = self.m.run("const t = window.tracepaper3d; t.frame(t.LOOKS.top); done(t.camera.position.toArray());")
         model = self.dir / "bracket.glb"
