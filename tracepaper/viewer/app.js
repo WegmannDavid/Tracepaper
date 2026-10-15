@@ -831,7 +831,8 @@ async function poll() {
 // end, whatever the mouse is doing. With several windows open, the server sends
 // it to the one used last with the mouse, or where Connect was pressed.
 
-const pen = { status: null, size: null, down: false, ignored: false, stroke: null, removed: null };
+// done: when the pen touched down for the last stroke that ended (pen.py's Decoder).
+const pen = { status: null, size: null, down: false, ignored: false, stroke: null, removed: null, done: 0 };
 const penHere = () => pen.status?.active === CLIENT;
 
 function connectPen() {
@@ -844,6 +845,7 @@ function connectPen() {
       showPenCursor(null);
     }
     renderPen();
+    viewChanged();
   });
   source.addEventListener('pen', (e) => onPenFrame(JSON.parse(e.data)));
   source.addEventListener('error', () => {
@@ -856,6 +858,7 @@ function connectPen() {
 }
 
 function onPenFrame(f) {
+  pen.done = f.done ?? pen.done;
   const r = ui.stage.getBoundingClientRect();
   if (!state.root || !pen.size || !penHere() || !r.width || !r.height) return;
   const [x, y] = Pen.tabletToStage([f.x, f.y], pen.size, r);
@@ -884,6 +887,7 @@ function endPenTouch() {
   if (pen.stroke) commitStroke(pen.stroke);
   if (pen.removed) finishErase(pen.removed);
   Object.assign(pen, { down: false, ignored: false, stroke: null, removed: null });
+  viewChanged(); // the tablet's own ink of the stroke goes, even if nothing was drawn here
 }
 
 // The mouse was used in this window: the pen draws here from now on.
@@ -946,6 +950,70 @@ function renderPen() {
   ui.pen.textContent = text;
   ui.pen.title = title;
   ui.pen.className = `tpv-pen ${s.state}`;
+}
+
+// ---- The tablet's screen ---------------------------------------------------------
+// While the tablet's pen draws in this window, the tablet shows this window's view
+// (if it can show pictures): shortly after the view changes, and not in the middle of
+// a stroke or drag, a picture of it goes to the tablet. It covers the part of the
+// screen that the pen covers (pen.js), so the pen lines up with what it draws on.
+
+const SCREEN_DELAY_MS = 400;
+let screenTimer = null;
+
+const showsHere = () => !!state.root && pen.status?.state === 'connected' && !!pen.status.screen && penHere();
+
+function viewChanged() {
+  if (!showsHere()) return;
+  clearTimeout(screenTimer);
+  screenTimer = setTimeout(sendView, SCREEN_DELAY_MS);
+}
+
+async function sendView() {
+  if (!showsHere()) return;
+  if (pen.down || gesture) { viewChanged(); return; }
+  const done = pen.done; // the strokes up to this one are in the picture: the tablet stops drawing them itself
+  const canvas = await renderScreen();
+  const png = canvas && await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+  if (!png || !showsHere()) return;
+  fetch(`/api/pen/view?client=${encodeURIComponent(CLIENT)}&done=${done}`, {
+    method: 'POST', headers: { 'Content-Type': 'image/png', 'X-Tracepaper': '1' }, body: png,
+  }).catch(() => {});
+}
+
+// The tablet's whole screen as it is held, with the view where the pen's area is.
+async function renderScreen() {
+  const r = ui.stage.getBoundingClientRect();
+  const [w, h] = pen.status?.pixels ?? [];
+  if (!state.root || !pen.size || !r.width || !r.height || !w || !h) return null;
+  const a = Pen.activeArea(pen.size, r), k = w / pen.size.width; // screen pixels per tablet mm
+  const copy = state.root.cloneNode(true);
+  copy.querySelector(`#${REF_ID}`)?.remove();
+  for (const n of copy.querySelectorAll('.tpv-hover')) n.classList.remove('tpv-hover');
+  copy.setAttribute('overflow', 'visible');
+  const { s, x, y } = state.cam;
+  const font = getComputedStyle(ui.stage).fontFamily.replaceAll('"', "'");
+  const svg = `<svg xmlns="${SVG_NS}" width="${a.width * k}" height="${a.height * k}" `
+    + `viewBox="0 0 ${r.width} ${r.height}" font-family="${font}">`
+    + `<g transform="translate(${x} ${y}) scale(${s})">${new XMLSerializer().serializeToString(copy)}</g></svg>`;
+  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const canvas = document.createElement('canvas');
+    Object.assign(canvas, { width: w, height: h });
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, a.x * k, a.y * k, a.width * k, a.height * k);
+    ctx.strokeStyle = '#999'; // the edge of where the pen draws
+    ctx.lineWidth = 2;
+    ctx.strokeRect(a.x * k - 1, a.y * k - 1, a.width * k + 2, a.height * k + 2);
+    return canvas;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 // ---- Wiring -----------------------------------------------------------------
@@ -1038,6 +1106,13 @@ window.addEventListener('keyup', (e) => {
 window.addEventListener('beforeunload', (e) => { if (state.dirty) e.preventDefault(); });
 
 window.addEventListener('resize', renderPen); // the tablet's drawing area follows the canvas's shape
+window.addEventListener('resize', viewChanged);
+// Anything drawn changing changes the tablet's picture; the pointer's marks and highlights don't.
+new MutationObserver((changes) => {
+  if (changes.some((c) => c.target !== ui.penCursor && c.target !== ui.pickBox && c.attributeName !== 'class')) {
+    viewChanged();
+  }
+}).observe(ui.stage, { subtree: true, childList: true, attributes: true, characterData: true });
 
 setColor(0);
 setTool(state.tool);
@@ -1047,4 +1122,5 @@ poll();
 connectPen();
 
 // For debugging from the console and for tests/test_browser.py.
-window.tracepaper = { state, ready, A, Pen, pen, CLIENT, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit };
+window.tracepaper = { state, ready, A, Pen, pen, CLIENT, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit,
+  renderScreen };

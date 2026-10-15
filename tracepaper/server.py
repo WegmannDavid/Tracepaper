@@ -29,6 +29,7 @@ KINDS = {".svg": "sheet", ".glb": "model"}
 SKIP_DIRS = {"node_modules", "__pycache__"}
 MAX_DEPTH = 3  # how many folders below the project folder are searched for views
 MAX_SKETCH_BYTES = 50 * 1024 * 1024
+MAX_VIEW_BYTES = 8 * 1024 * 1024  # a picture of the view for the tablet's screen
 KEEPALIVE = 5  # seconds between keep-alives on the pen stream, which notice closed windows
 LAST_WINDOW = 10  # seconds after the last window closed that the tablet is let go
 VIEWER_DIR = Path(__file__).resolve().parent / "viewer"
@@ -78,7 +79,7 @@ class ViewerServer(ThreadingHTTPServer):
         self.directory = directory
         self.initial = initial
         self.pen = pen  # a tablet the pages can connect, such as pen.RemarkablePen, or None
-        self.pen_hub = PenHub(pen.size_mm) if pen is not None else None
+        self.pen_hub = PenHub(pen.size_mm, getattr(pen, "pixels", None)) if pen is not None else None
         port = self.server_address[1]
         self.allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
@@ -231,13 +232,28 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         """/api/pen/connect connects the tablet and makes the asking view the one it draws in,
         taking the tablet over from any other viewer; /api/pen/active only does the latter, and
-        /api/pen/disconnect lets the tablet go. Each takes {"client": id} and returns the status."""
+        /api/pen/disconnect lets the tablet go. Each takes {"client": id} and returns the status.
+        /api/pen/view?client=id&done=time takes a PNG of the view the pen draws in, for the
+        tablet's screen, with the strokes up to the one whose pen touched down at time in it."""
         if not self._allowed() or not self._from_page():
             return
-        action = urlsplit(self.path).path.removeprefix("/api/pen/")
+        url = urlsplit(self.path)
+        action = url.path.removeprefix("/api/pen/")
         hub, pen = self.server.pen_hub, self.server.pen
-        if hub is None or action not in ("connect", "active", "disconnect"):
+        if hub is None or action not in ("connect", "active", "disconnect", "view"):
             return self._error(404, "not found")
+        if action == "view":
+            body = self._body(MAX_VIEW_BYTES)
+            if body is None:
+                return
+            query = parse_qs(url.query)
+            if query.get("client", [""])[0] != hub.status["active"]:
+                return self._error(409, "the pen draws in another window")
+            try:
+                done = int(query.get("done", ["0"])[0])
+            except ValueError:
+                return self._error(400, "done must be a number")
+            return self._json({"shown": pen.show(body, done)})
         body = self._body(1024)
         if body is None:
             return

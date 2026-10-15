@@ -11,17 +11,24 @@ document open there; the e-ink keeps showing what it showed. The app starts
 again when Tracepaper disconnects, or by itself SILENCE seconds after this
 computer goes quiet (crash, cable pulled, WiFi lost).
 
+While connected, the tablet also shows the view that the pen draws in: the
+viewer sends a picture of it whenever it changes (show), and a small program on
+the tablet (tablet/main.cpp, copied there when connecting) puts it on the e-ink
+where the pen's coordinates are, so the two line up.
+
 Only one viewer can have the tablet. Connecting takes it over from any other
 Tracepaper viewer that has it, on this computer or another; that one hears it
 was taken and doesn't try to get it back.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import queue
 import struct
 import subprocess
 import threading
+from pathlib import Path
 from typing import Optional
 
 EV_SYN, EV_KEY, EV_ABS = 0x00, 0x01, 0x03
@@ -35,6 +42,8 @@ EVENT = struct.Struct("<IIHHi")  # struct input_event on the tablet's 32-bit ARM
 SENSOR_X, SENSOR_Y = 20967, 15725
 UNITS_PER_MM = 100
 MAX_PRESSURE = 4095
+# Its screen, upright, in pixels. The pen sensor covers it exactly.
+SCREEN_W, SCREEN_H = 1404, 1872
 
 HOLD = {0: "upright", 90: "landscape, power button on the right", 180: "upside down",
         270: "landscape, power button on the left"}
@@ -44,12 +53,19 @@ SILENCE = 20  # seconds without a heartbeat after which the tablet restarts its 
 HEARTBEAT = 5
 RETRY = 3.0  # seconds between connection attempts
 LOCK = "/tmp/tracepaper-pen"  # on the tablet: "<pid> <owner>" of the session that has the pen
-TAKEN, BUSY = 75, 76  # the script's exit statuses: another viewer took the tablet over / has it
+# The script's exit statuses: another viewer took the tablet over / has it; the person
+# disconnected on the tablet.
+TAKEN, BUSY, LEFT = 75, 76, 77
+SCREEN = Path(__file__).resolve().parent / "tablet" / "tracepaper-screen"  # built by tablet/build.sh
+REMOTE_SCREEN = "/home/root/.tracepaper/tracepaper-screen"
+VIEW = "/tmp/tracepaper-view.png"  # on the tablet: the picture tracepaper-screen shows
 
-# Runs on the tablet, after "owner=<this viewer> take=<0 or 1>": take the pen over from
-# the session that has it if asked to (or if that is this viewer's own, from before a
-# dropped connection), stop the app, stream the pen, and start the app again when done.
-# A session taken over leaves the app stopped for the one taking over.
+# Runs on the tablet, after "owner=<this viewer> take=<0 or 1> screen=<0 or 1> turn=<rotation>":
+# take the pen over from the session that has it if asked to (or if that is this viewer's
+# own, from before a dropped connection), stop the app, show the screen, stream the pen,
+# and start the app again when done, or when the screen's Disconnect button says so. A session taken over leaves the app stopped for the
+# one taking over. Its input carries heartbeats (empty lines) and pictures for the
+# screen ("view <bytes> <done>" and the PNG; see tablet/main.cpp for done).
 SCRIPT = f"""
 dev=$(grep -A4 -i wacom /proc/bus/input/devices | grep -o 'event[0-9]*' | head -n 1)
 [ -n "$dev" ] || {{ echo "no pen sensor found on the tablet" >&2; exit 1; }}
@@ -60,15 +76,27 @@ if [ -f {LOCK} ] && read -r old who < {LOCK} && grep -q TRACEPAPER /proc/$old/cm
   kill -9 $old 2>/dev/null
 fi
 echo "$$ $owner" > {LOCK}
-restore() {{ trap - EXIT HUP INT TERM PIPE USR1; kill $pid 2>/dev/null; rm -f {LOCK}; systemctl reset-failed xochitl 2>/dev/null; systemctl start xochitl; exit; }}
-taken() {{ trap - EXIT HUP INT TERM PIPE USR1; kill $pid 2>/dev/null; echo "taken by another viewer" >&2; exit {TAKEN}; }}
-trap restore EXIT HUP INT TERM PIPE
+restore() {{ trap - EXIT HUP INT TERM PIPE USR1 USR2; kill $pid $shown 2>/dev/null; wait $shown; rm -f {LOCK} {VIEW} {VIEW}.done; systemctl reset-failed xochitl 2>/dev/null; systemctl start xochitl; }}
+taken() {{ trap - EXIT HUP INT TERM PIPE USR1 USR2; kill $pid $shown 2>/dev/null; wait $shown; echo "taken by another viewer" >&2; exit {TAKEN}; }}
+trap 'restore; exit' EXIT HUP INT TERM PIPE
 trap taken USR1
+trap 'restore; echo "disconnected on the tablet" >&2; exit {LEFT}' USR2
 systemctl stop xochitl || exit 1
+rm -f {VIEW} {VIEW}.done
+if [ "$screen" = 1 ]; then
+  QT_QPA_PLATFORM=epaper QT_QUICK_BACKEND=epaper QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS=rotate=180:invertx \\
+    {REMOTE_SCREEN} {VIEW} $turn /dev/input/$dev >/dev/null 2>&1 & shown=$!
+fi
 printf '{READY.decode().strip()}\\n'
 cat /dev/input/$dev & pid=$!
-while read -t {SILENCE} line; do :; done
+while read -t {SILENCE} cmd size done; do
+  [ "$cmd" = view ] && {REMOTE_SCREEN} --receive {VIEW} "$size" "$done"
+done
 """
+
+# Copies tracepaper-screen onto the tablet, from its input, unless it is there already.
+DEPLOY = (f'f={REMOTE_SCREEN}; [ "$(sha256sum < $f 2>/dev/null)" = "{{sha}}  -" ] && exit 0; '
+          'mkdir -p "${{f%/*}}" && cat > $f.new && chmod +x $f.new && mv $f.new $f')
 
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "-o", "ServerAliveInterval=3",
        "-o", "ServerAliveCountMax=2", "-o", "LogLevel=ERROR"]
@@ -78,6 +106,11 @@ def tablet_size(rotation: int) -> tuple:
     """(width, height) in mm of the tablet held turned clockwise by rotation degrees."""
     w, h = SENSOR_Y / UNITS_PER_MM, SENSOR_X / UNITS_PER_MM  # upright
     return (h, w) if rotation in (90, 270) else (w, h)
+
+
+def screen_size(rotation: int) -> tuple:
+    """(width, height) in pixels of the tablet's screen as it is held."""
+    return (SCREEN_H, SCREEN_W) if rotation in (90, 270) else (SCREEN_W, SCREEN_H)
 
 
 def orient(sx: int, sy: int, rotation: int) -> tuple:
@@ -97,7 +130,10 @@ class Decoder:
     """Turns the pen sensor's raw input events into frames of pen state.
 
     A frame is {"x", "y"} in mm on the tablet as held, "p" pressure from 0 to 1,
-    "tool" ("pen", "eraser", or None when the pen is out of range) and "touch".
+    "tool" ("pen", "eraser", or None when the pen is out of range), "touch", and
+    "done": when the pen touched down for the last stroke that has ended, in
+    microseconds of the input events' clock (0 before the first), which tells the
+    tablet's screen which strokes a picture has (tablet/main.cpp).
     One frame per sensor report, and only when something changed.
     """
 
@@ -107,15 +143,20 @@ class Decoder:
         self.keys = {BTN_TOOL_PEN: 0, BTN_TOOL_RUBBER: 0, BTN_TOUCH: 0}
         self.rest = b""
         self.last = None
+        self.down_at = self.done = 0
 
     def feed(self, data: bytes) -> list:
         self.rest += data
         end = len(self.rest) - len(self.rest) % EVENT.size
         frames = []
-        for _, _, kind, code, value in EVENT.iter_unpack(self.rest[:end]):
+        for sec, usec, kind, code, value in EVENT.iter_unpack(self.rest[:end]):
             if kind == EV_ABS and code in self.abs:
                 self.abs[code] = value
             elif kind == EV_KEY and code in self.keys:
+                if code == BTN_TOUCH and value and not self.keys[BTN_TOUCH]:
+                    self.down_at = sec * 1_000_000 + usec
+                elif code == BTN_TOUCH and not value and self.keys[BTN_TOUCH]:
+                    self.done = self.down_at
                 self.keys[code] = value
             elif kind == EV_SYN and code == SYN_REPORT:
                 frame = self._frame()
@@ -129,7 +170,7 @@ class Decoder:
         tool = "eraser" if self.keys[BTN_TOOL_RUBBER] else "pen" if self.keys[BTN_TOOL_PEN] else None
         x, y = orient(self.abs[ABS_X], self.abs[ABS_Y], self.rotation)
         return {"x": round(x, 2), "y": round(y, 2), "p": round(self.abs[ABS_PRESSURE] / MAX_PRESSURE, 3),
-                "tool": tool, "touch": bool(self.keys[BTN_TOUCH]) and tool is not None}
+                "tool": tool, "touch": bool(self.keys[BTN_TOUCH]) and tool is not None, "done": self.done}
 
 
 class PenHub:
@@ -140,10 +181,11 @@ class PenHub:
     other view that can draw takes over.
     """
 
-    def __init__(self, size_mm: tuple):
+    def __init__(self, size_mm: tuple, pixels: Optional[tuple] = None):
         self.size = size_mm
+        # pixels: of the tablet's screen as held; screen: whether it shows the view right now.
         self.status = {"state": "off", "message": "", "width": size_mm[0], "height": size_mm[1],
-                       "active": None}
+                       "pixels": pixels, "screen": False, "active": None}
         self._clients: dict = {}  # client id -> (queue, whether it draws), oldest first
         self._lock = threading.Lock()
 
@@ -192,9 +234,9 @@ class PenHub:
         for q, _ in self._clients.values():
             _put(q, item)
 
-    def publish_status(self, state: str, message: str = "") -> None:
+    def publish_status(self, state: str, message: str = "", screen: bool = False) -> None:
         with self._lock:
-            self.status = {**self.status, "state": state, "message": message}
+            self.status = {**self.status, "state": state, "message": message, "screen": screen}
             self._broadcast(("status", self.status))
 
     def publish_frame(self, frame: dict) -> None:
@@ -219,15 +261,20 @@ class RemarkablePen:
     """Streams a reMarkable 2's pen into a PenHub between connect and disconnect,
     reconnecting by itself when the connection drops."""
 
-    def __init__(self, host: str = "remarkable", rotation: int = 90, command: Optional[list] = None):
+    def __init__(self, host: str = "remarkable", rotation: int = 90, command: Optional[list] = None,
+                 screen: Optional[Path] = SCREEN):
         self.host = host
         self.rotation = rotation
         self.size_mm = tablet_size(rotation)
-        self.command = command or [*SSH, host]  # runs the script on the tablet, given as last argument
+        self.pixels = screen_size(rotation)
+        self.command = command or [*SSH, host]  # runs a script on the tablet, given as last argument
+        self.screen = screen if screen is not None and screen.is_file() else None  # the program to show the view
         self.owner = os.urandom(8).hex()  # tells this viewer's sessions on the tablet from other viewers'
         self._lock = threading.Lock()
+        self._write = threading.Lock()  # one message at a time into the session: heartbeats, pictures
         self._running = False  # a connection is up or being tried
         self._connected = False
+        self._showing = False  # the tablet shows the view
         self._take = False  # the next attempt takes the tablet over from another viewer
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -267,6 +314,34 @@ class RemarkablePen:
         if thread is not None:
             thread.join(timeout=5)
 
+    def show(self, png: bytes, done: int = 0) -> bool:
+        """Show a picture of the whole screen, as the tablet is held, on the tablet, with
+        the strokes up to the one that touched down at done (see Decoder) drawn in it.
+        False if it isn't connected or can't show pictures."""
+        with self._lock:
+            proc = self._proc if self._connected and self._showing else None
+        if proc is None:
+            return False
+        with self._write:
+            try:
+                proc.stdin.write(b"view %d %d\n" % (len(png), done) + png)
+                proc.stdin.flush()
+            except (OSError, ValueError):
+                return False
+        return True
+
+    def _deploy(self) -> bool:
+        """Put the screen program onto the tablet unless it is there already; whether it is."""
+        if self.screen is None:
+            return False
+        data = self.screen.read_bytes()
+        try:
+            done = subprocess.run([*self.command, DEPLOY.format(sha=hashlib.sha256(data).hexdigest())],
+                                  input=data, capture_output=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return done.returncode == 0
+
     def _run(self, hub: PenHub, stop: threading.Event, wake: threading.Event) -> None:
         message = ""
         while not stop.is_set():
@@ -285,8 +360,10 @@ class RemarkablePen:
 
     def _session(self, hub: PenHub, stop: threading.Event, take: bool) -> tuple:
         """One connection; returns why it ended and whether to try again."""
+        showing = self._deploy()
+        settings = f"owner={self.owner} take={int(take)} screen={int(showing)} turn={self.rotation}"
         try:
-            proc = subprocess.Popen([*self.command, f"owner={self.owner} take={int(take)}\n{SCRIPT}"],
+            proc = subprocess.Popen([*self.command, f"{settings}\n{SCRIPT}"],
                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError as e:
             return f"cannot run ssh: {e}", False
@@ -304,8 +381,8 @@ class RemarkablePen:
                     return _why(proc, "the tablet closed the connection")
                 head += chunk
             with self._lock:
-                self._connected = True
-            hub.publish_status("connected", f"{self.host}, held {HOLD[self.rotation]}")
+                self._connected, self._showing = True, showing
+            hub.publish_status("connected", f"{self.host}, held {HOLD[self.rotation]}", screen=showing)
             decoder = Decoder(self.rotation)
             while chunk := os.read(fd, 4096):
                 for frame in decoder.feed(chunk):
@@ -320,13 +397,14 @@ class RemarkablePen:
                 proc.kill()
             with self._lock:
                 self._proc = None
-                self._connected = False
+                self._connected = self._showing = False
 
     def _heartbeat(self, proc: subprocess.Popen, stop: threading.Event) -> None:
         while proc.poll() is None and not stop.wait(HEARTBEAT):
             try:
-                proc.stdin.write(b"\n")
-                proc.stdin.flush()
+                with self._write:
+                    proc.stdin.write(b"\n")
+                    proc.stdin.flush()
             except (OSError, ValueError):
                 return
 
@@ -339,11 +417,12 @@ def _close(f) -> None:
 
 
 def _why(proc: subprocess.Popen, fallback: str) -> tuple:
-    """Why the session ended, and whether to try again: not when another viewer has the tablet."""
+    """Why the session ended, and whether to try again: not when another viewer has the tablet,
+    or the person disconnected on the tablet."""
     _close(proc.stdin)
     try:
         _, err = proc.communicate(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
         return fallback, True
-    return err.decode(errors="replace").strip() or fallback, proc.returncode not in (TAKEN, BUSY)
+    return err.decode(errors="replace").strip() or fallback, proc.returncode not in (TAKEN, BUSY, LEFT)

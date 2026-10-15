@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import tempfile
 import threading
@@ -17,7 +18,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from tracepaper.model import mark_hidden
-from tracepaper.pen import tablet_size
+from tracepaper.pen import screen_size, tablet_size
 from tracepaper.server import make_server
 from tracepaper.sheet import PathBuilder, Sheet
 
@@ -65,14 +66,23 @@ const done = arguments[arguments.length - 1];
 class FakePen:
     """A tablet that connects at once, and whose frames the test publishes itself."""
     size_mm = tablet_size(90)
+    pixels = screen_size(90)
     running = False
     hub = None  # the server's, set when it is made
+
+    def __init__(self):
+        self.shown = []  # pictures sent to its screen
 
     def connect(self, hub):
         hub.publish_status("connected", "test tablet")
 
     def disconnect(self):
         self.hub.publish_status("off")
+
+    def show(self, png, done=0):
+        self.shown.append(png)
+        self.done = done
+        return True
 
 
 def free_port() -> int:
@@ -553,6 +563,42 @@ class ViewerInFirefox(unittest.TestCase):
             until(() => tp.state.root !== old && tp.state.ink.children.length === 1 && tp.state.dirty, done);
         """)
         self.assertTrue(kept)
+
+    def test_tablet_shows_the_view(self):
+        self.open_viewer()
+        hub, pen = self.server.pen_hub, self.server.pen
+        hub.set_active(self.m.run("done(tp.CLIENT);"))
+        hub.publish_status("connected", "test tablet", screen=True)
+        self.wait_for(lambda: pen.shown)  # the view, as soon as the tablet can show it
+        width, height = struct.unpack(">II", pen.shown[-1][16:24])  # from the PNG's header
+        self.assertEqual((width, height), screen_size(90))
+
+        # A stroke drawn with the pen shows on the tablet where the pen drew it.
+        tw, th = tablet_size(90)
+        cx, cy = tw / 2 + 10, th / 2 + 5
+        sent = len(pen.shown)
+        for i in range(21):
+            hub.publish_frame({"x": cx - 10 + i, "y": cy, "p": 0.5, "tool": "pen", "touch": True, "done": 0})
+        hub.publish_frame({"x": cx + 10, "y": cy, "p": 0, "tool": "pen", "touch": False, "done": 1700000000123456})
+        self.wait_for(lambda: len(pen.shown) > sent)
+        self.assertEqual(pen.done, 1700000000123456)  # the tablet can drop its own drawing of the stroke
+        k = width / tw  # screen pixels per tablet mm
+        ink = self.m.run(f"""
+            tp.renderScreen().then((canvas) => {{
+              const ctx = canvas.getContext('2d');
+              const dark = (x, y) => {{ const [r, g, b] = ctx.getImageData(x, y, 1, 1).data; return r + g + b < 600; }};
+              const near = (x, y) => [-2, -1, 0, 1, 2].some((d) => dark(x, y + d));  // the stroke is a few pixels wide
+              done({{ on: near({round(cx * k)}, {round(cy * k)}), left: near({round((cx - 8) * k)}, {round(cy * k)}),
+                      above: near({round(cx * k)}, {round((cy - 5) * k)}) }});
+            }});
+        """)
+        self.assertEqual(ink, {"on": True, "left": True, "above": False})
+
+        # So do zooming and panning.
+        sent = len(pen.shown)
+        self.m.run("tp.state.cam = { ...tp.state.cam, s: tp.state.cam.s * 1.5 }; tp.fit(); done(true);")
+        self.wait_for(lambda: len(pen.shown) > sent)
+        hub.publish_status("connected", "test tablet")
 
     def test_tablet_pen(self):
         self.open_viewer()

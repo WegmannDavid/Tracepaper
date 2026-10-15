@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.16)
+project(tracepaper_screen LANGUAGES CXX)
+find_package(Qt6 REQUIRED COMPONENTS Quick)
+qt_standard_project_setup(REQUIRES 6.5)
+qt_add_executable(tracepaper-screen main.cpp)
+target_link_libraries(tracepaper-screen PRIVATE Qt6::Quick)

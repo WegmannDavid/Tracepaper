@@ -45,6 +45,12 @@ tracepaper view path/to/sheets                  # a directory, or a single sheet
 
 Press **Connect reMarkable** in a sheet's toolbar. The tablet's pen then draws in that window, and the mouse keeps doing everything else, even at the same time. The pen's other end erases whole strokes. **Disconnect** gives the tablet back.
 
+The tablet shows the view you draw in, lined up with the pen, so you can look at the tablet instead of the screen:
+
+- **The picture** follows the window: it's sent again shortly after you pan, zoom, hide something or draw. A grey frame marks the part of the tablet the pen draws in.
+- **While you draw,** the tablet draws the stroke itself, in black and as fast as the tablet's own app does. When you lift the pen, the viewer's version of it replaces that a moment later, in its colour as a shade of grey.
+- **Disconnect on the tablet:** the button in its top right corner, tapped twice with a finger. The pen only draws.
+
 - **Several windows.** The pen draws in the one you used last with the mouse, or the sheet you opened last; the toolbar says where it is. **Connect here** in another window moves it there. A 3D window shows where the pen is and can disconnect it.
 - **Several viewers.** Only one can have the tablet. Connecting in one takes the tablet from any other Tracepaper viewer that has it, which then shows "taken by another viewer" and leaves it alone. So a viewer can keep running all day without holding the tablet.
 - **Closing the windows** lets the tablet go too, ten seconds after the viewer's last window closed, and so does stopping the viewer.
@@ -52,7 +58,8 @@ Press **Connect reMarkable** in a sheet's toolbar. The tablet's pen then draws i
 - **Aspect ratio.** The view's shape is fitted into the middle of the tablet at one scale for both axes, so a circle drawn on the tablet stays a circle. The toolbar shows how much of the tablet that is; the strips outside it do nothing.
 - **Holding the tablet.** Landscape with the power button on the right is the default. Use `--rotate 270` for the power button on the left; 0 and 180 are portrait.
 - **Connection.** The tablet is reached with `ssh remarkable`, or `tracepaper view --tablet-host HOST` for another host name. If the connection drops, the viewer reconnects by itself, unless another viewer has taken the tablet meanwhile.
-- **The tablet's own app.** It's closed while connected, so strokes don't also land in a notebook there, and the e-ink keeps showing what it showed. The app starts again on disconnecting, or by itself 20 seconds after the connection is lost.
+- **The tablet's own app.** It's closed while connected, so strokes don't also land in a notebook there. The app starts again on disconnecting, or by itself 20 seconds after the connection is lost.
+- **The tablet's screen** is drawn by a small program, `tracepaper/tablet/tracepaper-screen`, which the viewer copies onto the tablet (to `/home/root/.tracepaper/`) when connecting. It's built for the tablet's software version 3.23; after an update of the tablet, rebuild it if the tablet stops showing the view: install reMarkable's [SDK](https://developer.remarkable.com/links) for the new version into `~/codex-sdk/rm2/<version>` and run `tablet/build.sh`. Without the program, the pen still works, just without the picture on the tablet.
 
 ## Using Tracepaper from other projects
 

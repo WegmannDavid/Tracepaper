@@ -33,6 +33,7 @@ TOUCH = report((P.EV_KEY, P.BTN_TOUCH, 1), (P.EV_ABS, P.ABS_PRESSURE, 4095))
 class FakePen:
     """Notes what the server asks of the tablet."""
     size_mm = P.tablet_size(90)
+    pixels = P.screen_size(90)
     running = False
 
     def __init__(self):
@@ -43,6 +44,10 @@ class FakePen:
 
     def disconnect(self):
         self.calls.append("disconnect")
+
+    def show(self, png, done=0):
+        self.calls.append(("show", png, done))
+        return True
 
 
 class DecoderTest(unittest.TestCase):
@@ -68,9 +73,21 @@ class DecoderTest(unittest.TestCase):
         for i in range(0, len(data), 7):  # events split at odd places
             frames += d.feed(data[i:i + 7])
         self.assertEqual(frames, [
-            {"x": 10, "y": 20, "p": 0, "tool": "pen", "touch": False},
-            {"x": 10, "y": 20, "p": 1, "tool": "pen", "touch": True},
+            {"x": 10, "y": 20, "p": 0, "tool": "pen", "touch": False, "done": 0},
+            {"x": 10, "y": 20, "p": 1, "tool": "pen", "touch": True, "done": 0},
         ])
+
+    def test_strokes_are_known_by_when_the_pen_touched_down(self):
+        d = P.Decoder(90)
+        at = lambda sec, usec, *e: P.EVENT.pack(sec, usec, *e)
+        syn = lambda sec, usec: at(sec, usec, P.EV_SYN, P.SYN_REPORT, 0)
+        frames = d.feed(at(5, 1, P.EV_KEY, P.BTN_TOOL_PEN, 1) + syn(5, 1)
+                        + at(7, 250, P.EV_KEY, P.BTN_TOUCH, 1) + syn(7, 250)  # touches down
+                        + at(7, 900, P.EV_ABS, P.ABS_X, 50) + syn(7, 900)
+                        + at(8, 10, P.EV_KEY, P.BTN_TOUCH, 0) + syn(8, 10))  # lifts
+        # The tablet's screen program reads the same events, with the same times (tablet/main.cpp).
+        self.assertEqual([(f["touch"], f["done"]) for f in frames],
+                         [(False, 0), (True, 0), (True, 0), (False, 7_000_250)])
 
     def test_eraser_and_out_of_range(self):
         d = P.Decoder(90)
@@ -196,11 +213,11 @@ class StreamTest(unittest.TestCase):
         self.addCleanup(conn.close)
         return conn.getresponse()
 
-    def post(self, path, client, page=True):
+    def post(self, path, client, page=True, body=None):
         port = self.server.server_address[1]
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         headers = {"Host": f"127.0.0.1:{port}", **({"X-Tracepaper": "1"} if page else {})}
-        conn.request("POST", path, body=json.dumps({"client": client}).encode(), headers=headers)
+        conn.request("POST", path, body=body or json.dumps({"client": client}).encode(), headers=headers)
         r = conn.getresponse()
         body = r.read()
         conn.close()
@@ -228,8 +245,8 @@ class StreamTest(unittest.TestCase):
         r = self.get("/api/pen")
         self.assertEqual((r.status, r.getheader("Content-Type")), (200, "text/event-stream"))
         kind, status = self.next_event(r)
-        self.assertEqual((kind, status["state"], status["width"], status["height"]),
-                         ("status", "off", 209.67, 157.25))  # nothing connects until a page asks
+        self.assertEqual((kind, status["state"], status["width"], status["height"], status["pixels"]),
+                         ("status", "off", 209.67, 157.25, [1872, 1404]))  # nothing connects until a page asks
         self.server.pen_hub.publish_status("connected", "test")
         self.server.pen_hub.publish_frame({"x": 1, "y": 2, "p": 0, "tool": "pen", "touch": False})
         self.assertEqual(self.next_event(r)[1]["state"], "connected")
@@ -245,6 +262,16 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(self.post("/api/pen/disconnect", "b")[0], 200)
         self.assertEqual(pen.calls, ["connect", "disconnect"])
         self.assertEqual(self.post("/api/pen/nonsense", "b")[0], 404)
+
+    def test_pictures_for_the_tablet_come_from_the_window_it_draws_in(self):
+        pen = FakePen()
+        self.start_server(pen)
+        self.post("/api/pen/active", "a")
+        self.assertEqual(self.post("/api/pen/view?client=b", None, body=b"png of b")[0], 409)
+        self.assertEqual(self.post("/api/pen/view?client=a&done=1700000000123456", None, body=b"png of a"),
+                         (200, {"shown": True}))
+        self.assertEqual(pen.calls, [("show", b"png of a", 1700000000123456)])
+        self.assertEqual(self.post("/api/pen/view?client=a", None, page=False, body=b"x")[0], 403)
 
     def test_lets_the_tablet_go_after_the_last_window_closes(self):
         for name, value in (("KEEPALIVE", 0.05), ("LAST_WINDOW", 0.3)):
@@ -270,13 +297,19 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(pen.calls, ["disconnect"])
 
 
-# Stands in for ssh running the script on the tablet: notes how it was started (the
-# script's first line, "owner=... take=..."), says it is ready, sends a pen report,
-# then waits for Tracepaper to disconnect and notes that it cleaned up.
+# Stands in for ssh running a script on the tablet. Copying the screen program: notes
+# what arrived. The session: notes how it was started (from the settings on the script's
+# first line), says it is ready, sends a pen report, then notes what it is sent until
+# Tracepaper disconnects, and that it cleaned up.
 FAKE_TABLET = f"""
 import struct, sys
 log = open(sys.argv[1], "a")
-log.write("start " + sys.argv[-1].splitlines()[0].split()[-1] + "\\n")
+script = sys.argv[-1]
+if "TRACEPAPER-READY" not in script:
+    log.write("copied " + str(len(sys.stdin.buffer.read())) + " bytes\\n")
+    sys.exit(0)
+settings = [t for t in script.splitlines()[0].split() if t.startswith(("take=", "screen="))]
+log.write("start " + " ".join(settings) + "\\n")
 log.flush()
 E = struct.Struct("<IIHHi")
 out = sys.stdout.buffer
@@ -284,14 +317,14 @@ out.write({P.READY!r})
 for kind, code, value in [(1, 0x140, 1), (3, 0, 1000), (3, 1, 2000), (0, 0, 0), (1, 0x14A, 1), (0, 0, 0)]:
     out.write(E.pack(0, 0, kind, code, value))
 out.flush()
-sys.stdin.read()
+log.write("received " + repr(sys.stdin.buffer.read().strip(b"\\n")) + "\\n")
 log.write("app started again\\n")
 """
 
 # Notes how it was started, then fails like ssh does: with a message and an exit status.
 FAILING = """
 import sys
-open(sys.argv[1], "a").write("start " + sys.argv[-1].splitlines()[0].split()[-1] + "\\n")
+open(sys.argv[1], "a").write("start " + sys.argv[-1].splitlines()[0].split()[1] + "\\n")
 sys.stderr.write(sys.argv[2])
 sys.exit(int(sys.argv[3]))
 """
@@ -321,10 +354,11 @@ class ConnectionTest(unittest.TestCase):
         return "connecting" in states and states[-1] == "off"
 
     def failing(self, message, status):
-        return P.RemarkablePen(command=[sys.executable, "-c", FAILING, str(self.log), message, str(status)])
+        return P.RemarkablePen(command=[sys.executable, "-c", FAILING, str(self.log), message, str(status)],
+                               screen=None)
 
     def test_session_streams_and_disconnects_cleanly(self):
-        pen = P.RemarkablePen(rotation=90, command=[sys.executable, "-c", FAKE_TABLET, str(self.log)])
+        pen = P.RemarkablePen(rotation=90, command=[sys.executable, "-c", FAKE_TABLET, str(self.log)], screen=None)
         hub = P.PenHub(pen.size_mm)
         q = hub.subscribe()
         self.assertEqual(hub.status["state"], "off")
@@ -334,9 +368,27 @@ class ConnectionTest(unittest.TestCase):
         self.assertEqual([(f["x"], f["y"], f["touch"]) for f in frames], [(10, 20, False), (10, 20, True)])
         self.assertIn(("status", "connected"), [(k, d["state"]) for k, d in got if k == "status"])
         pen.connect(hub)  # from another window: already connected
+        self.assertFalse(pen.show(b"picture"))  # no screen program here
         pen.disconnect()
-        self.assertEqual(self.starts(), ["start take=1", "app started again"])  # one session, cleaned up
+        # One session, cleaned up.
+        self.assertEqual(self.starts(), ["start take=1 screen=0", "received b''", "app started again"])
         self.assertEqual((hub.status["state"], hub.status["message"], pen.running), ("off", "", False))
+
+    def test_shows_pictures_on_the_tablet(self):
+        program = self.log.with_name("tracepaper-screen")
+        program.write_bytes(b"\x7fELF the screen program")
+        pen = P.RemarkablePen(command=[sys.executable, "-c", FAKE_TABLET, str(self.log)], screen=program)
+        hub = P.PenHub(pen.size_mm, pen.pixels)
+        q = hub.subscribe()
+        pen.connect(hub)
+        self.collect(q, lambda g: any(k == "status" and d["state"] == "connected" for k, d in g))
+        self.assertTrue(hub.status["screen"])
+        self.assertTrue(pen.show(b"PNG\nwith a newline", 1700000000123456))
+        pen.disconnect()
+        self.assertEqual(self.starts(), [f"copied {program.stat().st_size} bytes", "start take=1 screen=1",
+                                         "received b'view 18 1700000000123456\\nPNG\\nwith a newline'",
+                                         "app started again"])
+        self.assertFalse(pen.show(b"picture"))  # disconnected
 
     def test_retries_without_taking_the_tablet_over(self):
         pen = self.failing("no route to host", 255)
@@ -350,8 +402,9 @@ class ConnectionTest(unittest.TestCase):
         # Only pressing Connect takes the tablet from another viewer; trying again doesn't.
         self.assertEqual((starts[0], set(starts[1:])), ("start take=1", {"start take=0"}))
 
-    def test_stops_when_another_viewer_has_the_tablet(self):
-        for status, message in ((P.TAKEN, "taken by another viewer"), (P.BUSY, "in use by another viewer")):
+    def test_stops_when_another_viewer_has_the_tablet_or_it_was_disconnected_there(self):
+        for status, message in ((P.TAKEN, "taken by another viewer"), (P.BUSY, "in use by another viewer"),
+                                (P.LEFT, "disconnected on the tablet")):
             with self.subTest(message):
                 self.log.unlink(missing_ok=True)
                 pen = self.failing(message, status)
