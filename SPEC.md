@@ -74,9 +74,10 @@ Every attribute is optional free text unless stated otherwise.
 ```
 
 - Layers are `<g>` elements with `inkscape:groupmode="layer"`. `inkscape:label` is the name the person sees. This is Inkscape's convention, so Inkscape shows the same layers.
-- Layers form a tree. The root's layers are the top level; a layer MAY contain **sublayers**, nested to any depth, which group related layers (for example Dimensions › Overall, Dimensions › Details). Order is drawing order: later layers are drawn on top. The viewer shows the tree with the topmost layer first, and switching a layer off hides everything in it.
-- Every top-level layer MUST have exactly `transform="scale(1,-1)"`. Sublayers MUST NOT have a `transform`, since they're already inside the flip.
-- A layer that starts hidden has `style="display:none"`. The AI decides what starts visible, and the person can toggle any layer.
+- **The tree.** A sheet's nodes are its *named groups*: `<g>` elements with an `inkscape:label`. The top-level nodes are the layers. Below them, every named group is a node too, whether it's a sublayer (`inkscape:groupmode="layer"`, as Inkscape writes them) or a named part holding several drawings of it. Unnamed groups in between don't count: the named groups inside them belong to the nearest named group above. Models have the same kind of tree (§2.8), and the viewer shows both in the same panel.
+- Order is drawing order: later nodes are drawn on top. The viewer lists the topmost first. Hiding a node hides everything in it.
+- Every top-level layer MUST have exactly `transform="scale(1,-1)"`. Nested groups SHOULD NOT have a `transform`, so everything stays in model coordinates.
+- A node that starts hidden has `style="display:none"`. The AI decides what starts visible. The person can hide or show any node in their window; that choice isn't stored.
 - All drawing SHOULD be inside layers.
 - The label `Sketch` and the id `tp-sketch` are reserved for the person's ink (§3). It is always a top-level layer.
 
@@ -192,7 +193,8 @@ A model is a glTF 2.0 binary file (`.glb`) showing a part or an assembly in 3D. 
 
 - **What to write:** only what the person should look at, typically one coloured assembly per file, not every intermediate shape. With CadQuery: `assembly.export("views/frame.glb")`.
 - **Units and orientation:** millimetres. CAD's z-up coordinates are turned into glTF's y-up by a rotation on the root node, as CadQuery (OpenCascade) writes it. Fronts face −y in CAD coordinates.
-- **Structure:** the node tree is the assembly tree, with names. Colours come from the materials.
+- **The tree:** a model's nodes are its named glTF nodes, which form the assembly tree. Unnamed nodes don't count, and if there is a single top node (the assembly itself), it's left out so that its parts are the top level. A node's path is its names joined with ` / `, as in `Steel / Z profile`. Colours come from the materials.
+- **Hidden at first:** a node marked `"extras": {"tracepaper": {"hidden": true}}` starts hidden. `tracepaper.model.export(assembly, path, hidden=[…])` writes a CadQuery assembly with such marks, taking paths or plain names (a plain name hides every node of that name).
 - **Faces:** each CAD face SHOULD be its own primitive, as OpenCascade writes it. The viewer draws each primitive's outline as the model's edges.
 - **Writing:** write to a temporary file and rename it into place, so the viewer never reads half a model.
 
@@ -243,6 +245,7 @@ If the result isn't right, the person sketches again or says so, and the loop re
 
 - lists the project's views (sheets and models in the folder and up to three folders below it) on a project page. Each view opens in a window of its own, so several can be watched side by side, and reloads when its file changes on disk;
 - shows models (§2.8) in 3D: rotate, pan, zoom, standard directions. The camera stays where it is when the model reloads;
+- shows each view's tree (§2.4, §2.8) in the same panel, where the person can hide and show nodes in that window. Their choices last while the window is open, including when the file is rewritten, and aren't stored;
 - toggles layers, lets the person drag annotations (§2.6), and provides a pen with a few colours;
 - can take ink from a drawing tablet, such as a reMarkable 2 with `--remarkable`. The tablet covers the current view of the window the person used last with the mouse (or opened last), fitted at one scale for both axes so drawings keep their proportions, while the mouse keeps doing everything else;
 - writes the sketch file on Save (§3), and clears the ink once the AI has deleted that file;

@@ -35,14 +35,15 @@ Read `SPEC.md` in this skill's folder every time you start working with sheets i
    - model coordinates in mm, y up, every layer flipped with `transform="scale(1,-1)"`;
    - stable, meaningful ids, and `tp:source` pointers back into the model;
    - dimensions and constraint symbols as annotation groups the user can drag.
-4. Show what helps the user judge the design. Put the rest on hidden layers or leave it out, and agree on this with them. Group related layers as sublayers (`layer.sublayer("Overall")` in `tracepaper.sheet`), for example the dimensions of each part; the viewer shows them as a tree.
+4. Show what helps the user judge the design. Put the rest on hidden layers or leave it out, and agree on this with them. Group related things as sublayers (`layer.sublayer("Overall")` in `tracepaper.sheet`), for example the dimensions of each part. Every named group is a node in the viewer's tree, which the user can hide in their window. When a sheet and a model show the same parts, give them the same names.
 5. Render the sheets and look at them before telling the user they're ready.
 
 ## Making models (3D views)
 
-- At the end of the build, write the assembly the user wants to look at as a `.glb` into the views folder. With CadQuery: `assembly.export(str(tmp), exportType="GLB")`, then rename `tmp` onto the final name, so the viewer never reads half a file.
+- At the end of the build, write the assembly the user wants to look at into the views folder with `tracepaper.model.export(assembly, "views/window.glb", hidden=[...])`. It writes a CadQuery assembly safely: to a temporary file first, then renamed, so the viewer never reads half a file.
+- `hidden` lists what starts hidden when the user opens the model, as paths in the tree (`"Steel / Z profile"`) or plain names (`"Glass"` hides every part called Glass). Set it when the user asks for a default, such as "glass hidden".
 - Write only what they'd look at, typically the coloured assembly, not every intermediate shape. Use separate files for separate things, for example the whole window and one corner joint.
-- Name the assembly's parts, since the names show up in the model, and give them colours.
+- Name the assembly's parts and group them into subassemblies, since that becomes the tree the user hides things with. Give the parts colours.
 - Spec §2.8 has the details: millimetres, z up, faces as separate primitives, which CadQuery all does by default.
 
 ## When the user says they sketched something

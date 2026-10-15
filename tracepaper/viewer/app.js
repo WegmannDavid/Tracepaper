@@ -3,6 +3,7 @@
 // Save writes <sheet>.sketch.svg (SPEC.md §3).
 import * as A from './annotations.js';
 import * as Pen from './pen.js';
+import { flatten, renderTree } from './tree.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const INK_NS = 'http://www.inkscape.org/namespaces/inkscape';
@@ -62,19 +63,35 @@ async function fetchOk(url, init = {}) {
 // ---- Sheet document ---------------------------------------------------------
 
 const isLayer = (n) => n.namespaceURI === SVG_NS && n.localName === 'g' && n.getAttributeNS(INK_NS, 'groupmode') === 'layer';
-const layersOf = (parent) => [...parent.children].filter(isLayer); // its direct sublayers
+const layersOf = (parent) => [...parent.children].filter(isLayer); // its top-level layers
 const labelOf = (g) => g.getAttributeNS(INK_NS, 'label') || g.id || 'Layer';
 
-// A layer's place in the tree, e.g. "Dimensions / Overall": how its visibility is remembered.
+// The nodes of the tree (SPEC.md §2.4): groups with a name. Top-level ones are layers.
+const isNode = (n) => isLayer(n) || (n.namespaceURI === SVG_NS && n.localName === 'g' && n.hasAttributeNS(INK_NS, 'label'));
+const NOT_DRAWN = new Set(['defs', 'metadata', 'pattern', 'clipPath', 'mask', 'marker', 'symbol', 'style', 'script']);
+
+// A node's place in the tree, e.g. "Dimensions / Overall": how a window remembers it is hidden.
 function pathOf(g) {
   const names = [];
-  for (let n = g; n && n !== state.root; n = n.parentNode) if (isLayer(n)) names.unshift(labelOf(n));
+  for (let n = g; n && n !== state.root; n = n.parentNode) if (isNode(n)) names.unshift(labelOf(n));
   return names.join(' / ');
 }
 
-function allLayers(parent) {
-  return layersOf(parent).flatMap((g) => [g, ...allLayers(g)]);
+// The tree of named groups under parent; unnamed groups in between don't count.
+function buildTree(parent, above = '') {
+  const nodes = [];
+  for (const child of parent.children) {
+    if (isNode(child)) {
+      const key = above ? `${above} / ${labelOf(child)}` : labelOf(child);
+      nodes.push({ key, name: labelOf(child), hidden: isHidden(child), el: child, children: buildTree(child, key) });
+    } else if (!NOT_DRAWN.has(child.localName)) {
+      nodes.push(...buildTree(child, above));
+    }
+  }
+  return nodes;
 }
+
+const allNodes = (root) => flatten(buildTree(root)).map((n) => n.el);
 const isHidden = (n) => n.getAttribute('display') === 'none' || n.style?.display === 'none';
 
 function setHidden(g, hidden) {
@@ -187,7 +204,7 @@ async function openSheet(name, { reload = false } = {}) {
     } else {
       Object.assign(state, { moved: new Map(), undo: [], dirty: false });
     }
-    for (const g of allLayers(root)) {
+    for (const g of allNodes(root)) {
       const visible = state.layerVis.get(pathOf(g));
       if (visible !== undefined) setHidden(g, !visible);
     }
@@ -220,51 +237,20 @@ function showEmpty(message) {
 
 // ---- Panels and status ------------------------------------------------------
 
-// The layer tree, topmost first as drawn. Sublayers fold away under their layer.
+// The tree panel, topmost first as drawn.
 function renderLayers() {
   ui.layers.replaceChildren();
   if (!state.root) return;
-  const item = (g, hiddenAbove) => {
-    const key = pathOf(g), kids = layersOf(g).reverse(), open = !state.collapsed.has(key);
-    const li = document.createElement('li');
-    const row = document.createElement('div');
-    row.className = `tpv-layer${hiddenAbove ? ' tpv-under-hidden' : ''}`;
-    const twisty = document.createElement('button');
-    twisty.className = 'tpv-twisty';
-    if (kids.length) {
-      twisty.textContent = open ? '▾' : '▸';
-      twisty.setAttribute('aria-label', `${open ? 'Fold' : 'Unfold'} ${labelOf(g)}`);
-      twisty.addEventListener('click', () => {
-        if (open) state.collapsed.add(key); else state.collapsed.delete(key);
-        renderLayers();
-      });
-    } else {
-      twisty.disabled = true;
-    }
-    const label = document.createElement('label');
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.checked = !isHidden(g);
-    box.addEventListener('change', () => setLayerVisible(key, box.checked));
-    const name = document.createElement('span');
-    name.textContent = labelOf(g);
-    label.append(box, name);
-    row.append(twisty, label);
-    li.append(row);
-    if (g === state.ink) li.className = 'tpv-ink';
-    if (kids.length && open) {
-      const ul = document.createElement('ul');
-      ul.append(...kids.map((k) => item(k, hiddenAbove || isHidden(g))));
-      li.append(ul);
-    }
-    return li;
-  };
-  ui.layers.append(...layersOf(state.root).reverse().map((g) => item(g, false)));
+  renderTree(ui.layers, buildTree(state.root), {
+    collapsed: state.collapsed, topFirst: true,
+    onToggle: (node, hidden) => setLayerVisible(node.key, !hidden),
+    mark: (node) => (node.el === state.ink ? 'tpv-ink' : ''),
+  });
 }
 
-// key is a layer's path in the tree (pathOf); a top-level layer's path is its name.
+// key is a node's path in the tree (pathOf); a top-level layer's path is its name.
 function setLayerVisible(key, visible) {
-  const g = state.root && allLayers(state.root).find((l) => pathOf(l) === key);
+  const g = state.root && allNodes(state.root).find((n) => pathOf(n) === key);
   if (!g) return;
   setHidden(g, !visible);
   state.layerVis.set(key, visible);
@@ -660,7 +646,7 @@ function pickAt(clientX, clientY) {
       if (!color) continue; // e.g. the hatching's pattern fill: look further down
       const named = el.closest('[id]');
       const id = named && named !== state.root && state.root.contains(named) ? named.id : null;
-      const layer = allLayers(state.root).filter((g) => g.contains(el)).pop(); // the innermost
+      const layer = allNodes(state.root).filter((g) => g.contains(el)).pop(); // the innermost
       return { el, color, from: { id, layer: layer ? pathOf(layer) : null } };
     }
   }

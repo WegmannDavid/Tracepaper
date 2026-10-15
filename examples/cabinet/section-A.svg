@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" xmlns:tp="urn:tracepaper:0" width="575mm" height="936mm" viewBox="-102 -906 575 936" font-family="DejaVu Sans, Arial, sans-serif" font-size="14">
+  <metadata>
+    <tp:view title="Cabinet, section A-A" source="examples/cabinet/make_views.py" pipeline="python" regenerate="python3 examples/cabinet/make_views.py" kind="section" origin="300 0 0" normal="1 0 0" xdir="0 1 0" />
+  </metadata>
+  <defs>
+    <pattern id="tp-hatch" patternUnits="userSpaceOnUse" width="2" height="2" patternTransform="rotate(45)">
+      <path d="M1 0 V2" stroke="#1a1a1a" stroke-width="0.18" />
+    </pattern>
+  </defs>
+  <g id="layer-carcass" inkscape:groupmode="layer" inkscape:label="Carcass" transform="scale(1,-1)" stroke="#1a1a1a" stroke-width="0.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g id="layer-carcass-left-side" inkscape:groupmode="layer" inkscape:label="left side" stroke="#1a1a1a" stroke-width="0.25" fill="none">
+      <path id="left-side" d="M0 0 L350 0 L350 800 L0 800 Z" tp:source="left side, beyond the cut" />
+    </g>
+    <g id="layer-carcass-top" inkscape:groupmode="layer" inkscape:label="top">
+      <path id="top-cut" d="M0 782 L350 782 L350 800 L0 800 Z" fill="url(#tp-hatch)" stroke="none" />
+      <path id="top" d="M0 782 L350 782 L350 800 L0 800 Z" tp:source="top" />
+    </g>
+    <g id="layer-carcass-bottom" inkscape:groupmode="layer" inkscape:label="bottom">
+      <path id="bottom-cut" d="M0 0 L350 0 L350 18 L0 18 Z" fill="url(#tp-hatch)" stroke="none" />
+      <path id="bottom" d="M0 0 L350 0 L350 18 L0 18 Z" tp:source="bottom" />
+    </g>
+  </g>
+  <g id="layer-shelves" inkscape:groupmode="layer" inkscape:label="Shelves" transform="scale(1,-1)" stroke="#1a1a1a" stroke-width="0.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g id="layer-shelves-shelf-1" inkscape:groupmode="layer" inkscape:label="shelf 1">
+      <path id="shelf-1-cut" d="M0 270 L330 270 L330 288 L0 288 Z" fill="url(#tp-hatch)" stroke="none" />
+      <path id="shelf-1" d="M0 270 L330 270 L330 288 L0 288 Z" tp:source="shelf 1" />
+    </g>
+    <g id="layer-shelves-shelf-2" inkscape:groupmode="layer" inkscape:label="shelf 2">
+      <path id="shelf-2-cut" d="M0 530 L330 530 L330 548 L0 548 Z" fill="url(#tp-hatch)" stroke="none" />
+      <path id="shelf-2" d="M0 530 L330 530 L330 548 L0 548 Z" tp:source="shelf 2" />
+    </g>
+  </g>
+  <g id="layer-back-panel" inkscape:groupmode="layer" inkscape:label="back panel" transform="scale(1,-1)" stroke="#1a1a1a" stroke-width="0.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path id="back-panel-cut" d="M350 0 L356 0 L356 800 L350 800 Z" fill="url(#tp-hatch)" stroke="none" />
+    <path id="back-panel" d="M350 0 L356 0 L356 800 L350 800 Z" tp:source="back panel" />
+  </g>
+  <g id="layer-door" inkscape:groupmode="layer" inkscape:label="Door" transform="scale(1,-1)" stroke="#1a1a1a" stroke-width="0.5" fill="none" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+    <g id="layer-door-door-panel" inkscape:groupmode="layer" inkscape:label="door panel">
+      <path id="door-panel-cut" d="M-20 2 L-2 2 L-2 798 L-20 798 Z" fill="url(#tp-hatch)" stroke="none" />
+      <path id="door-panel" d="M-20 2 L-2 2 L-2 798 L-20 798 Z" tp:source="door panel" />
+    </g>
+  </g>
+  <g id="layer-dimensions" inkscape:groupmode="layer" inkscape:label="Dimensions" transform="scale(1,-1)" stroke="#475569" fill="#475569" stroke-width="0.25">
+    <g id="layer-dimensions-overall" inkscape:groupmode="layer" inkscape:label="Overall">
+      <g id="d-height" tp:type="distance" tp:dim="linear" tp:p1="0 0" tp:p2="0 800" tp:dir="y" tp:offset="50" tp:label="800" tp:value="800">
+        <path d="M-4.2 0 L-57 0 M-4.2 800 L-57 800 M-50 0 L-50 800" fill="none" />
+        <path d="M-50 0 L-47.9 10.5 L-52.1 10.5 Z M-50 800 L-52.1 789.5 L-47.9 789.5 Z" stroke="none" />
+        <text transform="translate(-53.5 400) rotate(90) scale(1,-1)" text-anchor="middle" stroke="none">800</text>
+      </g>
+      <g id="d-depth" tp:type="distance" tp:dim="linear" tp:p1="0 800" tp:p2="350 800" tp:dir="x" tp:offset="40" tp:label="350" tp:value="350">
+        <path d="M0 804.2 L0 847 M350 804.2 L350 847 M0 840 L350 840" fill="none" />
+        <path d="M0 840 L10.5 837.9 L10.5 842.1 Z M350 840 L339.5 842.1 L339.5 837.9 Z" stroke="none" />
+        <text transform="translate(175 843.5) scale(1,-1)" text-anchor="middle" stroke="none">350</text>
+      </g>
+    </g>
+    <g id="layer-dimensions-shelves" inkscape:groupmode="layer" inkscape:label="Shelves">
+      <g id="d-shelf-1" tp:type="distance" tp:dim="linear" tp:p1="356 0" tp:p2="356 270" tp:dir="y" tp:offset="-40" tp:label="270" tp:value="270">
+        <path d="M360.2 0 L403 0 M360.2 270 L403 270 M396 0 L396 270" fill="none" />
+        <path d="M396 0 L398.1 10.5 L393.9 10.5 Z M396 270 L393.9 259.5 L398.1 259.5 Z" stroke="none" />
+        <text transform="translate(392.5 135) rotate(90) scale(1,-1)" text-anchor="middle" stroke="none">270</text>
+      </g>
+      <g id="d-shelf-2" tp:type="distance" tp:dim="linear" tp:p1="356 0" tp:p2="356 530" tp:dir="y" tp:offset="-80" tp:label="530" tp:value="530">
+        <path d="M360.2 0 L443 0 M360.2 530 L443 530 M436 0 L436 530" fill="none" />
+        <path d="M436 0 L438.1 10.5 L433.9 10.5 Z M436 530 L433.9 519.5 L438.1 519.5 Z" stroke="none" />
+        <text transform="translate(432.5 265) rotate(90) scale(1,-1)" text-anchor="middle" stroke="none">530</text>
+      </g>
+    </g>
+    <g id="layer-dimensions-door" inkscape:groupmode="layer" inkscape:label="Door" style="display:none">
+      <g id="d-door" tp:type="distance" tp:dim="linear" tp:p1="-20 798" tp:p2="-2 798" tp:dir="x" tp:offset="60" tp:label="18" tp:value="18">
+        <path d="M-20 802.2 L-20 865 M-2 802.2 L-2 865 M-38.9 858 L16.9 858" fill="none" />
+        <path d="M-20 858 L-30.5 860.1 L-30.5 855.9 Z M-2 858 L8.5 855.9 L8.5 860.1 Z" stroke="none" />
+        <text transform="translate(-11 861.5) scale(1,-1)" text-anchor="middle" stroke="none">18</text>
+      </g>
+    </g>
+  </g>
+</svg>

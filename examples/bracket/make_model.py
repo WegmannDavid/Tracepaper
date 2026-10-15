@@ -13,6 +13,8 @@ import cadquery as cq
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from make_sheets import FILLET, FLANGE_END, HEIGHT, HERE, HOLE_D, HOLE_X, HOLE_Y, LENGTH, T, WIDTH  # noqa: E402
 
+import tracepaper.model  # noqa: E402  (make_sheets put the checkout on the path)
+
 
 def bracket() -> cq.Workplane:
     top = HEIGHT - T
@@ -39,8 +41,4 @@ def assembly() -> cq.Assembly:
 
 
 if __name__ == "__main__":
-    path = HERE / "bracket.glb"
-    tmp = path.with_name(path.name + ".tmp")
-    assembly().export(str(tmp), exportType="GLB")
-    tmp.replace(path)  # the viewer may be reading the old file
-    print(path)
+    print(tracepaper.model.export(assembly(), HERE / "bracket.glb"))

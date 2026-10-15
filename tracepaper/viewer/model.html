@@ -26,13 +26,17 @@
   <span id="tpv-pen" class="tpv-pen" hidden></span>
   <span id="tpv-status" class="tpv-status" role="status"></span>
 </header>
-<main class="tpv-main-3d">
+<main>
   <div class="tpv-stage-wrap">
     <canvas id="tpv-canvas"></canvas>
     <div id="tpv-empty" class="tpv-empty">Loading…</div>
     <div class="tpv-coords">Drag to rotate · right-drag to pan · scroll to zoom</div>
     <div id="tpv-toast" class="tpv-toast" role="status" hidden></div>
   </div>
+  <aside class="tpv-panel">
+    <h2>Tree</h2>
+    <ul id="tpv-layers"></ul>
+  </aside>
 </main>
 <script type="module" src="/viewer/model.js"></script>
 </body>

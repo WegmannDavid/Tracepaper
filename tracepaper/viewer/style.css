@@ -207,8 +207,7 @@ kbd, code {
   border: 1px solid var(--line);
 }
 
-/* The 3D view: the canvas fills the window. */
-main.tpv-main-3d { grid-template-columns: minmax(0, 1fr); }
+/* The 3D view: the canvas fills its part of the window. */
 #tpv-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
 /* The project page. */

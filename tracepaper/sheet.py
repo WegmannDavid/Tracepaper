@@ -30,6 +30,7 @@ ET.register_namespace("tp", TP_NS)
 
 DEFAULT_FONT = "DejaVu Sans, Arial, sans-serif"
 HATCH_ID = "tp-hatch"
+HATCH = f"url(#{HATCH_ID})"  # fill=HATCH hatches a shape, e.g. a part's cut face inside its own group
 
 Point = Sequence[float]
 
@@ -330,6 +331,8 @@ class Layer:
         if source:
             el.set(_tp("source"), source)
         el.attrib.update(_attrs(extra))
+        if el.get("fill") == HATCH:
+            self.sheet.uses_hatch = True
         self.sheet._grow(points)
         return el
 

@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { flatten, renderTree } from './tree.js';
 
 const POLL_MS = 1000;
 const EDGE_ANGLE = 25; // degrees: within a face, triangles meeting at less than this get no edge line
@@ -14,7 +15,7 @@ const CLIENT = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const $ = (id) => document.getElementById(id);
 const ui = {
   canvas: $('tpv-canvas'), view: $('tpv-view'), status: $('tpv-status'), empty: $('tpv-empty'),
-  toast: $('tpv-toast'), pen: $('tpv-pen'), fit: $('tpv-fit'),
+  toast: $('tpv-toast'), pen: $('tpv-pen'), fit: $('tpv-fit'), tree: $('tpv-layers'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
 const viewUrl = (name) => `/view/${name.split('/').map(encodeURIComponent).join('/')}`;
@@ -46,7 +47,11 @@ controls.zoomToCursor = true;
 controls.addEventListener('change', render);
 
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x1f2328 });
-const state = { model: null, mtime: null, half: 1, loads: 0, views: [], viewsKey: '' };
+const state = {
+  model: null, mtime: null, half: 1, loads: 0, views: [], viewsKey: '',
+  tree: [], collapsed: new Set(),
+  choices: new Map(), // key -> hidden, what this window's person switched; kept when the model reloads
+};
 let resolveReady;
 const ready = new Promise((resolve) => { resolveReady = resolve; });
 
@@ -66,10 +71,15 @@ function resize() {
   render();
 }
 
-// Look at the whole model from a CAD direction; without one, keep the current direction.
+// Look at the whole model (what is shown of it) from a CAD direction; without one,
+// keep the current direction.
 function frame(look) {
   if (!state.model) return;
-  const sphere = new THREE.Box3().setFromObject(state.model).getBoundingSphere(new THREE.Sphere());
+  const box = new THREE.Box3();
+  state.model.updateMatrixWorld(true);
+  state.model.traverseVisible((o) => { if (o.isMesh) box.expandByObject(o); });
+  if (box.isEmpty()) box.setFromObject(state.model);
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
   if (!(sphere.radius > 0)) return;
   const dir = look ? toScene(look).normalize() : camera.position.clone().sub(controls.target).normalize();
   controls.target.copy(sphere.center);
@@ -96,6 +106,48 @@ function prepare(root) {
   }
 }
 
+// The tree of the model's named glTF nodes (SPEC.md §2.8). Faces and unnamed nodes don't
+// count; a single top node (the assembly itself) is left out, so its parts are the top level.
+function buildTree(gltf) {
+  const json = gltf.parser.json.nodes ?? [];
+  const nodeOf = (o) => json[gltf.parser.associations.get(o)?.nodes];
+  const under = (obj, above) => obj.children.flatMap((child) => {
+    const def = nodeOf(child);
+    if (!def?.name) return under(child, above);
+    const key = above ? `${above} / ${def.name}` : def.name;
+    return [{ key, name: def.name, hidden: !!def.extras?.tracepaper?.hidden, obj: child, children: under(child, key) }];
+  });
+  const top = under(gltf.scene, '');
+  if (top.length !== 1 || !top[0].children.length) return top;
+  const rekey = (n, above) => {
+    const key = above ? `${above} / ${n.name}` : n.name;
+    return { ...n, key, children: n.children.map((c) => rekey(c, key)) };
+  };
+  return top[0].children.map((c) => rekey(c, ''));
+}
+
+// Hide what the file or this window's person hid.
+function applyTree() {
+  for (const node of flatten(state.tree)) {
+    if (state.choices.has(node.key)) node.hidden = state.choices.get(node.key);
+    node.obj.visible = !node.hidden;
+  }
+  renderPanel();
+}
+
+function renderPanel() {
+  renderTree(ui.tree, state.tree, {
+    collapsed: state.collapsed,
+    onToggle: (node, hidden) => {
+      state.choices.set(node.key, hidden);
+      node.hidden = hidden;
+      node.obj.visible = !hidden;
+      renderPanel();
+      render();
+    },
+  });
+}
+
 function dispose(root) {
   root.traverse((o) => {
     o.geometry?.dispose();
@@ -115,6 +167,8 @@ async function load(mtime) {
   }
   state.model = gltf.scene;
   scene.add(state.model);
+  state.tree = buildTree(gltf);
+  applyTree();
   state.mtime = mtime;
   state.loads += 1;
   ui.empty.hidden = true;
@@ -217,4 +271,4 @@ poll();
 connectPen();
 
 // For debugging from the console and for tests/test_browser.py.
-window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT };
+window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, flatten };

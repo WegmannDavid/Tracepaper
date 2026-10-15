@@ -16,6 +16,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from tracepaper.model import mark_hidden
 from tracepaper.pen import tablet_size
 from tracepaper.server import make_server
 from tracepaper.sheet import PathBuilder, Sheet
@@ -134,7 +135,15 @@ class ViewerInFirefox(unittest.TestCase):
         dims = tree.layer("Dimensions")
         dims.sublayer("Overall").linear("d-w", (0, 0), (40, 0), "40", dir="x", offset=-8)
         dims.sublayer("Details", visible=False).linear("d-h", (40, 0), (40, 20), "20", dir="y", offset=-8)
-        tree.save(cls.dir / "tree.svg")
+        root = tree.to_element()
+        outline = root.find(f"{SVG}g[@id='layer-outline']")
+        wrapper = ET.SubElement(outline, f"{SVG}g")  # an unnamed group: not a node, its named one is
+        bolt = ET.SubElement(wrapper, f"{SVG}g", {f"{INK}label": "Bolt"})
+        ET.SubElement(bolt, f"{SVG}circle", {"id": "bolt", "cx": "20", "cy": "10", "r": "3"})
+        ET.ElementTree(root).write(cls.dir / "tree.svg", encoding="unicode")
+        # The bracket again, with its screw hidden at first.
+        shutil.copy(cls.dir / "bracket.glb", cls.dir / "hidden-screw.glb")
+        mark_hidden(cls.dir / "hidden-screw.glb", ["screw"])
         cls.server = make_server(cls.dir / "section-A.svg", 0, FakePen())
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
 
@@ -245,12 +254,34 @@ class ViewerInFirefox(unittest.TestCase):
         """)
         self.assertEqual(got["before"], [["Sketch", True, False], ["Dimensions", True, False],
                                          ["Details", False, False], ["Overall", True, False],
-                                         ["Outline", True, False]])
+                                         ["Outline", True, False], ["Bolt", True, False]])
         self.assertEqual(got["parentOff"][1:4], [["Dimensions", False, False], ["Details", False, True],
                                                  ["Overall", True, True]])
         self.assertTrue(got["hiddenByParent"])  # a sublayer's content disappears with its parent
         self.assertEqual(got["detailsOn"][2], ["Details", True, False])
-        self.assertEqual([r[0] for r in got["folded"]], ["Sketch", "Dimensions", "Outline"])
+        self.assertEqual([r[0] for r in got["folded"]], ["Sketch", "Dimensions", "Outline", "Bolt"])
+
+    def test_model_tree(self):
+        self.open_viewer("hidden-screw.glb")
+        rows = """
+            const t = window.tracepaper3d;
+            const rows = () => [...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
+              r.querySelector('span').textContent, r.querySelector('input').checked]);
+            const shown = () => Object.fromEntries(t.flatten(t.state.tree).map((n) => [n.key, n.obj.visible]));
+            const click = (name) => [...document.querySelectorAll('#tpv-layers .tpv-layer')]
+              .find((r) => r.querySelector('span').textContent === name).querySelector('input').click();
+        """
+        first = self.m.run(rows + "done({ rows: rows(), shown: shown() });")
+        self.assertEqual(first, {"rows": [["body", True], ["screw", False]],  # the file hides the screw
+                                 "shown": {"body": True, "screw": False}})
+        clicked = self.m.run(rows + "click('screw'); click('body'); done({ rows: rows(), shown: shown() });")
+        self.assertEqual(clicked, {"rows": [["body", False], ["screw", True]], "shown": {"body": False, "screw": True}})
+
+        # The build writes the model again: this window's choices stay.
+        model = self.dir / "hidden-screw.glb"
+        model.write_bytes(model.read_bytes())
+        self.assertTrue(self.m.run("until(() => window.tracepaper3d.state.loads === 2, done);"))
+        self.assertEqual(self.m.run(rows + "done(shown());"), {"body": False, "screw": True})
 
     def test_model_view(self):
         self.open_viewer("bracket.glb")
