@@ -59,6 +59,17 @@ The tablet shows the sheet you draw on, lined up with the pen, so you can look a
 - **Aspect ratio.** The view's shape is fitted into the middle of the tablet at one scale for both axes, so a circle drawn on the tablet stays a circle. The toolbar shows how much of the tablet that is; the strips outside it do nothing.
 - **Holding the tablet.** Landscape with the power button on the right is the default. Use `--rotate 270` for the power button on the left; 0 and 180 are portrait.
 - **Connection.** The tablet is reached with `ssh remarkable`, or `tracepaper view --tablet-host HOST` for another host name. If the connection drops, the viewer reconnects by itself, unless another viewer has taken the tablet meanwhile.
+- **Setting up a computer for it,** once. The USB cable makes a small network of its own, where the tablet is always `10.11.99.1`, so it needs no Wi-Fi or internet. Add to `~/.ssh/config`:
+
+  ```
+  Host remarkable
+      HostName 10.11.99.1
+      User root
+      UserKnownHostsFile /dev/null
+      StrictHostKeyChecking no
+  ```
+
+  Then, with the tablet plugged in and awake, run `ssh-copy-id remarkable` (after `ssh-keygen -t ed25519` if the computer has no key yet). It asks once for the tablet's password, shown under Settings → Help → Copyrights and licenses. The viewer logs in without asking, so it needs the key. `ssh remarkable echo ok` should then print `ok` without asking for anything. Several computers can be set up this way; one at a time has the tablet.
 - **The tablet's own app.** It's closed while connected, so strokes don't also land in a notebook there. The app starts again on disconnecting, or by itself 20 seconds after the connection is lost.
 - **The tablet's screen** is drawn by a small program, `tracepaper/tablet/tracepaper-screen`, which the viewer copies onto the tablet (to `/home/root/.tracepaper/`) when connecting. It's built for the tablet's software version 3.23; after an update of the tablet, rebuild it if the tablet stops showing the view: install reMarkable's [SDK](https://developer.remarkable.com/links) for the new version into `~/codex-sdk/rm2/<version>` and run `tablet/build.sh`. Without the program, the pen still works, just without the picture on the tablet.
 
