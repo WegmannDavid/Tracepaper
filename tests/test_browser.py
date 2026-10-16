@@ -365,7 +365,7 @@ class ViewerInFirefox(unittest.TestCase):
             const names = [];
             t.state.model.traverse((o) => {
               if (o.isMesh && o.layers.isEnabled(0)) meshes++;
-              if (o.isLineSegments) { edges++; faces += new Set(o.geometry.attributes.face.array).size; }
+              if (o.isMesh && o.layers.isEnabled(2)) { edges++; faces += new Set(o.geometry.attributes.face.array).size; }
               if (o.name) names.push(o.name);
             });
             const dir = t.camera.position.clone().sub(t.controls.target).normalize();
@@ -522,6 +522,37 @@ class ViewerInFirefox(unittest.TestCase):
             self.assertGreater(r["size"], 8, r)  # the part covers some pixels
             self.assertGreater(r["dark"], 20, r)  # the veneer's own edges are drawn
             self.assertEqual(r["under"], 0, r)
+
+    def test_edges_can_be_hidden(self):
+        self.open_viewer("bracket.glb")
+        got = self.m.run("""
+            const canvas = document.getElementById('tpv-canvas'), button = document.getElementById('tpv-edges');
+            const dark = (url) => new Promise((resolve) => {  // pixels as dark as the edges
+              const img = new Image();
+              img.onload = () => {
+                const c = Object.assign(document.createElement('canvas'), { width: img.width, height: img.height });
+                c.getContext('2d').drawImage(img, 0, 0);
+                const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+                let n = 0;
+                for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] < 3 * 80) n++;
+                resolve(n);
+              };
+              img.src = url;
+            });
+            const shot = () => canvas.toDataURL();  // right after the click's render
+            (async () => {
+              window.tracepaper3d.showEdges(true);  // renders
+              const on = shot();
+              button.click();
+              const off = shot(), pressed = button.getAttribute('aria-pressed');
+              button.click();
+              const again = shot();
+              done({ on: await dark(on), off: await dark(off), again: await dark(again), pressed });
+            })();
+        """)
+        self.assertEqual(got["pressed"], "false")
+        self.assertLess(got["off"] * 5, got["on"])  # the edges were most of the dark pixels
+        self.assertEqual(got["again"], got["on"])
 
     def test_pen_follows_last_used_window(self):
         hub = self.server.pen_hub

@@ -11,6 +11,9 @@ import { Tablet } from './pen.js';
 import { flatten, renderTree } from './tree.js';
 
 const POLL_MS = 1000;
+// Drawn at this many times the screen's resolution and scaled down, which smooths edges and
+// outlines; less on screens that are sharp already.
+const SUPERSAMPLE = window.devicePixelRatio >= 2 ? 1.5 : 2;
 const EDGE_ANGLE = 25; // degrees: within a face, triangles meeting at less than this get no edge line
 // Directions to look from and which way is up on screen, in CAD coordinates (z up). Fronts face -y.
 const LOOKS = {
@@ -21,7 +24,7 @@ const LOOKS = {
 };
 const ui = {
   canvas: $('tpv-canvas'), view: $('tpv-view'), status: $('tpv-status'), empty: $('tpv-empty'),
-  toast: $('tpv-toast'), axes: $('tpv-axes'), pen: $('tpv-pen'), penButton: $('tpv-pen-button'), fit: $('tpv-fit'), tree: $('tpv-layers'),
+  toast: $('tpv-toast'), axes: $('tpv-axes'), edges: $('tpv-edges'), pen: $('tpv-pen'), penButton: $('tpv-pen-button'), fit: $('tpv-fit'), tree: $('tpv-layers'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
 const toast = toaster(ui.toast);
@@ -39,7 +42,7 @@ const toScene = ([x, y, z]) => new THREE.Vector3(x, z, -y);
 let renderer = null;
 try {
   renderer = new THREE.WebGLRenderer({ canvas: ui.canvas, antialias: true });
-  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setPixelRatio(window.devicePixelRatio * SUPERSAMPLE);
 } catch (err) {
   ui.empty.textContent = `This browser can't draw 3D right now: ${err.message} `
     + '(WebGL is off or unavailable; see about:support in Firefox, brave://gpu or chrome://gpu otherwise).';
@@ -56,7 +59,7 @@ scene.add(camera);
 const controls = new CadControls(camera, ui.canvas);
 controls.addEventListener('change', render);
 
-const edges = renderer && new Edges(renderer);
+const edges = renderer && new Edges(renderer, camera);
 const state = {
   model: null, mtime: null, half: 1, loads: 0,
   tree: [], expanded: new Set(),
@@ -67,7 +70,7 @@ const ready = new Promise((resolve) => { resolveReady = resolve; });
 
 function render() {
   if (renderer) {
-    edges.pass(scene, camera, state.half * 2);
+    edges.pass(scene, state.half * 2);
     renderer.render(scene, camera);
   }
   renderAxes();
@@ -107,7 +110,7 @@ function frame(look) {
   if (!state.model) return;
   const box = new THREE.Box3();
   state.model.updateMatrixWorld(true);
-  state.model.traverseVisible((o) => { if (o.isMesh) box.expandByObject(o); });
+  state.model.traverseVisible((o) => { if (o.isMesh && o.layers.isEnabled(0)) box.expandByObject(o); }); // the faces
   if (box.isEmpty()) box.setFromObject(state.model);
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   if (!(sphere.radius > 0)) return;
@@ -204,6 +207,13 @@ function renderPanel() {
   });
 }
 
+// The CAD edges on or off, in this window.
+function showEdges(shown) {
+  edges?.show(shown);
+  ui.edges.setAttribute('aria-pressed', String(shown));
+  render();
+}
+
 function dispose(root) {
   root.traverse((o) => {
     o.geometry?.dispose();
@@ -272,6 +282,7 @@ const tablet = new Tablet({
 
 for (const b of document.querySelectorAll('[data-look]')) b.addEventListener('click', () => frame(LOOKS[b.dataset.look]));
 ui.fit.addEventListener('click', () => frame(null));
+ui.edges.addEventListener('click', () => showEdges(!edges?.shown));
 ui.view.addEventListener('change', () => { if (ui.view.value !== viewName) location.href = viewUrl(ui.view.value); });
 window.addEventListener('pointerdown', () => tablet.claim(), true);
 ui.canvas.addEventListener('wheel', () => tablet.claim(), { passive: true });
@@ -280,6 +291,7 @@ window.addEventListener('keydown', (e) => {
   const look = { 0: 'iso', 7: 'top', 1: 'front', 3: 'right' }[e.key];
   if (look) frame(LOOKS[look]);
   else if (e.key.toLowerCase() === 'f') frame(null);
+  else if (e.key.toLowerCase() === 'e') showEdges(!edges?.shown);
 });
 new ResizeObserver(resize).observe(ui.canvas);
 panelDivider(document.querySelector('main'));
@@ -289,4 +301,5 @@ poll();
 tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
-window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten };
+window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten,
+  showEdges };
