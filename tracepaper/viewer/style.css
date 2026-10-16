@@ -154,6 +154,19 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 220px; min-height: 0
   white-space: pre;
 }
 
+/* The 3D view's axes, above its hint line. */
+.tpv-axes {
+  position: absolute;
+  left: 8px;
+  bottom: 28px;
+  width: 90px;
+  height: 90px;
+  overflow: visible;
+  pointer-events: none;
+  font: 600 12px system-ui, sans-serif;
+}
+.tpv-axes line { stroke-width: 2.5; stroke-linecap: round; }
+
 .tpv-toast {
   position: absolute;
   left: 50%;

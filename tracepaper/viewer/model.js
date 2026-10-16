@@ -19,10 +19,14 @@ const LOOKS = {
 };
 const ui = {
   canvas: $('tpv-canvas'), view: $('tpv-view'), status: $('tpv-status'), empty: $('tpv-empty'),
-  toast: $('tpv-toast'), pen: $('tpv-pen'), penButton: $('tpv-pen-button'), fit: $('tpv-fit'), tree: $('tpv-layers'),
+  toast: $('tpv-toast'), axes: $('tpv-axes'), pen: $('tpv-pen'), penButton: $('tpv-pen-button'), fit: $('tpv-fit'), tree: $('tpv-layers'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
 const toast = toaster(ui.toast);
+
+// CAD's axes, drawn in the bottom left as the camera sees them.
+const AXES = [['x', [1, 0, 0], '#dc2626'], ['y', [0, 1, 0], '#16a34a'], ['z', [0, 0, 1], '#2563eb']];
+const AXIS_PX = 30;
 
 // glTF is y up; CAD files exported from z-up CAD carry a turn into it on their root,
 // so a CAD direction (x, y, z) is (x, z, -y) in the scene.
@@ -61,6 +65,22 @@ const ready = new Promise((resolve) => { resolveReady = resolve; });
 
 function render() {
   renderer?.render(scene, camera);
+  renderAxes();
+}
+
+// Each axis as the camera sees it, the ones pointing away drawn first. Pointing at the
+// viewer or away, an axis shrinks to its label.
+function renderAxes() {
+  const toView = camera.quaternion.clone().invert();
+  const axes = AXES.map(([name, dir, color]) => {
+    const v = toScene(dir).applyQuaternion(toView); // x right, y up, z towards the viewer
+    return { name, color, x: v.x * AXIS_PX, y: -v.y * AXIS_PX, z: v.z };
+  }).sort((a, b) => a.z - b.z);
+  const f = (n) => n.toFixed(1);
+  ui.axes.innerHTML = '<circle r="2.5" fill="#57606a"/>' + axes.map(({ name, color, x, y }) => (
+    `<line data-axis="${name}" x1="0" y1="0" x2="${f(x)}" y2="${f(y)}" stroke="${color}"/>`
+    + `<text x="${f(x * 1.3)}" y="${f(y * 1.3)}" fill="${color}" text-anchor="middle" dominant-baseline="central">`
+    + `${name.toUpperCase()}</text>`)).join('');
 }
 
 function resize() {

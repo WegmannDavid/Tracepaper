@@ -392,6 +392,17 @@ class ViewerInFirefox(unittest.TestCase):
             self.assertAlmostEqual(got, 0.88 * pointer, delta=0.5)
         self.m.run("window.tracepaper3d.frame(window.tracepaper3d.LOOKS.iso); done(true);")
 
+        # The axes in the bottom left turn with the camera.
+        axes = self.m.run("""
+            const t = window.tracepaper3d, seen = {};
+            const lines = () => Object.fromEntries([...document.querySelectorAll('#tpv-axes line')].map((l) => [
+              l.dataset.axis, [+l.getAttribute('x2'), +l.getAttribute('y2')]]));
+            for (const look of ['front', 'top']) { t.frame(t.LOOKS[look]); seen[look] = lines(); }
+            done(seen);
+        """)
+        self.assertEqual(axes["front"], {"x": [30, 0], "y": [0, 0], "z": [0, -30]})  # y points into the screen
+        self.assertEqual(axes["top"], {"x": [30, 0], "y": [0, -30], "z": [0, 0]})
+
         # The build writes the model again: it reloads and keeps the camera.
         before = self.m.run("const t = window.tracepaper3d; t.frame(t.LOOKS.top);"
                             "done([...t.camera.position.toArray(), ...t.camera.quaternion.toArray()]);")
