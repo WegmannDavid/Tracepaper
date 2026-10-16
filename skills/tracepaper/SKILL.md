@@ -26,7 +26,7 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
 - **`tracepaper view <views folder, or one view>`** starts the viewer, a local web page. Given a folder, it opens the project page listing the views (also in subfolders, up to three levels down).
   - Run it in the background and give the user the URL it prints.
   - If a viewer already runs for the same directory (`pgrep -af "tracepaper view"`), reuse it.
-  - The user connects their reMarkable 2 from a sheet's toolbar when they want to draw with it, and disconnects it there. A viewer doesn't hold the tablet otherwise, and connecting in one takes it from any other, so you never need to stop a viewer for the tablet.
+  - The user connects their reMarkable 2 from a sheet's toolbar when they want to draw with it, and disconnects it there or on the tablet. A viewer doesn't hold the tablet otherwise, and connecting in one takes it from any other, so you never need to stop a viewer for the tablet. While connected, the tablet's e-ink screen shows the sheet the pen draws in, in greys.
   - The pages reload views (sheets and models) when they change on disk, so you never need to restart the viewer for that.
   - After Tracepaper itself was updated, a viewer that was already running has to be restarted: if its pages fail to load or show errors, restart it.
 - **`tracepaper inspect [file or dir]`** reports on the newest sketch file under the given path: strokes with colour, coordinates and the element their colour was picked from, moved labels and hidden layers. It also renders a whole-sheet image, a close-up of the ink, and the close-up with the drawing faded. Look at the images with your file-reading tool.
@@ -42,7 +42,7 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
    - model coordinates in mm, y up, each top-level layer flipped with `transform="scale(1,-1)"`, and no transforms on the groups inside;
    - stable, meaningful ids, and `tp:source` pointers back into the model;
    - dimensions and constraint symbols as annotation groups the user can drag.
-4. Show what helps the user judge the design. Put the rest on hidden layers or leave it out, and agree on this with them.
+4. Show what helps the user judge the design. Put the rest on hidden layers or leave it out, and agree on this with them. The user may look at a sheet on the reMarkable's screen, where colours become greys, so don't tell things apart by colour alone: vary line weight or dashes, or label them.
 5. Structure the sheet as a tree. Every named group is a node the user can hide in their window, so group what belongs together:
    - Use sublayers for related things, such as `layer.sublayer("Overall")` for the dimensions of each part.
    - Give each part cut by a section a group of its own holding both its outline and its hatching: `part = layer.sublayer("shelf 1")`, then `part.path(..., fill=HATCH, stroke="none")` and `part.path(...)` for the outline.
