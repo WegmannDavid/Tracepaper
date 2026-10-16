@@ -1,8 +1,10 @@
 import http.client
 import json
 import math
+import os
 import queue
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -419,12 +421,94 @@ class ConnectionTest(unittest.TestCase):
                 self.collect(q, self.ended)
                 self.assertEqual(self.starts(), ["start take=1"] * 2)
 
-    def test_script_takes_over_and_steps_aside(self):
-        # The parts of the script that decide, as far as they can be read here.
-        self.assertIn(f'[ "$take" = 1 ] || [ "$who" = "$owner" ] || {{ echo "in use by another viewer" >&2; '
-                      f"exit {P.BUSY}; }}", P.SCRIPT)
-        self.assertIn("trap taken USR1", P.SCRIPT)
-        self.assertLess(P.SCRIPT.index('echo "$$ $owner" >'), P.SCRIPT.index("systemctl stop xochitl"))
+
+
+@unittest.skipUnless(shutil.which("bash") and Path("/proc/self/cmdline").exists(), "needs bash and /proc")
+class SessionScriptTest(unittest.TestCase):
+    """The script that runs on the tablet (tracepaper/tablet/session.sh), run here with stand-ins
+    for the tablet's app (systemctl), its pen and the screen program."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = d = Path(tmp.name)
+        self.log = d / "log"
+        (d / "bin").mkdir()
+        self.script(d / "bin" / "systemctl", f'echo "systemctl $*" >> {self.log}')
+        (d / "devices").write_text('N: Name="Wacom I2C Digitizer"\nH: Handlers=event1\n')
+        (d / "input").mkdir()
+        (d / "input" / "event1").write_bytes(b"PEN EVENTS")
+        self.program = d / "tracepaper-screen"
+        self.script(self.program, f"""
+if [ "$1" = --receive ]; then head -c "$3" > "$2.new" && echo "$4" > "$2.done" && mv "$2.new" "$2"; exit; fi
+echo "screen $*" >> {self.log}
+exec sleep 60""")
+
+    @staticmethod
+    def script(path, body):
+        path.write_text("#!/bin/sh\n" + body + "\n")
+        path.chmod(0o755)
+
+    def lines(self):
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def start(self, owner, take=1, ready=True):
+        d = self.dir
+        script = P.session(owner=owner, take=take, screen=1, turn=90, program=self.program, lock=d / "lock",
+                           view=d / "view.png", devices=d / "devices", input=d / "input")
+        proc = subprocess.Popen(["bash", "-c", script], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env={**os.environ, "PATH": f"{d / 'bin'}:{os.environ['PATH']}"})
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        if ready:
+            self.assertEqual(proc.stdout.readline(), P.READY)
+        return proc
+
+    def end(self, proc):
+        """Its exit status and what it said."""
+        _, err = proc.communicate(timeout=10)
+        return proc.returncode, err.decode().strip()
+
+    def test_session(self):
+        proc = self.start("a")
+        self.assertEqual(proc.stdout.read(10), b"PEN EVENTS")  # the pen, streamed
+        self.assertEqual((self.dir / "lock").read_text().split()[1], "a")
+        proc.stdin.write(b"view 5 123\nhello\n\n")  # a picture between heartbeats
+        proc.stdin.flush()
+        deadline = time.monotonic() + 5
+        while not (self.dir / "view.png").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual((self.dir / "view.png").read_bytes(), b"hello")
+        self.assertEqual((self.dir / "view.png.done").read_text(), "123\n")
+        proc.stdin.close()  # the viewer disconnects
+        self.assertEqual(self.end(proc)[0], 0)
+        self.assertEqual(self.lines(), ["systemctl stop xochitl",
+                                        f"screen {self.dir}/view.png 90 {self.dir}/input/event1",
+                                        "systemctl reset-failed xochitl", "systemctl start xochitl"])
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["bin", "devices", "input", "log",
+                                                                      "tracepaper-screen"])  # cleaned up
+
+    def test_takes_over_or_steps_aside(self):
+        a = self.start("a")
+        # Trying again after a dropped connection doesn't take another viewer's tablet.
+        self.assertEqual(self.end(self.start("c", take=0, ready=False)), (P.BUSY, "in use by another viewer"))
+        self.assertIsNone(a.poll())
+        b = self.start("b")  # Connect pressed in another viewer
+        self.assertEqual(self.end(a), (P.TAKEN, "taken by another viewer"))
+        self.assertNotIn("systemctl start xochitl", self.lines())  # the app stays stopped for b
+        self.assertEqual((self.dir / "lock").read_text().split()[1], "b")
+        # The same viewer trying again takes over its own session, from before the connection dropped.
+        b_again = self.start("b", take=0)
+        self.assertEqual(self.end(b)[0], P.TAKEN)
+        b_again.stdin.close()
+        self.assertEqual(self.end(b_again)[0], 0)
+        self.assertEqual(self.lines().count("systemctl start xochitl"), 1, self.lines())
+
+    def test_disconnect_on_the_tablet(self):
+        proc = self.start("a")
+        session = int((self.dir / "lock").read_text().split()[0])
+        os.kill(session, signal.SIGUSR2)  # what the screen's Disconnect button does
+        self.assertEqual(self.end(proc), (P.LEFT, "disconnected on the tablet"))
+        self.assertEqual(self.lines()[-1], "systemctl start xochitl")
 
 
 if __name__ == "__main__":

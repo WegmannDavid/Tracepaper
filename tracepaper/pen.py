@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import os
 import queue
+import shlex
 import struct
 import subprocess
 import threading
@@ -49,50 +50,25 @@ HOLD = {0: "upright", 90: "landscape, power button on the right", 180: "upside d
         270: "landscape, power button on the left"}
 
 READY = b"TRACEPAPER-READY\n"
-SILENCE = 20  # seconds without a heartbeat after which the tablet restarts its app
+SILENCE = 20  # seconds without a heartbeat after which the tablet restarts its app (session.sh)
 HEARTBEAT = 5
 RETRY = 3.0  # seconds between connection attempts
-LOCK = "/tmp/tracepaper-pen"  # on the tablet: "<pid> <owner>" of the session that has the pen
-# The script's exit statuses: another viewer took the tablet over / has it; the person
+# The session's exit statuses: another viewer took the tablet over / has it; the person
 # disconnected on the tablet.
 TAKEN, BUSY, LEFT = 75, 76, 77
-SCREEN = Path(__file__).resolve().parent / "tablet" / "tracepaper-screen"  # built by tablet/build.sh
+TABLET = Path(__file__).resolve().parent / "tablet"
+SCRIPT = (TABLET / "session.sh").read_text()  # what runs on the tablet while connected
+SCREEN = TABLET / "tracepaper-screen"  # shows the view there; built by tablet/build.sh
 REMOTE_SCREEN = "/home/root/.tracepaper/tracepaper-screen"
-VIEW = "/tmp/tracepaper-view.png"  # on the tablet: the picture tracepaper-screen shows
 
-# Runs on the tablet, after "owner=<this viewer> take=<0 or 1> screen=<0 or 1> turn=<rotation>":
-# take the pen over from the session that has it if asked to (or if that is this viewer's
-# own, from before a dropped connection), stop the app, show the screen, stream the pen,
-# and start the app again when done, or when the screen's Disconnect button says so. A session taken over leaves the app stopped for the
-# one taking over. Its input carries heartbeats (empty lines) and pictures for the
-# screen ("view <bytes> <done>" and the PNG; see tablet/main.cpp for done).
-SCRIPT = f"""
-dev=$(grep -A4 -i wacom /proc/bus/input/devices | grep -o 'event[0-9]*' | head -n 1)
-[ -n "$dev" ] || {{ echo "no pen sensor found on the tablet" >&2; exit 1; }}
-if [ -f {LOCK} ] && read -r old who < {LOCK} && grep -q TRACEPAPER /proc/$old/cmdline 2>/dev/null; then
-  [ "$take" = 1 ] || [ "$who" = "$owner" ] || {{ echo "in use by another viewer" >&2; exit {BUSY}; }}
-  kill -USR1 $old
-  n=0; while kill -0 $old 2>/dev/null && [ $n -lt 100 ]; do usleep 50000; n=$((n + 1)); done
-  kill -9 $old 2>/dev/null
-fi
-echo "$$ $owner" > {LOCK}
-restore() {{ trap - EXIT HUP INT TERM PIPE USR1 USR2; kill $pid $shown 2>/dev/null; wait $shown; rm -f {LOCK} {VIEW} {VIEW}.done; systemctl reset-failed xochitl 2>/dev/null; systemctl start xochitl; }}
-taken() {{ trap - EXIT HUP INT TERM PIPE USR1 USR2; kill $pid $shown 2>/dev/null; wait $shown; echo "taken by another viewer" >&2; exit {TAKEN}; }}
-trap 'restore; exit' EXIT HUP INT TERM PIPE
-trap taken USR1
-trap 'restore; echo "disconnected on the tablet" >&2; exit {LEFT}' USR2
-systemctl stop xochitl || exit 1
-rm -f {VIEW} {VIEW}.done
-if [ "$screen" = 1 ]; then
-  QT_QPA_PLATFORM=epaper QT_QUICK_BACKEND=epaper QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS=rotate=180:invertx \\
-    {REMOTE_SCREEN} {VIEW} $turn /dev/input/$dev >/dev/null 2>&1 & shown=$!
-fi
-printf '{READY.decode().strip()}\\n'
-cat /dev/input/$dev & pid=$!
-while read -t {SILENCE} cmd size done; do
-  [ "$cmd" = view ] && {REMOTE_SCREEN} --receive {VIEW} "$size" "$done"
-done
-"""
+
+def session(**settings) -> str:
+    """The session script with its settings (see session.sh), as ssh runs it on the tablet."""
+    defaults = {"program": REMOTE_SCREEN, "silence": SILENCE, "status_taken": TAKEN, "status_busy": BUSY,
+                "status_left": LEFT}
+    settings = {**settings, **{k: v for k, v in defaults.items() if k not in settings}}
+    return " ".join(f"{k}={shlex.quote(str(v))}" for k, v in settings.items()) + "\n" + SCRIPT
+
 
 # Copies tracepaper-screen onto the tablet, from its input, unless it is there already.
 DEPLOY = (f'f={REMOTE_SCREEN}; [ "$(sha256sum < $f 2>/dev/null)" = "{{sha}}  -" ] && exit 0; '
@@ -361,9 +337,9 @@ class RemarkablePen:
     def _session(self, hub: PenHub, stop: threading.Event, take: bool) -> tuple:
         """One connection; returns why it ended and whether to try again."""
         showing = self._deploy()
-        settings = f"owner={self.owner} take={int(take)} screen={int(showing)} turn={self.rotation}"
+        script = session(owner=self.owner, take=int(take), screen=int(showing), turn=self.rotation)
         try:
-            proc = subprocess.Popen([*self.command, f"{settings}\n{SCRIPT}"],
+            proc = subprocess.Popen([*self.command, script],
                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError as e:
             return f"cannot run ssh: {e}", False
