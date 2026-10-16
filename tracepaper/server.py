@@ -39,8 +39,17 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; c
 VIEW_TYPES = {"sheet": "image/svg+xml", "model": "model/gltf-binary"}
 
 
-def sketch_path(sheet: Path) -> Path:
-    return sheet.with_name(sheet.name[: -len(".svg")] + SKETCH_SUFFIX)
+def sketch_path(view: Path) -> Path:
+    """Where a view's sketch file goes: name.sketch.svg for a sheet name.svg, and
+    name.glb.sketch.svg for a model name.glb (SPEC.md §3)."""
+    stem = view.name[: -len(".svg")] if view.suffix.lower() == ".svg" else view.name
+    return view.with_name(stem + SKETCH_SUFFIX)
+
+
+def view_of_sketch(name: str) -> str:
+    """The view a sketch file's name is for: the inverse of sketch_path."""
+    stem = name[: -len(SKETCH_SUFFIX)]
+    return stem if stem.lower().endswith(".glb") else stem + ".svg"
 
 
 def list_views(directory: Path) -> list:
@@ -145,7 +154,7 @@ class Handler(BaseHTTPRequestHandler):
             mtime = _mtime(path)
             if mtime is None:
                 continue
-            sketch = _mtime(sketch_path(path)) if kind == "sheet" else None
+            sketch = _mtime(sketch_path(path))
             views.append({"name": name, "kind": kind, "mtime": mtime,
                           "sketch": {"mtime": sketch} if sketch else None})
         return {"dir": str(self.server.directory), "initial": self.server.initial, "views": views}
@@ -179,12 +188,12 @@ class Handler(BaseHTTPRequestHandler):
         for prefix, sketch in (("/api/file/", False), ("/api/sketch/", True)):
             if path.startswith(prefix):
                 view = self._view(unquote(path[len(prefix):]))
-                if view is None or (sketch and view[1] != "sheet"):
+                if view is None:
                     return self._error(404, "no such view")
                 try:
                     data = (sketch_path(view[0]) if sketch else view[0]).read_bytes()
                 except FileNotFoundError:
-                    return self._error(404, "no sketch for this sheet")
+                    return self._error(404, "no sketch for this view")
                 return self._send(200, data, VIEW_TYPES["sheet" if sketch else view[1]])
         self._error(404, "not found")
 
@@ -276,8 +285,8 @@ class Handler(BaseHTTPRequestHandler):
         if not path.startswith("/api/sketch/"):
             return self._error(404, "not found")
         view = self._view(unquote(path[len("/api/sketch/"):]))
-        if view is None or view[1] != "sheet":
-            return self._error(404, "no such sheet")
+        if view is None:
+            return self._error(404, "no such view")
         body = self._body(MAX_SKETCH_BYTES)
         if body is None:
             return
@@ -312,7 +321,7 @@ def make_server(target: Path, port: int = 0, pen=None) -> ViewerServer:
     elif target.is_file() and target.suffix.lower() in KINDS:
         directory, initial = target.parent, target.name
         if initial.endswith(SKETCH_SUFFIX):
-            initial = initial[: -len(SKETCH_SUFFIX)] + ".svg"
+            initial = view_of_sketch(initial)
     else:
         raise SystemExit(f"tracepaper: {target} is not a directory, an .svg or a .glb file")
     try:

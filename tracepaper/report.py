@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
-from .server import SKETCH_SUFFIX
+from .server import SKETCH_SUFFIX, view_of_sketch
 from .sheet import INKSCAPE_NS, SVG_NS, TP_NS, fmt
 
 SVG, INK, TP = f"{{{SVG_NS}}}", f"{{{INKSCAPE_NS}}}", f"{{{TP_NS}}}"
@@ -148,20 +148,25 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
         raise SystemExit(f"tracepaper: no {SKETCH_SUFFIX} file under {path}")
     source = sketch_path.read_text(encoding="utf-8")
     root = ET.fromstring(source)
-    sheet_path = sketch_path.with_name(root.get(f"{TP}sketch-of") or
-                                       sketch_path.name[: -len(SKETCH_SUFFIX)] + ".svg")
-    sheet = ET.parse(sheet_path).getroot() if sheet_path.is_file() else None
+    # The view it is of sits next to it, under the name it gives (once a path from the project).
+    of = Path(root.get(f"{TP}sketch-of") or view_of_sketch(sketch_path.name)).name
+    sheet_path = sketch_path.with_name(of)
+    model = sheet_path.suffix.lower() == ".glb"  # drawn over a 3D view (SPEC.md §3.1)
+    sheet = ET.parse(sheet_path).getroot() if not model and sheet_path.is_file() else None
     view = root.find(f"{SVG}metadata/{TP}view")
 
-    lines = [f"Sketch: {sketch_path}", f"  of {sheet_path.name}" + ("" if sheet is not None else " (missing)")
+    lines = [f"Sketch: {sketch_path}", f"  of {sheet_path.name}" + ("" if sheet_path.is_file() else " (missing)")
              + (f", saved {root.get(TP + 'saved')}" if root.get(TP + "saved") else "")]
     if view is not None:
         lines.append("  view: " + ", ".join(f"{k}={v}" for k, v in view.attrib.items()))
-    hidden = [path for path, g in _layer_tree(root) if _hidden(g)]
-    lines.append(f"  hidden: {', '.join(hidden) or 'nothing'}")
+    if not model:  # a model's hidden parts are in the view's attributes
+        hidden = [path for path, g in _layer_tree(root) if _hidden(g)]
+        lines.append(f"  hidden: {', '.join(hidden) or 'nothing'}")
 
     ink = strokes(root)
-    lines.append(f"\nStrokes: {len(ink)} (model mm, y up)")
+    lines.append(f"\nStrokes: {len(ink)} " + (
+        "(mm on the plane the view looked at, y up: model point = origin + x·xdir + y·(normal × xdir), "
+        "at some depth along normal)" if model else "(model mm, y up)"))
     for i, s in enumerate(ink, 1):
         x0, y0, x1, y1 = _bounds(s["points"])
         (sx, sy), (ex, ey) = s["points"][0], s["points"][-1]
@@ -172,9 +177,10 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
             line += f"  colour of {s['from']}" + (f" ({layer})" if layer else "")
         lines.append(line)
 
-    moved = moved_labels(root, sheet)
-    lines.append(f"\nMoved labels: {len(moved) or 'none'}")
-    lines += [f"  {i}  {name}: {old} -> {new}" for i, name, old, new in moved]
+    if not model:  # nothing to move on a model
+        moved = moved_labels(root, sheet)
+        lines.append(f"\nMoved labels: {len(moved) or 'none'}")
+        lines += [f"  {i}  {name}: {old} -> {new}" for i, name, old, new in moved]
 
     if not shutil.which("rsvg-convert"):
         lines.append("\nNo images: rsvg-convert is not installed (Fedora: librsvg2-tools).")
@@ -182,7 +188,7 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
     out_dir = Path(out_dir or tempfile.mkdtemp(prefix="tracepaper-"))
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = sketch_path.name[: -len(SKETCH_SUFFIX)]
-    images = [(out_dir / f"{stem}-full.png", None, False, "the whole sheet with the ink")]
+    images = [(out_dir / f"{stem}-full.png", None, False, f"the whole {'view' if model else 'sheet'} with the ink")]
     if ink:
         x0, y0, x1, y1 = _bounds([p for s in ink for p in s["points"]])
         margin = max(5.0, 0.25 * max(x1 - x0, y1 - y0))

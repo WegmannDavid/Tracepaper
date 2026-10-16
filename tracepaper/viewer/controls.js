@@ -12,6 +12,10 @@
 //
 // The camera is orthographic. Its orientation is camera.quaternion, which these
 // controls turn directly; position is target plus the turned eye vector.
+//
+// While the page draws (drawing), the left button is the page's, and Shift + left
+// drag still pans. mayRotate() is asked before a drag turns the view; a page with ink
+// on the view says no until the ink is gone.
 import * as THREE from 'three';
 
 const RADIUS = 0.9; // of the ball, in half widths and half heights of the view
@@ -28,6 +32,8 @@ export class CadControls extends THREE.EventDispatcher {
     this.element = element;
     this.target = new THREE.Vector3();
     this.drag = null; // { mode, id, x, y, sideways, upDown } while a button is down
+    this.drawing = false;
+    this.mayRotate = () => true;
     element.style.touchAction = 'none';
     element.addEventListener('pointerdown', (e) => this.down(e));
     element.addEventListener('pointermove', (e) => this.move(e));
@@ -38,12 +44,12 @@ export class CadControls extends THREE.EventDispatcher {
   }
 
   down(e) {
-    if (this.drag) return;
+    if (this.drag || (e.pointerType === 'pen' && (e.button === 5 || e.buttons & 32))) return; // a pen's eraser end
     const mode = e.button === 1 ? DOLLY : e.button === 2 || (e.button === 0 && e.shiftKey) ? MOVE
-      : e.button === 0 ? ROTATE : null;
-    if (!mode) return;
+      : e.button === 0 && !this.drawing ? ROTATE : null;
+    if (!mode || (mode === ROTATE && !this.mayRotate())) return;
     e.preventDefault();
-    this.element.setPointerCapture?.(e.pointerId);
+    try { this.element.setPointerCapture(e.pointerId); } catch { /* not an active pointer */ }
     this.drag = { mode, id: e.pointerId, x: e.clientX, y: e.clientY, sideways: !e.ctrlKey, upDown: !e.altKey };
   }
 

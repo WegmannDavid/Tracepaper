@@ -23,17 +23,33 @@
     <button id="tpv-fit" title="Fit the model, keeping the direction (F)">Fit</button>
     <button id="tpv-edges" aria-pressed="true" title="Show the edges (E)">Edges</button>
   </div>
-  <span class="tpv-spacer"></span>
-  <span id="tpv-pen" class="tpv-pen" hidden></span>
-  <button id="tpv-pen-button" hidden>Disconnect</button>
-  <span id="tpv-status" class="tpv-status" role="status"></span>
+  <div class="tpv-group">
+    <button id="tpv-sketch" aria-pressed="false"
+            title="Sketch over the view (P). While there is ink the view can't turn, only pan and zoom.">Sketch</button>
+  </div>
+  <div class="tpv-group" id="tpv-swatches" role="group" aria-label="Ink colour"></div>
+  <div class="tpv-group">
+    <button id="tpv-undo" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="tpv-clear" title="Remove all ink">Clear</button>
+  </div>
+  <div class="tpv-end">
+    <span id="tpv-pen" class="tpv-pen" hidden></span>
+    <button id="tpv-pen-button" hidden>Connect reMarkable</button>
+    <span id="tpv-status" class="tpv-status" role="status"></span>
+  </div>
+  <button id="tpv-save" class="tpv-primary" title="Save the sketch file (Ctrl+S)">Save</button>
 </header>
 <main>
   <div class="tpv-stage-wrap">
     <canvas id="tpv-canvas"></canvas>
+    <!-- The ink, in mm on the plane the camera looks at (y up), and where the tablet's pen is. -->
+    <svg id="tpv-ink" class="tpv-overlay" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+      <g id="tp-sketch" transform="scale(1,-1)"></g>
+    </svg>
+    <svg class="tpv-overlay" xmlns="http://www.w3.org/2000/svg"><circle id="tpv-pen-cursor" r="4" visibility="hidden"/></svg>
     <div id="tpv-empty" class="tpv-empty">Loading…</div>
     <svg id="tpv-axes" class="tpv-axes" viewBox="-45 -45 90 90" aria-label="Axes"></svg>
-    <div class="tpv-coords">Drag to rotate · right-drag to pan · scroll to zoom</div>
+    <div class="tpv-coords" id="tpv-hint">Drag to rotate · right-drag to pan · scroll to zoom</div>
     <div id="tpv-toast" class="tpv-toast" role="status" hidden></div>
   </div>
   <aside class="tpv-panel">

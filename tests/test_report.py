@@ -52,6 +52,34 @@ class ReportTest(unittest.TestCase):
                 self.assertTrue((out / name).stat().st_size > 1000, name)
             self.assertEqual(sorted(p.suffix for p in out.iterdir()), [".png"] * 3)  # no leftovers
 
+    def test_sketch_of_a_sheet_in_a_folder(self):
+        path = make_sketch(self.dir)
+        root = ET.parse(path).getroot()
+        root.set(f"{{{TP_NS}}}sketch-of", "parts/section-A.svg")  # as a project's viewer names it
+        ET.ElementTree(root).write(path, encoding="unicode")
+        self.assertIn("d-height  offset: 9 -> 15", inspect(path, self.dir / "images"))  # the sheet next to it
+
+    def test_sketch_over_a_model(self):
+        (self.dir / "frame.glb").write_bytes(b"glTF")
+        svg = (f'<svg xmlns="{SVG_NS}" xmlns:inkscape="{INKSCAPE_NS}" xmlns:tp="{TP_NS}" '
+               'xmlns:xlink="http://www.w3.org/1999/xlink" width="100mm" height="50mm" viewBox="-50 -25 100 50" '
+               'tp:sketch-of="frame.glb"><metadata><tp:view title="frame.glb, from the right" kind="model view" '
+               'origin="12 0 0" normal="1 0 0" xdir="0 1 0" area="-50 -25 50 25"/></metadata>'
+               '<g id="tp-view" inkscape:groupmode="layer" inkscape:label="View" transform="scale(1,-1)">'
+               '<image width="100" height="50" transform="translate(-50 25) scale(1,-1)" xlink:href="data:image/png;base64,'
+               'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/>'
+               '</g><g id="tp-sketch" inkscape:groupmode="layer" inkscape:label="Sketch" transform="scale(1,-1)">'
+               '<path d="M0 0 L10 5" stroke="#e11d48" fill="none"/></g></svg>')
+        (self.dir / "frame.glb.sketch.svg").write_text(svg)
+        report = inspect(self.dir, self.dir / "images")
+        self.assertIn("  of frame.glb\n", report)  # found next to it
+        self.assertIn("normal=1 0 0", report)
+        self.assertIn("model point = origin + x·xdir + y·(normal × xdir)", report)
+        self.assertIn("from (0.0, 0.0) to (10.0, 5.0)", report)
+        self.assertNotIn("Moved labels", report)
+        if shutil.which("rsvg-convert"):
+            self.assertTrue((self.dir / "images" / "frame.glb-full.png").stat().st_size > 1000)
+
     def test_finds_the_newest_sketch_and_skips_hidden_folders(self):
         older = self.dir / "a" / "x.sketch.svg"
         newer = self.dir / "b" / "y.sketch.svg"

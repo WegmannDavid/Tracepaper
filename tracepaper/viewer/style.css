@@ -40,6 +40,10 @@ body {
 .tpv-brand { font-weight: 600; margin-right: 4px; color: inherit; text-decoration: none; }
 .tpv-brand:hover { text-decoration: underline; }
 .tpv-spacer { flex: 1; }
+/* The toolbar's right end, before Save: the tablet and the status, which give way, cut
+   short, rather than wrap the toolbar onto another row and shrink the view. */
+.tpv-end { flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.tpv-end > button { flex: none; }
 
 select {
   font: inherit;
@@ -142,6 +146,9 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) var(--tpv-panel, 220
   padding: 2px 8px;
   border-radius: 999px;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   background: var(--well);
   color: var(--muted);
   cursor: default;
@@ -264,6 +271,8 @@ kbd, code {
 
 /* The 3D view: the canvas fills its part of the window. */
 #tpv-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+/* Over the 3D view: the ink, and the tablet pen's cursor. Pointer input goes to the canvas. */
+.tpv-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
 
 /* The project page. */
 main.tpv-project { display: block; overflow: auto; }

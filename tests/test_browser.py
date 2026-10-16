@@ -252,7 +252,8 @@ class ViewerInFirefox(unittest.TestCase):
     def open_viewer(self, view=None):
         """Open the server's first page, or the given view, and wait until it shows."""
         # Leave without the "unsaved changes" prompt.
-        self.m.call("WebDriver:ExecuteScript", {"script": "if (window.tracepaper) tracepaper.state.dirty = false;",
+        self.m.call("WebDriver:ExecuteScript", {"script": "for (const t of [window.tracepaper, window.tracepaper3d]) "
+                                                          "if (t) t.state.dirty = false;",
                                                 "args": []})
         base = f"http://127.0.0.1:{self.server.server_address[1]}"
         self.m.call("WebDriver:Navigate", {"url": f"{base}/view/{view}" if view else self.server.url})
@@ -798,23 +799,131 @@ class ViewerInFirefox(unittest.TestCase):
             self.m.call("WebDriver:CloseWindow")
             self.m.call("WebDriver:SwitchToWindow", {"handle": main})
 
-    def test_3d_view_can_let_the_tablet_go(self):
-        hub = self.server.pen_hub
+    def test_sketch_over_a_model(self):
+        sketch = self.dir / "core.glb.sketch.svg"
+        self.addCleanup(lambda: sketch.unlink(missing_ok=True))
+        self.open_viewer("core.glb")
+        model3d = """
+            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+            const layer = document.getElementById('tp-sketch');
+            const at = (cad) => {  // a CAD point on the screen
+              const v = t.toScene(cad).project(t.camera), r = canvas.getBoundingClientRect();
+              return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height };
+            };
+            const send = (type, p, button) => canvas.dispatchEvent(new PointerEvent(type, {
+              bubbles: true, cancelable: true, pointerId: 9, pointerType: 'mouse', isPrimary: true, clientX: p.x,
+              clientY: p.y, button: type === 'pointermove' ? -1 : button, buttons: type === 'pointerup' ? 0 : 1 << button }));
+            const drag = (a, b, button = 0) => {
+              send('pointerdown', a, button);
+              for (let i = 1; i <= 10; i++) send('pointermove', { x: a.x + (b.x - a.x) * i / 10, y: a.y + (b.y - a.y) * i / 10 }, button);
+              send('pointerup', b, button);
+            };
+            const direction = () => t.camera.getWorldDirection(new t.THREE.Vector3()).toArray();
+            const offModel = (x, y, cad) => {  // how far ink at (x, y) is from where the CAD point is on screen
+              const p = new DOMPoint(x, y).matrixTransform(layer.getScreenCTM()), q = at(cad);
+              return Math.hypot(p.x - q.x, p.y - q.y);
+            };
+        """
+        # From the right, CAD y goes right on screen and z up: the ink's coordinates.
+        got = self.m.run(model3d + """
+            t.frame(t.LOOKS.right);
+            document.getElementById('tpv-sketch').click();  // Sketch: the mouse draws
+            drag(at([100, 20, 30]), at([100, 80, 70]));
+            const d = layer.lastElementChild.getAttribute('d');
+            // While there is ink, turning the view asks first; saying no keeps both.
+            document.getElementById('tpv-sketch').click();  // the mouse turns the view again
+            let asked = 0;
+            window.confirm = () => { asked++; return false; };
+            const before = t.camera.quaternion.toArray();
+            drag(at([100, 50, 50]), at([100, 70, 50]));
+            document.querySelector('[data-look="iso"]').click();
+            const kept = t.camera.quaternion.toArray().every((v, i) => v === before[i]);
+            // Panning and zooming keep the ink on the model.
+            drag(at([100, 50, 50]), at([100, 60, 40]), 2);
+            const w = at([100, 50, 50]);
+            canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -300, bubbles: true, cancelable: true, clientX: w.x, clientY: w.y }));
+            const status = () => document.getElementById('tpv-status').textContent;
+            const unsaved = status(), off = offModel(20, 30, [100, 20, 30]);
+            t.save().then(() => done({ d, asked, kept, strokes: layer.children.length, off, zoom: t.camera.zoom,
+                                       unsaved, saved: status(), dirty: t.state.dirty }));
+        """)
+        pts = [float(v) for v in got["d"].replace("M", " ").replace("L", " ").split()]
+        for got_xy, want in ((pts[:2], (20, 30)), (pts[-2:], (80, 70))):
+            for g, w in zip(got_xy, want):
+                self.assertAlmostEqual(g, w, delta=0.3)
+        self.assertEqual((got["asked"], got["kept"], got["strokes"]), (2, True, 1))
+        self.assertGreater(got["zoom"], 1.1)  # zoomed in
+        self.assertLess(got["off"], 0.5)
+        self.assertEqual((got["unsaved"], got["saved"], got["dirty"]),
+                         ("Unsaved changes", "Saved core.glb.sketch.svg, ready for the AI", False))
+
+        # The file: a picture of the view and the ink over it, in mm on the plane, placed in 3D.
+        root = ET.parse(sketch).getroot()
+        view = root.find(f"{SVG}metadata/{TP}view")
+        self.assertEqual(root.get(f"{TP}sketch-of"), "core.glb")
+        self.assertEqual({k: view.get(k) for k in ("title", "kind", "origin", "normal", "xdir")},
+                         {"title": "core.glb, from the right", "kind": "model view", "origin": "50 0 0",
+                          "normal": "1 0 0", "xdir": "0 1 0"})
+        layers = {g.get(f"{INK}label"): g for g in root.findall(f"{SVG}g")}
+        self.assertEqual(list(layers), ["View", "Sketch"])
+        self.assertTrue(layers["View"].find(f"{SVG}image").get("{http://www.w3.org/1999/xlink}href")
+                        .startswith("data:image/png;base64,"))
+        self.assertEqual(layers["Sketch"].find(f"{SVG}path").get("d"), got["d"])
+
+        # Opened again before the AI has handled it, the window shows the ink where it was drawn.
+        self.open_viewer("core.glb")
+        again = self.m.run(model3d + """
+            until(() => layer.children.length === 1 && t.state.sketchMtime
+              && { direction: direction(), off: offModel(20, 30, [100, 20, 30]), dirty: t.state.dirty }, done);
+        """)
+        for c, want in zip(again["direction"], (-1, 0, 0)):
+            self.assertAlmostEqual(c, want, places=6)
+        self.assertLess(again["off"], 0.5)
+        self.assertFalse(again["dirty"])
+
+        # The AI deletes the file once it has acted on it: the ink goes.
+        sketch.unlink()
+        self.assertTrue(self.m.run(model3d + "until(() => layer.children.length === 0 && !t.state.sketchMtime, done);"))
+
+        # Agreeing to wipe the ink turns the view.
+        turned = self.m.run(model3d + """
+            t.setDrawing(true);
+            drag(at([100, 20, 30]), at([100, 80, 70]));
+            const drawn = layer.children.length;
+            window.confirm = () => true;
+            document.querySelector('[data-look="iso"]').click();
+            done({ drawn, strokes: layer.children.length, direction: direction(), dirty: t.state.dirty });
+        """)
+        self.assertEqual((turned["drawn"], turned["strokes"], turned["dirty"]), (1, 0, False))
+        for c, want in zip(turned["direction"], (-1, -1, -1)):  # isometric: towards -(1, 1, 1) in the scene
+            self.assertAlmostEqual(c, want * 3 ** -0.5, places=5)
+
+    def test_tablet_pen_on_a_model(self):
+        hub, pen = self.server.pen_hub, self.server.pen
         self.open_viewer("bracket.glb")
-        hub.publish_status("connected", "test tablet")
-        client = self.m.run("until(() => window.tracepaper3d && !document.getElementById('tpv-pen').hidden, "
-                            "() => done(window.tracepaper3d.CLIENT));")
-        self.assertEqual(self.pen_ui(), ["reMarkable · in another window", None])  # no Connect: it can't draw here
-        hub.set_active(client)  # used with the mouse
-        self.assertTrue(self.m.run("until(() => !document.getElementById('tpv-pen-button').hidden, done);"))
-        self.assertEqual(self.pen_ui(), ["reMarkable · not on 3D views yet", "Disconnect"])
-        self.m.run("document.getElementById('tpv-pen-button').click();"
+        hub.set_active(self.m.run("done(window.tracepaper3d.CLIENT);"))
+        hub.publish_status("connected", "test tablet", screen=True)
+        self.assertTrue(self.m.run(
+            "until(() => /reMarkable · \\d+ × \\d+ mm/.test(document.getElementById('tpv-pen').textContent), done);"))
+        self.assertEqual(self.pen_ui()[1], "Disconnect")
+        tw, th = tablet_size(90)
+        sent = len(pen.shown)
+        for i in range(11):
+            hub.publish_frame({"x": tw / 2 - 5 + i, "y": th / 2, "p": 0.5, "tool": "pen", "touch": True, "done": 0})
+        hub.publish_frame({"x": tw / 2 + 5, "y": th / 2, "p": 0, "tool": "pen", "touch": False, "done": 1700000000654321})
+        self.assertTrue(self.m.run("until(() => document.getElementById('tp-sketch').children.length === 1"
+                                   " && !window.tracepaper3d.pen.down, done);"))
+        # The tablet's screen gets a blank page, which takes its own drawing of the stroke away.
+        self.wait_for(lambda: len(pen.shown) > sent and pen.done == 1700000000654321)
+        self.assertEqual(struct.unpack(">II", pen.shown[-1][16:24]), screen_size(90))
+        self.m.run("window.tracepaper3d.state.dirty = false; document.getElementById('tpv-pen-button').click();"
                    "until(() => document.getElementById('tpv-pen').hidden, done);")
-        self.assertEqual((hub.status["state"], self.pen_ui()), ("off", [None, None]))
+        self.assertEqual(hub.status["state"], "off")
 
     def test_project_page_lists_the_views(self):
         base = f"http://127.0.0.1:{self.server.server_address[1]}"
-        self.m.call("WebDriver:ExecuteScript", {"script": "if (window.tracepaper) tracepaper.state.dirty = false;",
+        self.m.call("WebDriver:ExecuteScript", {"script": "for (const t of [window.tracepaper, window.tracepaper3d]) "
+                                                          "if (t) t.state.dirty = false;",
                                                 "args": []})
         self.m.call("WebDriver:Navigate", {"url": f"{base}/"})
         views = self.m.run("""

@@ -12,12 +12,13 @@ MUST, SHOULD and MAY are used as in RFC 2119.
 |---|---|---|
 | `<name>.svg` | the AI | a sheet (§2) |
 | `<name>.sketch.svg` | the viewer, when the person presses Save | the sheet as it was on screen, plus their ink (§3) |
+| `<name>.glb.sketch.svg` | the viewer, when the person presses Save on a model | a picture of the model's view, plus their ink (§3.1) |
 
 - Both are plain SVG 1.1, plus SVG 2's `vector-effect` (§2.1), and open in any browser or in Inkscape.
 - The sketch file sits next to its sheet. A sheet's file name MUST NOT end in `.sketch.svg`.
 - A project folder can also hold 3D models, `.glb` files (§2.8). Sheets and models are the project's **views**; the viewer shows each in a window of its own (§5).
 - Tracepaper attributes and elements use the namespace `urn:tracepaper:0`, by convention with the prefix `tp`. The `0` is the format version (§6).
-- An existing sketch file means "not handled yet". The AI deletes it once it has acted on it.
+- An existing sketch file means "not handled yet". The AI deletes it once it has acted on it. A sketch file of either kind ends in `.sketch.svg`.
 
 ## 2. Sheets
 
@@ -192,7 +193,7 @@ The reference implementations are `tracepaper/sheet.py` (for writing sheets) and
 
 ### 2.8 3D models
 
-A model is a glTF 2.0 binary file (`.glb`) showing a part or an assembly in 3D. For now the viewer only shows it. There's no sketching on models and no Tracepaper metadata in them yet.
+A model is a glTF 2.0 binary file (`.glb`) showing a part or an assembly in 3D. The person can look at it, slice it and sketch over its view (§3.1). There's no Tracepaper metadata in models yet, except which nodes start hidden.
 
 - **What to write:** only what the person should look at, typically one coloured assembly per file, not every intermediate shape. With CadQuery: `assembly.export("views/frame.glb")`.
 - **Units and orientation:** millimetres. CAD's z-up coordinates are turned into glTF's y-up by a rotation on the root node, as CadQuery (OpenCascade) writes it. Fronts face −y in CAD coordinates.
@@ -223,6 +224,17 @@ The person can also ink in a colour picked from the sheet. A stroke drawn that w
 
 Strokes are rough by design. They show the general shape of a change and where it goes. Exact sizes are negotiated afterwards. A handwritten number or note next to a sketch is just more strokes. Colours mean only what the person says they mean.
 
+### 3.1 Sketches over models
+
+The person can also draw over a model's 3D view (§2.8). Save then writes `<name>.glb.sketch.svg` next to `<name>.glb`. It is a sheet (§2) whose plane is the one the camera looked at:
+
+- **Coordinates.** Millimetres on that plane, x to the right on screen and y up. `tp:view` places them in the model as in §2.3: `normal` points towards the viewer and `xdir` to the right, and `origin` is a point of the plane. A stroke point (x, y) is the model point origin + x·xdir + y·(normal × xdir), give or take a depth along `normal`, which a drawing over a 3D view doesn't say. The plane is through the middle of the view, or, when the view looks straight at a section (Section only), the section's plane, where the depth is exact. From a standard direction the coordinates are CAD's own: from the right, x is CAD y and y is CAD z.
+- **`tp:view`** also says what was on screen: `kind="model view"`; `title`, the model and the direction looked from; `area`, the part of the plane in view (`"x0 y0 x1 y1"`); `hidden`, the model's tree nodes that were hidden (paths, separated by `; `); and `slices`, what the slice planes left of the model, in words, such as `kept: x ≤ 412.5` or `section at x = 412.5`.
+- **The View layer** holds a picture of the view as it was, an `image` covering `area`. The Sketch layer holds the ink, as in §3.
+- **The root** gets `tp:sketch-of="<name>.glb"`.
+
+Ink belongs to the direction it was drawn from, so the viewer doesn't turn the view while there is ink on it; it only pans and zooms.
+
 ## 4. Working with an AI (informative)
 
 **Making sheets**
@@ -233,9 +245,9 @@ Strokes are rough by design. They show the general shape of a change and where i
 
 **Acting on a sketch**
 
-1. Find the newest `*.sketch.svg` in the project.
+1. Find the newest `*.sketch.svg` in the project. One named `<name>.glb.sketch.svg` was drawn over a model (§3.1).
 2. Look at it. `tracepaper inspect` does both steps: it lists the strokes, picked colours and moved labels, and renders the whole sheet, a close-up of the ink, and the close-up with the drawing faded. Without it, render with `rsvg-convert -b white -z 6 X.sketch.svg -o x.png`; for a close-up, render a copy whose root `viewBox` is set to the Sketch layer's bounds (with y negated), plus a margin.
-3. Work out what the sketch is and where it goes. Stroke coordinates are model coordinates. Nearby ids and `tp:source` pointers say what the strokes touch, and `tp:view` maps them into 3D. A stroke's `tp:color-from` names the element whose colour it was drawn in. Ink in a sheet colour can be hard to tell apart from the drawing; rendering the Sketch layer alone helps.
+3. Work out what the sketch is and where it goes. Stroke coordinates are model coordinates. Nearby ids and `tp:source` pointers say what the strokes touch, and `tp:view` maps them into 3D. Over a model, the picture shows what the strokes were drawn on, and `tp:view` places them in the model up to a depth along the line of sight. A stroke's `tp:color-from` names the element whose colour it was drawn in. Ink in a sheet colour can be hard to tell apart from the drawing; rendering the Sketch layer alone helps.
 4. Change the real model, in its own pipeline. The sketch gives the shape and a rough size. Exact values come from what the person said or wrote, or from a sensible choice.
 5. Regenerate the sheet. Put the new feature and its dimensions on a `Changes` layer. Keep any label positions the person dragged: compare the sketch file's placement attributes with the sheet's.
 6. Delete the sketch file.
@@ -249,8 +261,8 @@ If the result isn't right, the person sketches again or says so, and the loop re
 - lists the project's views (sheets and models in the folder and up to three folders below it) on a project page. Each view opens in a window of its own, so several can be watched side by side, and reloads when its file changes on disk;
 - shows models (§2.8) in 3D: rotate, pan, zoom, standard directions, and slices along the axes, or just the sections there. The camera stays where it is when the model reloads;
 - shows each view's tree (§2.4, §2.8) in the same panel, folded at first so only the top level shows, where the person can unfold nodes and hide and show them in that window. Their choices last while the window is open, including when the file is rewritten, and aren't stored;
-- toggles layers, lets the person drag annotations (§2.6), and provides a pen with a few colours;
-- can take ink from a drawing tablet, such as a reMarkable 2, which the person connects and disconnects in a sheet's window; connecting takes the tablet from any other viewer that has it. The tablet covers the current view of the window the person used last with the mouse (or connected from, or opened last), fitted at one scale for both axes so drawings keep their proportions, while the mouse keeps doing everything else. A tablet with a screen shows that view, lined up with the pen;
+- toggles layers, lets the person drag annotations (§2.6), and provides a pen with a few colours, on sheets and over models, where the view only pans and zooms while there is ink, and turning it first asks to wipe the ink (§3.1);
+- can take ink from a drawing tablet, such as a reMarkable 2, which the person connects and disconnects in a view's window; connecting takes the tablet from any other viewer that has it. The tablet covers the current view of the window the person used last with the mouse (or connected from, or opened last), fitted at one scale for both axes so drawings keep their proportions, while the mouse keeps doing everything else. A tablet with a screen shows a sheet's view, lined up with the pen; over a model it shows only the frame of where the pen draws, and the person looks at the window;
 - writes the sketch file on Save (§3), and clears the ink once the AI has deleted that file;
 - shows an unhandled sketch file again when reopened;
 - never solves, checks or interprets anything, and never runs `regenerate`.

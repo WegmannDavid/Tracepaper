@@ -1,14 +1,19 @@
 // Tracepaper's 3D view: a .glb model, such as a CadQuery assembly's export, in its
 // colours and with the edges between its faces. Rotate, pan and zoom; it reloads
-// when the file changes and keeps the camera.
+// when the file changes and keeps the camera. Sketch over it with the mouse or a
+// tablet's pen; Save writes <model>.glb.sketch.svg (SPEC.md §3.1).
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { TP_NS, fmt } from './annotations.js';
 import { CadControls } from './controls.js';
 import { Edges } from './edges.js';
+import { INK_COLORS, Ink, PenInput, coalesced, swatch } from './ink.js';
+import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
+import { ScreenFeed, Tablet } from './pen.js';
+import { renderBlank } from './screen.js';
+import { SVG_NS, growViewBox, inkBounds, inkLayerOf, parseSvg } from './sheetdoc.js';
 import { Slices } from './slices.js';
-import { $, CLIENT, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
-import { Tablet } from './pen.js';
 import { flatten, renderTree } from './tree.js';
 
 const POLL_MS = 1000;
@@ -25,7 +30,10 @@ const LOOKS = {
 };
 const ui = {
   canvas: $('tpv-canvas'), view: $('tpv-view'), status: $('tpv-status'), empty: $('tpv-empty'),
-  toast: $('tpv-toast'), axes: $('tpv-axes'), edges: $('tpv-edges'), slices: $('tpv-slices'), pen: $('tpv-pen'), penButton: $('tpv-pen-button'), fit: $('tpv-fit'), tree: $('tpv-layers'),
+  toast: $('tpv-toast'), axes: $('tpv-axes'), edges: $('tpv-edges'), slices: $('tpv-slices'), pen: $('tpv-pen'),
+  penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), fit: $('tpv-fit'), tree: $('tpv-layers'),
+  bar: $('tpv-bar'), ink: $('tpv-ink'), inkLayer: $('tp-sketch'), sketch: $('tpv-sketch'), swatches: $('tpv-swatches'),
+  undo: $('tpv-undo'), clear: $('tpv-clear'), save: $('tpv-save'), hint: $('tpv-hint'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
 const toast = toaster(ui.toast);
@@ -37,6 +45,7 @@ const AXIS_PX = 30;
 // glTF is y up; CAD files exported from z-up CAD carry a turn into it on their root,
 // so a CAD direction (x, y, z) is (x, z, -y) in the scene.
 const toScene = ([x, y, z]) => new THREE.Vector3(x, z, -y);
+const fromScene = (v) => [v.x, -v.z, v.y];
 
 // Without WebGL (switched off, or no working GPU process) there is nothing to draw with:
 // say so, and keep the rest of the page working.
@@ -67,6 +76,10 @@ const state = {
   model: null, mtime: null, half: 1, loads: 0,
   tree: [], expanded: new Set(),
   choices: new Map(), // key -> hidden, what this window's person switched; kept when the model reloads
+  message: { text: '', error: false }, // how loading went
+  // Sketching: drawing with the mouse, in color; the undo list; whether the ink is unsaved;
+  // the sketch file's time, while there is one; gen counts saves, which polls in flight ignore.
+  drawing: false, color: INK_COLORS[0][1], undo: [], dirty: false, sketchMtime: null, gen: 0, saving: false,
 };
 let resolveReady;
 const ready = new Promise((resolve) => { resolveReady = resolve; });
@@ -78,6 +91,7 @@ function render() {
     slices.outline(renderer, edges);
   }
   renderAxes();
+  placeInk();
 }
 
 // Each axis as the camera sees it, the ones pointing away drawn first. Pointing at the
@@ -108,10 +122,11 @@ function resize() {
   render();
 }
 
-// Look at the whole model (what is shown of it) from one of LOOKS; without one, keep
-// the current direction and roll.
+// Look at the whole model (what is shown of it) from one of LOOKS, or another {dir, up};
+// without one, keep the current direction and roll. Turning the view with ink on it asks
+// first (mayTurn).
 function frame(look) {
-  if (!state.model) return;
+  if (!state.model || (look && turns(look) && !mayTurn())) return;
   const box = new THREE.Box3();
   state.model.updateMatrixWorld(true);
   state.model.traverseVisible((o) => { if (o.isMesh && o.layers.isEnabled(0) && !o.userData.slice) box.expandByObject(o); });
@@ -225,7 +240,7 @@ function renderPanel() {
 const FACING = { x: LOOKS.right, y: LOOKS.front, z: LOOKS.top };
 function faceSection() {
   const on = slices.planes.filter((p) => p.on);
-  if (slices.sectionOnly && on.length === 1) frame(FACING[on[0].axis]);
+  if (slices.sectionOnly && on.length === 1 && ink.empty) frame(FACING[on[0].axis]); // ink: stay
   else render();
 }
 
@@ -351,24 +366,45 @@ async function load(mtime) {
 }
 
 function setStatus(text, error = false) {
-  ui.status.textContent = text;
-  ui.status.className = `tpv-status${error ? ' dirty' : ''}`;
+  state.message = { text, error };
+  updateStatus();
+}
+
+// The toolbar's status (how loading went, else whether the ink is saved), which of its
+// buttons work, and what the mouse does.
+function updateStatus() {
+  const { text, error } = state.message;
+  const [shown, cls] = error ? [text, 'dirty'] : state.dirty ? ['Unsaved changes', 'dirty']
+    : state.sketchMtime ? [`Saved ${sketchFile}, ready for the AI`, 'pending'] : [text, ''];
+  ui.status.textContent = ui.status.title = shown; // the title: for when it is cut short
+  ui.status.className = `tpv-status ${cls}`;
+  ui.undo.disabled = !state.undo.length;
+  ui.clear.disabled = ink.empty;
+  ui.save.disabled = !state.model;
+  ui.hint.textContent = state.drawing ? 'Drag to draw · right-drag to pan · scroll to zoom'
+    : ink.empty ? 'Drag to rotate · right-drag to pan · scroll to zoom'
+    : 'Turning the view wipes the ink · right-drag to pan · scroll to zoom';
 }
 
 async function poll() {
+  const gen = state.gen;
   try {
     const listing = await listViews();
     renderViewsMenu(ui.view, listing.views, viewName);
     const me = listing.views.find((v) => v.name === viewName);
     if (!me) setStatus(`${viewName} is gone`, true);
-    else if (me.mtime !== state.mtime) {
-      const reload = !!state.model;
-      try {
-        await load(me.mtime);
-        if (reload) toast('Model updated');
-      } catch (err) {
-        setStatus(`Could not load ${viewName}: ${err.message}`, true); // e.g. half written: tried again
+    else {
+      if (me.mtime !== state.mtime) {
+        const first = !state.model;
+        try {
+          await load(me.mtime);
+          if (!first) toast('Model updated');
+          else if (me.sketch) await reopenSketch();
+        } catch (err) {
+          setStatus(`Could not load ${viewName}: ${err.message}`, true); // e.g. half written: tried again
+        }
       }
+      if (gen === state.gen && !state.saving) followSketch(me.sketch?.mtime ?? null);
     }
   } catch {
     setStatus('Viewer server stopped', true);
@@ -376,13 +412,283 @@ async function poll() {
   setTimeout(poll, POLL_MS);
 }
 
-// ---- Tablet pen: it doesn't draw on 3D views yet, but using this window takes it from the
-// others, and it can be let go from here. Sheets' windows connect it.
+// ---- Sketching over the view (SPEC.md §3.1)
+// The ink is drawn on the plane the camera looks at, in mm with y up, measured from the
+// line through the scene's origin along the line of sight. It is in an SVG over the
+// canvas whose viewBox follows the camera, so panning and zooming keep it on the model.
+// Turning the view would leave it pointing nowhere, so while there is ink the view only
+// turns once the person agrees to wipe it.
+
+const sketchFile = `${viewName.split('/').pop()}.sketch.svg`;
+const PICTURE_SCALE = 2; // pixels of the saved picture of the view to each of the window's
+const LOOK_NAMES = { iso: 'isometric', top: 'from above', front: 'from the front', right: 'from the right' };
+const NS = { inkscape: 'http://www.inkscape.org/namespaces/inkscape', tp: TP_NS, xlink: 'http://www.w3.org/1999/xlink' };
+
+const ink = new Ink({
+  layer: () => ui.inkLayer, ref: () => ui.inkLayer, undo: () => state.undo,
+  changed: () => { state.dirty = true; updateStatus(); },
+});
+let gesture = null; // a stroke, or erasing, with the mouse or a pen on this computer
+
+// The camera's axes in the scene: right and up on screen, and back towards the viewer.
+function viewAxes() {
+  const q = camera.quaternion;
+  return { right: new THREE.Vector3(1, 0, 0).applyQuaternion(q), up: new THREE.Vector3(0, 1, 0).applyQuaternion(q),
+           back: new THREE.Vector3(0, 0, 1).applyQuaternion(q) };
+}
+
+// What the view shows of the ink's plane: {x0, y0, x1, y1} in mm, x right and y up.
+function viewArea() {
+  const { right, up } = viewAxes();
+  const x = camera.position.dot(right), y = camera.position.dot(up);
+  const w = (camera.right - camera.left) / 2 / camera.zoom, h = (camera.top - camera.bottom) / 2 / camera.zoom;
+  return { x0: x - w, y0: y - h, x1: x + w, y1: y + h };
+}
+
+function placeInk() {
+  const a = viewArea();
+  ui.ink.setAttribute('viewBox', `${a.x0} ${-a.y1} ${a.x1 - a.x0} ${a.y1 - a.y0}`);
+}
+
+// Pan and zoom so that the view shows area, [x0, y0, x1, y1] on the ink's plane.
+function showArea([x0, y0, x1, y1]) {
+  const now = viewArea(), { right, up } = viewAxes();
+  const shift = right.multiplyScalar((x0 + x1 - now.x0 - now.x1) / 2).addScaledVector(up, (y0 + y1 - now.y0 - now.y1) / 2);
+  camera.position.add(shift);
+  controls.target.add(shift);
+  camera.zoom *= Math.min((now.x1 - now.x0) / (x1 - x0), (now.y1 - now.y0) / (y1 - y0));
+  camera.updateProjectionMatrix();
+  render();
+}
+
+// Whether looking from look would turn the view.
+function turns(look) {
+  const { up, back } = viewAxes(), dir = toScene(look.dir).normalize();
+  const upright = toScene(look.up).projectOnPlane(dir).normalize();
+  return dir.dot(back) < 1 - 1e-6 || upright.dot(up) < 1 - 1e-6;
+}
+
+// Whether the view may turn now: with ink on it, only once the person agrees to wipe the
+// ink. dragging: asked as a drag starts, which the question ends, so the next drag turns.
+function mayTurn(dragging = false) {
+  if (!ink.empty) {
+    const what = state.dirty ? 'wipes your unsaved ink' : `wipes the ink here (${sketchFile} stays for the AI)`;
+    if (!confirm(`Turning the view ${what}: it is drawn for this direction.\n\nWipe it and turn?`)) return false;
+    wipe();
+    if (dragging) return false;
+  }
+  state.undo = []; // ink brought back now would be on another plane
+  updateStatus();
+  return true;
+}
+
+controls.mayRotate = () => mayTurn(true);
+
+function wipe() {
+  ui.inkLayer.replaceChildren();
+  Object.assign(state, { undo: [], dirty: false });
+  updateStatus();
+}
+
+function setDrawing(on) {
+  state.drawing = controls.drawing = on;
+  ui.sketch.setAttribute('aria-pressed', String(on));
+  ui.canvas.style.cursor = on ? 'crosshair' : '';
+  updateStatus();
+}
+
+function setColor(i) {
+  state.color = INK_COLORS[i][1];
+  for (const b of ui.swatches.children) b.setAttribute('aria-pressed', String(b.dataset.color === state.color));
+}
+
+const beginStroke = (clientX, clientY) => ink.begin(clientX, clientY, state.color);
+
+function undo() {
+  const u = state.undo.pop();
+  if (u) ink.undoStep(u);
+  updateStatus();
+}
+
+// The mouse draws while Sketch is on; a pen's eraser end erases whatever the tool. The
+// camera controls take the rest.
+function onPointerDown(e) {
+  if (!state.model || gesture) return;
+  if (e.pointerType === 'pen' && (e.button === 5 || e.buttons & 32)) {
+    gesture = { type: 'erase', id: e.pointerId, removed: [] };
+    ink.eraseAt(e.clientX, e.clientY, gesture.removed);
+  } else if (state.drawing && e.button === 0 && !e.shiftKey && e.pointerType !== 'touch') {
+    gesture = { type: 'stroke', id: e.pointerId, ...beginStroke(e.clientX, e.clientY) };
+  } else return;
+  try { ui.canvas.setPointerCapture(e.pointerId); } catch { /* not an active pointer */ }
+  e.preventDefault();
+}
+
+function onPointerMove(e) {
+  if (gesture?.id !== e.pointerId) return;
+  if (gesture.type === 'stroke') ink.extend(gesture, coalesced(e));
+  else for (const [x, y] of coalesced(e)) ink.eraseAt(x, y, gesture.removed);
+}
+
+function onPointerUp(e) {
+  if (gesture?.id !== e.pointerId) return;
+  if (gesture.type === 'stroke') ink.commit(gesture);
+  else ink.finishErase(gesture.removed);
+  gesture = null;
+}
+
+// A point of the ink's plane in the scene, for placing the sketch in 3D: the section's
+// when the view looks straight at one, else the middle of the view.
+function inkPlanePoint(back) {
+  const on = slices.planes.filter((p) => p.on);
+  const plane = slices.sectionOnly && on.length === 1 ? on[0].plane : null;
+  if (plane && Math.abs(plane.normal.dot(back)) > 1 - 1e-6) return plane.normal.clone().multiplyScalar(-plane.constant);
+  return controls.target.clone();
+}
+
+// What the slice planes leave of the model, in words.
+function describeSlices() {
+  const on = slices.planes.filter((p) => p.on);
+  if (!on.length) return null;
+  if (slices.sectionOnly) return `section${on.length > 1 ? 's' : ''} at ${on.map((p) => `${p.axis} = ${fmt(p.at, 2)}`).join(', ')}`;
+  if (slices.corner) return `cut away: ${on.map((p) => `${p.axis} ${p.flip ? '<' : '>'} ${fmt(p.at, 2)}`).join(' and ')}`;
+  return `kept: ${on.map((p) => `${p.axis} ${p.flip ? '≥' : '≤'} ${fmt(p.at, 2)}`).join(', ')}`;
+}
+
+function lookName(back) {
+  const name = Object.keys(LOOKS).find((k) => toScene(LOOKS[k].dir).normalize().dot(back) > 1 - 1e-6);
+  return name ? LOOK_NAMES[name] : `from (${fromScene(back).map((c) => c.toFixed(2)).join(', ')})`;
+}
+
+// The view as a sketch file (SPEC.md §3.1): a picture of it on a layer of its own, the ink
+// over it, both in mm on the ink's plane, and where that plane is in the model.
+function sketchDocument() {
+  const a = viewArea(), { right, back } = viewAxes();
+  render(); // the canvas keeps no copy of what it shows, so it is taken right after drawing it
+  const picture = Object.assign(document.createElement('canvas'), {
+    width: Math.round(ui.canvas.clientWidth * PICTURE_SCALE), height: Math.round(ui.canvas.clientHeight * PICTURE_SCALE),
+  });
+  picture.getContext('2d').drawImage(ui.canvas, 0, 0, picture.width, picture.height);
+
+  const doc = document.implementation.createDocument(SVG_NS, 'svg', null), svg = doc.documentElement;
+  const set = (el, attrs) => {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === null || v === undefined) continue;
+      const prefix = k.split(':')[1] ? k.split(':')[0] : null;
+      if (prefix) el.setAttributeNS(NS[prefix], k, String(v));
+      else el.setAttribute(k, String(v));
+    }
+    return el;
+  };
+  const add = (parent, tag, attrs) => parent.appendChild(set(doc.createElementNS(tag.startsWith('tp:') ? TP_NS : SVG_NS, tag), attrs));
+  const vector = (v) => fromScene(v).map((c) => fmt(c, 6)).join(' ');
+  const w = a.x1 - a.x0, h = a.y1 - a.y0, name = viewName.split('/').pop();
+  for (const [prefix, uri] of Object.entries(NS)) svg.setAttributeNS('http://www.w3.org/2000/xmlns/', `xmlns:${prefix}`, uri);
+  set(svg, { width: `${fmt(w)}mm`, height: `${fmt(h)}mm`, viewBox: `${fmt(a.x0)} ${fmt(-a.y1)} ${fmt(w)} ${fmt(h)}`,
+             'tp:sketch-of': name, 'tp:saved': new Date().toISOString() });
+  const hidden = flatten(state.tree).filter((n) => n.hidden).map((n) => n.key);
+  add(add(svg, 'metadata', {}), 'tp:view', {
+    title: `${name}, ${lookName(back)}`, kind: 'model view',
+    origin: vector(back.clone().multiplyScalar(inkPlanePoint(back).dot(back))), normal: vector(back), xdir: vector(right),
+    area: [a.x0, a.y0, a.x1, a.y1].map((v) => fmt(v)).join(' '), hidden: hidden.length ? hidden.join('; ') : null,
+    slices: describeSlices(),
+  });
+  const layer = (id, label) => add(svg, 'g', { id, 'inkscape:groupmode': 'layer', 'inkscape:label': label, transform: 'scale(1,-1)' });
+  add(layer('tp-view', 'View'), 'image', {
+    width: fmt(w), height: fmt(h), preserveAspectRatio: 'none', transform: `translate(${fmt(a.x0)} ${fmt(a.y1)}) scale(1,-1)`,
+    'xlink:href': picture.toDataURL('image/png'),
+  });
+  const sketch = layer('tp-sketch', 'Sketch');
+  for (const path of ui.inkLayer.children) sketch.appendChild(doc.importNode(path, true));
+  growViewBox(svg, inkBounds(sketch)); // ink drawn and then panned out of view stays
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(doc)}\n`;
+}
+
+async function save() {
+  if (!state.model || state.saving) return;
+  state.saving = true;
+  state.gen++;
+  try {
+    const r = await fetchOk(`/api/sketch/${encodeURIComponent(viewName)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'image/svg+xml', 'X-Tracepaper': '1' }, body: sketchDocument(),
+    });
+    const { mtime } = await r.json();
+    Object.assign(state, { dirty: false, sketchMtime: mtime });
+    toast(`Saved ${sketchFile}`);
+  } catch (err) {
+    toast(`Save failed: ${err.message}`, true);
+  } finally {
+    state.saving = false;
+    state.gen++;
+    updateStatus();
+  }
+}
+
+// The sketch file on disk: once the AI has deleted it, it is handled, and its ink goes.
+function followSketch(sketch) {
+  if (state.sketchMtime && !sketch) {
+    state.sketchMtime = null;
+    if (!state.dirty && !ink.empty) {
+      wipe();
+      toast('Sketch handled');
+    }
+  } else if (sketch !== state.sketchMtime && !state.dirty) {
+    state.sketchMtime = sketch;
+  }
+  updateStatus();
+}
+
+// An unhandled sketch file's ink, and the view it was drawn on, when the window opens.
+async function reopenSketch() {
+  let root;
+  try {
+    root = parseSvg(await (await fetchOk(`/api/sketch/${encodeURIComponent(viewName)}`)).text());
+  } catch {
+    return;
+  }
+  const view = root.getElementsByTagNameNS(TP_NS, 'view')[0];
+  const numbers = (attr) => (view?.getAttribute(attr) ?? '').trim().split(/[\s,]+/).map(Number);
+  const [n, x, area] = ['normal', 'xdir', 'area'].map(numbers);
+  if (n.length !== 3 || x.length !== 3 || ![...n, ...x].every(Number.isFinite)) return;
+  frame({ dir: n, up: [n[1] * x[2] - n[2] * x[1], n[2] * x[0] - n[0] * x[2], n[0] * x[1] - n[1] * x[0]] });
+  if (area.length === 4 && area.every(Number.isFinite) && area[2] > area[0] && area[3] > area[1]) showArea(area);
+  ui.inkLayer.append(...(inkLayerOf(root)?.children ?? []));
+  updateStatus();
+}
+
+// ---- Tablet pen
+// The toolbar's button connects the reMarkable (tracepaper/pen.py) and lets it go. Its pen
+// draws and erases over the view (ink.js's PenInput). The tablet's screen shows no
+// picture of a 3D view, only the frame of where the pen draws (screen.js), which also
+// takes the tablet's own ink of each stroke away once it ends: the person looks here.
 
 const tablet = new Tablet({
-  client: CLIENT, draws: false, label: ui.pen, button: ui.penButton, toast,
-  describe: (s) => ({ text: 'reMarkable · not on 3D views yet', title: s.message }),
+  client: CLIENT, stage: ui.canvas, label: ui.pen, button: ui.penButton, toast,
+  onStatus: (s) => {
+    if (s?.state !== 'connected' || !tablet.here) {
+      pen.end();
+      pen.showCursor(null);
+    }
+    screenChanged();
+  },
+  onFrame: (f) => pen.frame(f),
 });
+
+const pen = new PenInput({
+  ink, tablet, stage: ui.canvas, cursor: ui.penCursor,
+  ready: () => !!state.model && tablet.here, begin: beginStroke, ended: screenChanged,
+});
+
+const feed = new ScreenFeed({
+  tablet, pen, client: CLIENT, busy: () => !!gesture,
+  picture: () => {
+    const r = ui.canvas.getBoundingClientRect();
+    return r.width && r.height && tablet.status?.pixels
+      ? renderBlank({ stage: r, size: tablet.size, pixels: tablet.status.pixels }) : null;
+  },
+});
+
+function screenChanged() { feed.changed(); }
 
 // ---- Wiring
 
@@ -390,23 +696,57 @@ for (const b of document.querySelectorAll('[data-look]')) b.addEventListener('cl
 ui.fit.addEventListener('click', () => frame(null));
 ui.edges.addEventListener('click', () => showEdges(!edges?.shown));
 buildSliceControls();
-ui.view.addEventListener('change', () => { if (ui.view.value !== viewName) location.href = viewUrl(ui.view.value); });
+INK_COLORS.forEach((_, i) => {
+  const b = swatch(i, false); // the number keys look from the standard directions here
+  b.addEventListener('click', () => setColor(i));
+  ui.swatches.append(b);
+});
+ui.sketch.addEventListener('click', () => setDrawing(!state.drawing));
+ui.undo.addEventListener('click', undo);
+ui.clear.addEventListener('click', () => ink.clear());
+ui.save.addEventListener('click', save);
+// Don't leave toolbar buttons focused, or keys would press them.
+ui.bar.addEventListener('click', (e) => e.target.closest('button')?.blur());
+ui.view.addEventListener('change', () => {
+  if (ui.view.value === viewName) return;
+  if (state.dirty && !confirm(`Discard the unsaved ink on ${viewName}?`)) {
+    ui.view.value = viewName;
+    return;
+  }
+  state.dirty = false;
+  location.href = viewUrl(ui.view.value);
+});
+ui.canvas.addEventListener('pointerdown', onPointerDown);
+ui.canvas.addEventListener('pointermove', onPointerMove);
+ui.canvas.addEventListener('pointerup', onPointerUp);
+ui.canvas.addEventListener('pointercancel', onPointerUp);
+// Using this window with the mouse makes it the one the tablet draws in.
 window.addEventListener('pointerdown', () => tablet.claim(), true);
 ui.canvas.addEventListener('wheel', () => tablet.claim(), { passive: true });
 window.addEventListener('keydown', (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey || (e.target instanceof Element && e.target.closest('select'))) return;
+  if (e.target instanceof Element && e.target.closest('select, input, textarea')) return;
+  const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
+  if (mod && key === 's') { e.preventDefault(); save(); return; }
+  if (mod && key === 'z') { e.preventDefault(); undo(); return; }
+  if (mod || e.altKey) return;
   const look = { 0: 'iso', 7: 'top', 1: 'front', 3: 'right' }[e.key];
   if (look) frame(LOOKS[look]);
-  else if (e.key.toLowerCase() === 'f') frame(null);
-  else if (e.key.toLowerCase() === 'e') showEdges(!edges?.shown);
+  else if (key === 'f') frame(null);
+  else if (key === 'e') showEdges(!edges?.shown);
+  else if (key === 'p') setDrawing(!state.drawing);
+  else if (key === 'escape') setDrawing(false);
 });
-new ResizeObserver(resize).observe(ui.canvas);
+window.addEventListener('beforeunload', (e) => { if (state.dirty) e.preventDefault(); });
+// The window or the tree panel changes the view's shape, which the tablet's drawing area follows.
+new ResizeObserver(() => { resize(); tablet.render(); screenChanged(); }).observe(ui.canvas);
 panelDivider(document.querySelector('main'));
 document.title = `${viewName} · Tracepaper`;
 
+setColor(0);
+updateStatus();
 poll();
 tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten,
-  showEdges, slices };
+  showEdges, slices, ink, pen, save, undo, setDrawing, viewArea };

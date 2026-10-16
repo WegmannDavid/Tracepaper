@@ -1,5 +1,6 @@
 // The drawing tablet (tracepaper/pen.py) in the viewer's pages: how it maps onto a
-// canvas, the requests to the server about it, and its connection and toolbar (Tablet).
+// canvas, the requests to the server about it, its connection and toolbar (Tablet), and
+// the pictures its screen shows (ScreenFeed).
 //
 // The canvas's shape is fitted into the middle of the tablet at one scale for
 // both axes, so shapes drawn on the tablet keep their proportions and every
@@ -34,14 +35,13 @@ export async function tablet(action, client) {
 }
 
 // The tablet as a page sees it: its status, which the server sends to every window, which
-// window the pen draws in, and the toolbar's status (label) and button for it. A page
-// that draws (a sheet's) gets the pen's frames (onFrame) and can connect the tablet;
-// any page can let it go while the pen is with it, and takes the pen when the person
-// uses the page with the mouse (claim). describe(status) gives {text, title} for the
-// label while the tablet draws in this window.
+// window the pen draws in, and the toolbar's status (label) and button for it. The page
+// gets the pen's frames (onFrame) while the pen draws in it, over stage, the element the
+// tablet covers. It can connect the tablet or let it go, and takes the pen when the
+// person uses the page with the mouse (claim).
 export class Tablet {
-  constructor({ client, draws, label, button, toast, describe, onStatus = () => {}, onFrame = () => {} }) {
-    Object.assign(this, { client, draws, label, button, toast, describe, onStatus, onFrame });
+  constructor({ client, stage, label, button, toast, onStatus = () => {}, onFrame = () => {} }) {
+    Object.assign(this, { client, stage, label, button, toast, onStatus, onFrame });
     this.status = null; // null: the server has no tablet
     button.addEventListener('click', () => this.toggle());
   }
@@ -52,7 +52,7 @@ export class Tablet {
   get size() { return this.status && { width: this.status.width, height: this.status.height }; }
 
   connect() {
-    const source = new EventSource(`/api/pen?client=${encodeURIComponent(this.client)}&draws=${this.draws ? 1 : 0}`);
+    const source = new EventSource(`/api/pen?client=${encodeURIComponent(this.client)}`);
     source.addEventListener('status', (e) => this.update(JSON.parse(e.data)));
     source.addEventListener('pen', (e) => this.onFrame(JSON.parse(e.data)));
     source.addEventListener('error', () => {
@@ -90,7 +90,7 @@ export class Tablet {
     const s = this.status;
     const mine = !!s && s.state !== 'off' && this.here;
     this.label.hidden = !s || (s.state === 'off' && !s.message);
-    this.button.hidden = !s || !(this.draws || mine);
+    this.button.hidden = !s;
     if (!s) return;
     this.button.dataset.action = mine ? 'disconnect' : 'connect';
     if (!this.button.disabled) {
@@ -103,8 +103,7 @@ export class Tablet {
     let text = 'reMarkable: connecting…', title = s.message;
     if (s.state === 'connected' && !this.here) {
       text = 'reMarkable · in another window';
-      title = this.draws ? 'The pen draws in the window you used last. Click into this one, or press Connect here, '
-        + 'to draw here.' : 'The pen draws in the window you used last.';
+      title = 'The pen draws in the window you used last. Click into this one, or press Connect here, to draw here.';
     } else if (s.state === 'connected') {
       ({ text, title } = this.describe(s));
     } else if (s.state === 'error' || s.state === 'off') {
@@ -113,5 +112,50 @@ export class Tablet {
     this.label.textContent = text;
     this.label.title = title;
     this.label.className = `tpv-pen ${s.state}`;
+  }
+
+  // The label while the pen draws here: how much of the tablet covers the view.
+  describe(s) {
+    const r = this.stage.getBoundingClientRect();
+    if (!r.width || !r.height) return { text: 'reMarkable', title: s.message };
+    const a = activeArea(this.size, r), size = `${Math.round(a.width)} × ${Math.round(a.height)} mm`;
+    return { text: `reMarkable · ${size}`, title: `${s.message}. The middle ${size} of the tablet covers this `
+      + 'view, so drawings keep their proportions; the rest of the tablet does nothing.' };
+  }
+}
+
+const SCREEN_DELAY_MS = 400;
+
+// While the tablet's pen draws in a page and the tablet has a screen, this sends the screen
+// picture(), a canvas (or a promise of one, or null for nothing to show), shortly after
+// the page says its view changed and not while busy() or the pen is down. Each picture
+// says up to which stroke it has the pen's ink (pen.done, ink.js), which the tablet then
+// stops drawing itself.
+export class ScreenFeed {
+  constructor({ tablet, pen, client, picture, busy = () => false }) {
+    Object.assign(this, { tablet, pen, client, picture, busy, timer: null });
+  }
+
+  get showing() {
+    const s = this.tablet.status;
+    return s?.state === 'connected' && !!s.screen && this.tablet.here;
+  }
+
+  changed() {
+    if (!this.showing) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.send(), SCREEN_DELAY_MS);
+  }
+
+  async send() {
+    if (!this.showing) return;
+    if (this.pen.down || this.busy()) { this.changed(); return; }
+    const done = this.pen.done; // the strokes up to this one are in the picture
+    const canvas = await this.picture();
+    const png = canvas && await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!png || !this.showing) return;
+    fetch(`/api/pen/view?client=${encodeURIComponent(this.client)}&done=${done}`, {
+      method: 'POST', headers: { 'Content-Type': 'image/png', 'X-Tracepaper': '1' }, body: png,
+    }).catch(() => {});
   }
 }

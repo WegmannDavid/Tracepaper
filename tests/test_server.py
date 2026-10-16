@@ -67,6 +67,11 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/sketch/b.svg")[0], 200)
         self.assertEqual(self.request("GET", "/api/sketch/a.svg")[0], 404)
         self.assertEqual(self.request("GET", "/api/sketch/models%2Fpart.glb")[0], 404)
+        (self.dir / "models" / "part.glb.sketch.svg").write_text(SHEET)  # a sketch over the model
+        self.assertEqual(self.request("GET", "/api/sketch/models%2Fpart.glb"), (200, SHEET.encode()))
+        listing = json.loads(self.request("GET", "/api/views")[1])
+        self.assertTrue(listing["views"][-1]["sketch"])
+        self.assertEqual(len(listing["views"]), 3)  # not a view of its own
 
     def test_only_listed_files_are_reachable(self):
         for name in ("notes.txt", "..%2Fa.svg", "b.sketch.svg", "%2Fetc%2Fpasswd", "missing.svg",
@@ -82,13 +87,15 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual((self.dir / "a.sketch.svg").read_text(), SHEET)
         self.assertTrue(json.loads(data)["mtime"])
+        # Over a model, it is the model's name and .sketch.svg (SPEC.md §3.1).
+        self.assertEqual(self.put_sketch("models%2Fpart.glb", SHEET)[0], 200)
+        self.assertEqual((self.dir / "models" / "part.glb.sketch.svg").read_text(), SHEET)
 
     def test_save_rejects_bad_requests(self):
         self.assertEqual(self.request("PUT", "/api/sketch/a.svg", SHEET.encode())[0], 403)  # no header
         self.assertEqual(self.put_sketch("a.svg", "<svg")[0], 400)
         self.assertEqual(self.put_sketch("a.svg", "<html/>")[0], 400)
         self.assertEqual(self.put_sketch("notes.txt", SHEET)[0], 404)
-        self.assertEqual(self.put_sketch("models%2Fpart.glb", SHEET)[0], 404)
         self.assertFalse((self.dir / "a.sketch.svg").exists())
 
     def test_rejects_foreign_host(self):

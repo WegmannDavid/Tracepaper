@@ -5,7 +5,7 @@ A visual aid for working on CAD geometry with an AI.
 The AI's build writes **views** of the model into a project folder:
 
 - **Sheets:** plain, layered SVG files showing geometry, dimensions and the constraints worth seeing. In the viewer you toggle layers, drag labels out of the way and sketch roughly what you want changed. Lines stay the same few pixels wide at any zoom. Press Save, then tell the AI what you drew. It finds `<sheet>.sketch.svg` next to the sheet, makes the change in the real CAD pipeline and rebuilds, and the viewer reloads.
-- **Models:** 3D `.glb` files, such as a CadQuery assembly's export. For now the viewer shows them so you can look at the build's result, with no debugger needed.
+- **Models:** 3D `.glb` files, such as a CadQuery assembly's export. The viewer shows them so you can look at the build's result, with no debugger needed, and you can slice them and sketch over them as on sheets.
 
 Tracepaper doesn't care which CAD tool or constraint solver is behind a sheet. The format is described in [SPEC.md](SPEC.md).
 
@@ -20,6 +20,7 @@ python3 -m tracepaper view examples/bracket     # from this directory
 - **The project page** lists the folder's sheets and models, including up to three folders down. Each view opens in a window of its own, so you can put several side by side.
 - **Updates:** a window updates by itself when its file changes. A 3D view keeps the camera where you left it.
 - **3D views:** the mouse works as in the OCP CAD viewer. Drag to rotate: near the middle it tips the model over, near the edge it turns it about the line of sight; with `Ctrl` only up/down counts, with `Alt` only sideways. Right-drag or `Shift`-drag to pan, scroll or middle-drag to zoom. Iso, Top, Front and Right (keys `0`, `7`, `1`, `3`) look from the standard directions, Fit (`F`) frames what's shown, and Edges (`E`) switches the edges off and on. **Slice**, below the tree, cuts the model with planes along X, Y and Z, as the OCP viewer does: switch a plane on, drag its slider or type where it goes in mm, and `⇄` keeps the other side. Cut parts are closed in their own colours. *Section only* leaves just those cut faces, seen straight on when one plane is on, and *Cut a corner* takes away only what lies beyond all the planes.
+- **Sketching over a 3D view:** press **Sketch** (`P`) and draw with the mouse, or with the reMarkable's pen. You draw on the plane you're looking at, so while there's ink the view only pans and zooms; turning it first asks to wipe the ink. Save writes `<model>.glb.sketch.svg`, a picture of the view with your ink over it, placed in the model. In *Section only*, looking straight at the section, the ink is on the section's plane.
 - **The tree panel:** both kinds of view show their named parts, a sheet's named groups and a model's assembly tree, in the same panel. It starts folded, showing only the top level; `▸` unfolds a node. Click a node's eye to hide it and everything in it, in that window only. Half an eye means something below the node is hidden. What starts hidden comes from the file.
 - **After updating Tracepaper,** restart a running `tracepaper view`. Pages come fresh from disk, but the server behind them doesn't.
 
@@ -43,9 +44,9 @@ tracepaper view path/to/sheets                  # a directory, or a single sheet
 
 ## Drawing with a reMarkable 2
 
-Press **Connect reMarkable** in a sheet's toolbar. The tablet's pen then draws in that window, and the mouse keeps doing everything else, even at the same time. The pen's other end erases whole strokes. **Disconnect** gives the tablet back.
+Press **Connect reMarkable** in a view's toolbar. The tablet's pen then draws in that window, and the mouse keeps doing everything else, even at the same time. The pen's other end erases whole strokes. **Disconnect** gives the tablet back.
 
-The tablet shows the view you draw in, lined up with the pen, so you can look at the tablet instead of the screen:
+The tablet shows the sheet you draw on, lined up with the pen, so you can look at the tablet instead of the screen. Over a 3D view it shows only the frame of where the pen draws, and you look at the screen:
 
 - **The picture** follows the window: it's sent again shortly after you pan, zoom, hide something or draw. A grey frame marks the part of the tablet the pen draws in.
 - **While you draw,** the tablet draws the stroke itself, in black and as fast as the tablet's own app does. When you lift the pen, the viewer's version of it replaces that a moment later, in its colour as a shade of grey.

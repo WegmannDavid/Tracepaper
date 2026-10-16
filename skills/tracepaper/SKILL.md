@@ -1,6 +1,6 @@
 ---
 name: tracepaper
-description: Show CAD geometry to the user in the Tracepaper viewer, as 2D sheets (layered SVG drawings they sketch on with the mouse or a reMarkable pen) and 3D models (.glb), and turn their sketches back into real changes in the project's CAD model. Use when the user mentions Tracepaper, sheets, views, a sketch they drew or saved, *.sketch.svg files, or wants to see, review or mark up a part, assembly, section, profile or 3D result of a CAD model, for example instead of stopping at a debugger breakpoint.
+description: Show CAD geometry to the user in the Tracepaper viewer, as 2D sheets (layered SVG drawings) and 3D models (.glb), both of which they sketch on with the mouse or a reMarkable pen, and turn their sketches back into real changes in the project's CAD model. Use when the user mentions Tracepaper, sheets, views, a sketch they drew or saved, *.sketch.svg files, or wants to see, review or mark up a part, assembly, section, profile or 3D result of a CAD model, for example instead of stopping at a debugger breakpoint.
 ---
 
 # Tracepaper
@@ -8,7 +8,7 @@ description: Show CAD geometry to the user in the Tracepaper viewer, as 2D sheet
 Tracepaper is a visual aid between the user and you. The project's build writes **views** of the model into a folder:
 
 - **Sheets** (`.svg`): 2D drawings of the current geometry and the constraints worth seeing. The user sketches roughly what they want changed and presses Save. They then tell you what they drew, and you make the change in the real CAD model.
-- **Models** (`.glb`): 3D views of the result, so the user can look at what the build produced without a debugger. They can't be sketched on yet.
+- **Models** (`.glb`): 3D views of the result, so the user can look at what the build produced without a debugger. They can slice them, and sketch over the view the same way, which saves `<model>.glb.sketch.svg`.
 
 Tracepaper never holds the model. It's a lens on whatever pipeline the project uses, for example build123d, CadQuery, FreeCAD, DXF or plain code. The user opens the folder in the viewer, which lists all views; each opens in its own browser window and updates by itself when the build rewrites its file.
 
@@ -29,7 +29,7 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
   - The user connects their reMarkable 2 from a sheet's toolbar when they want to draw with it, and disconnects it there or on the tablet. A viewer doesn't hold the tablet otherwise, and connecting in one takes it from any other, so you never need to stop a viewer for the tablet. While connected, the tablet's e-ink screen shows the sheet the pen draws in, in greys.
   - The pages reload views (sheets and models) when they change on disk, so you never need to restart the viewer for that.
   - After Tracepaper itself was updated, a viewer that was already running has to be restarted: if its pages fail to load or show errors, restart it.
-- **`tracepaper inspect [file or dir]`** reports on the newest sketch file under the given path: strokes with colour, coordinates and the element their colour was picked from, moved labels and hidden layers. It also renders a whole-sheet image, a close-up of the ink, and the close-up with the drawing faded. Look at the images with your file-reading tool.
+- **`tracepaper inspect [file or dir]`** reports on the newest sketch file under the given path: strokes with colour, coordinates and the element their colour was picked from, moved labels and hidden layers. It also renders the whole sheet (or, for a sketch over a model, the view they drew on) with the ink, a close-up of the ink, and the close-up with the drawing faded. Look at the images with your file-reading tool.
 - **`tracepaper.sheet`** is a Python helper for writing sheets (`from tracepaper.sheet import Sheet, PathBuilder, HATCH`). It's optional; anything that writes SVG following the spec works.
 - **`tracepaper.model`** writes models: `export(assembly, path, hidden=[...])`, see below.
 - **`rsvg-convert -b white -w 2000 sheet.svg -o sheet.png`** renders a sheet so you can check it before showing it.
@@ -69,8 +69,9 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
    - Arrows from an existing dimension to new geometry usually mean "same as this".
    - A stroke's `tp:color-from` names the element whose colour they drew in, which usually means it belongs with or extends that element.
    - `tp:view` maps sheet coordinates into 3D.
+   - A `<model>.glb.sketch.svg` was drawn over a 3D view: its View layer is a picture of what they saw, and the strokes are in mm on the plane they looked at. `tp:view` places that plane in the model (point = origin + x·xdir + y·(normal × xdir)), but not how deep along `normal` they meant it: tell that from the picture, from what lies under the strokes, and from what they said. From a standard direction the coordinates are CAD's own (from the right: x is CAD y, y is CAD z). In a section (`slices` says `section at …`) seen straight on, the plane is the section's and the depth is exact. `hidden` and `slices` say what they had hidden or cut away.
 3. Change the real model in the project's own pipeline. Take sizes from what they wrote or said; otherwise pick sensible values, using the sketch's rough size as a first guess.
-4. Regenerate all affected sheets. Put the new feature and its dimensions on a **Changes** layer, which the `tracepaper.sheet` helper draws in amber. Carry over any label positions they dragged (listed under "Moved labels").
+4. Regenerate all affected sheets and models. Put the new feature and its dimensions on a **Changes** layer, which the `tracepaper.sheet` helper draws in amber. Carry over any label positions they dragged (listed under "Moved labels").
 5. Delete the sketch file. Its existence means "not handled yet", and the viewer clears the ink when it disappears.
 6. Tell the user how you read the sketch and what you changed, including any value you chose yourself. They'll sketch again or correct you if it's off.
 

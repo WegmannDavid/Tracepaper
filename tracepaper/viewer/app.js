@@ -2,21 +2,18 @@
 // constraint labels and sketch on top, with the mouse or a tablet's pen.
 // Save writes <sheet>.sketch.svg (SPEC.md §3).
 import * as A from './annotations.js';
+import { INK_COLORS, Ink, PenInput, coalesced, pxPerUnit, swatch, toLocal } from './ink.js';
 import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import * as Pen from './pen.js';
 import { renderView } from './screen.js';
 import {
-  NUMBER, SVG_NS, allNodes, buildTree, colourAt, ensureInkLayer, fontSizeOf as fontSizeIn, growViewBox, inkBounds,
+  SVG_NS, allNodes, buildTree, colourAt, ensureInkLayer, fontSizeOf as fontSizeIn, growViewBox, inkBounds,
   inkLayerOf, isHidden, labelOf, parseSvg, pathOf, setHidden,
 } from './sheetdoc.js';
 import { renderTree } from './tree.js';
 
 const REF_ID = 'tpv-ref';
-const INK_COLORS = [['Red', '#e11d48'], ['Blue', '#2563eb'], ['Green', '#16a34a'], ['Black', '#1f2937']];
-const INK_WIDTH_PX = 2.2; // stroke width on screen, at any zoom (SPEC.md §2.1)
-const MIN_STEP_PX = 0.8;  // pointer samples closer than this to the last one are dropped
 const HIT_PX = 8;         // how close the pointer must be to grab a label
-const ERASER_PX = 10;     // radius of the pen's eraser end, on screen
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 400;
 const POLL_MS = 1000;
@@ -185,7 +182,7 @@ function updateStatus() {
   if (state.offline) { text = 'Viewer server stopped'; cls = 'dirty'; }
   else if (state.dirty) { text = 'Unsaved changes'; cls = 'dirty'; }
   else if (state.sketchMtime && state.name) { text = `Saved ${sketchName(state.name)}, ready for the AI`; cls = 'pending'; }
-  ui.status.textContent = text;
+  ui.status.textContent = ui.status.title = text; // the title: for when it is cut short
   ui.status.className = `tpv-status ${cls}`;
   ui.undo.disabled = state.undo.length === 0;
   ui.clear.disabled = !state.ink?.firstElementChild;
@@ -225,18 +222,6 @@ function zoomAt(px, py, factor) {
 function stagePoint(e) {
   const r = ui.stage.getBoundingClientRect();
   return { x: e.clientX - r.left, y: e.clientY - r.top };
-}
-
-function toLocal(el, clientX, clientY) {
-  const m = el.getScreenCTM();
-  if (!m) return null;
-  const p = new DOMPoint(clientX, clientY).matrixTransform(m.inverse());
-  return [p.x, p.y];
-}
-
-function pxPerUnit(el) {
-  const m = el.getScreenCTM();
-  return m ? Math.hypot(m.a, m.b) : 1;
 }
 
 // ---- Pointer input ----------------------------------------------------------
@@ -299,89 +284,13 @@ function movePinch() {
   applyCamera();
 }
 
-// Strokes and erasing take points in client coordinates, from the mouse or a tablet.
+// Strokes and erasing take points in client coordinates, from the mouse or a tablet (ink.js).
+
+const ink = new Ink({ layer: () => state.ink, ref: () => state.ref, undo: () => state.undo, changed: markDirty });
 
 function beginStroke(clientX, clientY) {
   if (isHidden(state.ink)) setLayerVisible(labelOf(state.ink), true);
-  const path = document.createElementNS(SVG_NS, 'path');
-  path.setAttribute('stroke', state.color);
-  if (state.colorFrom?.id) path.setAttributeNS(A.TP_NS, 'tp:color-from', state.colorFrom.id);
-  path.setAttribute('stroke-width', INK_WIDTH_PX);
-  path.setAttribute('vector-effect', 'non-scaling-stroke');
-  path.setAttribute('fill', 'none');
-  path.setAttribute('stroke-linecap', 'round');
-  path.setAttribute('stroke-linejoin', 'round');
-  state.ink.appendChild(path);
-  const s = { path, pts: [], last: null };
-  addPoint(s, clientX, clientY, true);
-  path.setAttribute('d', strokeD(s.pts));
-  markDirty(); // now, so a sheet reloaded mid-stroke keeps it
-  return s;
-}
-
-function addPoint(s, clientX, clientY, force = false) {
-  if (!force && Math.hypot(clientX - s.last.x, clientY - s.last.y) < MIN_STEP_PX) return false;
-  const p = toLocal(state.ref, clientX, clientY);
-  if (!p) return false;
-  s.pts.push(`${A.fmt(p[0], 2)} ${A.fmt(p[1], 2)}`);
-  s.last = { x: clientX, y: clientY };
-  return true;
-}
-
-// A single tap becomes a zero-length segment, which round caps draw as a dot.
-const strokeD = (pts) => `M${pts[0]} L${(pts.length > 1 ? pts.slice(1) : pts).join(' L')}`;
-
-function extendStroke(s, points) {
-  let changed = false;
-  for (const [x, y] of points) changed = addPoint(s, x, y) || changed;
-  if (changed) s.path.setAttribute('d', strokeD(s.pts));
-}
-
-function commitStroke(s) {
-  state.undo.push({ type: 'stroke', el: s.path });
-  updateStatus();
-}
-
-const coalesced = (e) => {
-  const events = e.getCoalescedEvents?.() ?? [];
-  return (events.length ? events : [e]).map((ev) => [ev.clientX, ev.clientY]);
-};
-
-const strokePoints = new WeakMap(); // path -> {d, pts}, parsed once per change
-
-function pointsOf(path) {
-  const d = path.getAttribute('d') ?? '';
-  let cached = strokePoints.get(path);
-  if (cached?.d !== d) {
-    const n = d.match(NUMBER) ?? [], pts = [];
-    for (let i = 0; i + 1 < n.length; i += 2) pts.push([+n[i], +n[i + 1]]);
-    cached = { d, pts };
-    strokePoints.set(path, cached);
-  }
-  return cached.pts;
-}
-
-// Remove every stroke the eraser touches at this point; removed collects them for undo.
-function eraseAt(clientX, clientY, removed) {
-  const p = toLocal(state.ref, clientX, clientY);
-  if (!p) return;
-  const k = pxPerUnit(state.ref);
-  for (const path of [...state.ink.children]) {
-    const pts = pointsOf(path), reach = (ERASER_PX + (parseFloat(path.getAttribute('stroke-width')) || 0) / 2) / k;
-    const hit = pts.length === 1
-      ? Math.hypot(p[0] - pts[0][0], p[1] - pts[0][1]) <= reach
-      : pts.some((q, i) => i > 0 && A.segmentDistance(p, pts[i - 1], q) <= reach);
-    if (hit) {
-      removed.push({ el: path, next: path.nextSibling });
-      path.remove();
-    }
-  }
-}
-
-function finishErase(removed) {
-  if (!removed.length) return;
-  state.undo.push({ type: 'erase', items: removed });
-  markDirty();
+  return ink.begin(clientX, clientY, state.color, state.colorFrom?.id);
 }
 
 function startDrag(hit, e) {
@@ -401,8 +310,8 @@ function moveDrag(g, e) {
 function endGesture() {
   const g = gesture;
   gesture = null;
-  if (g?.type === 'stroke') commitStroke(g);
-  else if (g?.type === 'erase') finishErase(g.removed);
+  if (g?.type === 'stroke') ink.commit(g);
+  else if (g?.type === 'erase') ink.finishErase(g.removed);
   else if (g?.type === 'drag') {
     const after = A.snapshot(g.el);
     if (!A.samePlacement(after, g.before)) {
@@ -429,7 +338,7 @@ function onPointerDown(e) {
   if (e.pointerType === 'pen' && (e.button === 5 || e.buttons & 32)) {
     // A pen's eraser end erases, whatever the tool.
     gesture = { type: 'erase', id: e.pointerId, removed: [] };
-    eraseAt(e.clientX, e.clientY, gesture.removed);
+    ink.eraseAt(e.clientX, e.clientY, gesture.removed);
   } else if (e.button === 1 || (e.button === 0 && spaceHeld)) gesture = startPan(e);
   else if (e.button !== 0) return;
   else if (state.tool === 'pick') {
@@ -465,8 +374,8 @@ function onPointerMove(e) {
     state.cam.y += q.y - gesture.last.y;
     gesture.last = q;
     applyCamera();
-  } else if (gesture.type === 'stroke') extendStroke(gesture, coalesced(e));
-  else if (gesture.type === 'erase') for (const [x, y] of coalesced(e)) eraseAt(x, y, gesture.removed);
+  } else if (gesture.type === 'stroke') ink.extend(gesture, coalesced(e));
+  else if (gesture.type === 'erase') for (const [x, y] of coalesced(e)) ink.eraseAt(x, y, gesture.removed);
   else if (gesture.type === 'drag') moveDrag(gesture, e);
 }
 
@@ -555,14 +464,8 @@ function pickColor(clientX, clientY) {
 function undo() {
   const u = state.undo.pop();
   if (!u) return;
-  if (u.type === 'stroke') u.el.remove();
-  else if (u.type === 'clear') state.ink.append(...u.els);
-  else if (u.type === 'erase') {
-    for (const { el, next } of [...u.items].reverse()) {
-      state.ink.insertBefore(el, next?.parentNode === state.ink ? next : null);
-    }
-  }
-  else if (u.type === 'annot') {
+  if (ink.undoStep(u)) return;
+  if (u.type === 'annot') {
     const g = findAnnotation(u.id) ?? u.el;
     A.restore(g, u.before);
     if (u.id) state.moved.set(u.id, u.before);
@@ -570,13 +473,7 @@ function undo() {
   markDirty();
 }
 
-function clearInk() {
-  const els = [...state.ink.children];
-  if (!els.length) return;
-  for (const el of els) el.remove();
-  state.undo.push({ type: 'clear', els });
-  markDirty();
-}
+const clearInk = () => ink.clear();
 
 // A copy of the sheet as drawn, without what the viewer adds to it.
 function sheetCopy() {
@@ -593,7 +490,7 @@ async function save() {
   if (!state.root || state.busy) return;
   const name = state.name;
   const copy = sheetCopy();
-  copy.setAttributeNS(A.TP_NS, 'tp:sketch-of', name);
+  copy.setAttributeNS(A.TP_NS, 'tp:sketch-of', name.split('/').pop()); // next to it
   copy.setAttributeNS(A.TP_NS, 'tp:saved', new Date().toISOString());
   growViewBox(copy, inkBounds(state.ink));
   const body = `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(copy)}\n`;
@@ -660,104 +557,34 @@ async function poll() {
 }
 
 // ---- Tablet pen --------------------------------------------------------------
-// The toolbar's button connects the reMarkable (tracepaper/pen.py) and lets it go.
-// Frames give the pen's position in mm on the tablet; the tablet covers the
-// canvas as pen.js fits it. The pen draws with the tip and erases with the other
-// end, whatever the mouse is doing. With several windows open, the server sends
-// it to the one used last with the mouse, or where Connect was pressed.
-
-// What the pen is doing here. done: when the pen touched down for the last stroke that
-// ended (pen.py's Decoder).
-const pen = { down: false, ignored: false, stroke: null, removed: null, done: 0 };
+// The toolbar's button connects the reMarkable (tracepaper/pen.py) and lets it go. Its
+// pen draws and erases on the sheet (ink.js's PenInput). With several windows open, the
+// server sends it to the one used last with the mouse, or where Connect was pressed.
 
 const tablet = new Pen.Tablet({
-  client: CLIENT, draws: true, label: ui.pen, button: ui.penButton, toast,
-  describe: (s) => {
-    const r = ui.stage.getBoundingClientRect();
-    if (!r.width || !r.height) return { text: 'reMarkable', title: s.message };
-    const a = Pen.activeArea(tablet.size, r), size = `${Math.round(a.width)} × ${Math.round(a.height)} mm`;
-    return { text: `reMarkable · ${size}`, title: `${s.message}. The middle ${size} of the tablet covers this `
-      + 'view, so drawings keep their proportions; the rest of the tablet does nothing.' };
-  },
+  client: CLIENT, stage: ui.stage, label: ui.pen, button: ui.penButton, toast,
   onStatus: (s) => {
     if (s?.state !== 'connected' || !tablet.here) {
-      endPenTouch();
-      showPenCursor(null);
+      pen.end();
+      pen.showCursor(null);
     }
     viewChanged();
   },
-  onFrame: onPenFrame,
+  onFrame: (f) => pen.frame(f),
 });
 
-function onPenFrame(f) {
-  pen.done = f.done ?? pen.done;
-  const r = ui.stage.getBoundingClientRect();
-  if (!state.root || !tablet.here || !r.width || !r.height) return;
-  const [x, y] = Pen.tabletToStage([f.x, f.y], tablet.size, r);
-  const inside = x >= 0 && y >= 0 && x <= r.width && y <= r.height;
-  const clientX = r.left + x, clientY = r.top + y;
-  showPenCursor(f.tool && inside ? { x, y, eraser: f.tool === 'eraser' } : null);
-  if (f.touch && !pen.down) {
-    pen.down = true;
-    pen.ignored = !inside; // touched down on the unused part of the tablet
-    if (pen.ignored) return;
-    if (f.tool === 'eraser') {
-      pen.removed = [];
-      eraseAt(clientX, clientY, pen.removed);
-    } else {
-      pen.stroke = beginStroke(clientX, clientY);
-    }
-  } else if (f.touch && !pen.ignored) {
-    if (pen.stroke) extendStroke(pen.stroke, [[clientX, clientY]]);
-    else if (pen.removed) eraseAt(clientX, clientY, pen.removed);
-  } else if (!f.touch && pen.down) {
-    endPenTouch();
-  }
-}
-
-function endPenTouch() {
-  if (pen.stroke) commitStroke(pen.stroke);
-  if (pen.removed) finishErase(pen.removed);
-  Object.assign(pen, { down: false, ignored: false, stroke: null, removed: null });
-  viewChanged(); // the tablet's own ink of the stroke goes, even if nothing was drawn here
-}
-
-function showPenCursor(c) {
-  if (!c) { ui.penCursor.setAttribute('visibility', 'hidden'); return; }
-  ui.penCursor.removeAttribute('visibility');
-  ui.penCursor.setAttribute('cx', c.x);
-  ui.penCursor.setAttribute('cy', c.y);
-  ui.penCursor.setAttribute('r', c.eraser ? ERASER_PX : 4);
-  ui.penCursor.classList.toggle('eraser', c.eraser);
-}
+const pen = new PenInput({
+  ink, tablet, stage: ui.stage, cursor: ui.penCursor,
+  ready: () => !!state.root && tablet.here, begin: beginStroke, ended: viewChanged,
+});
 
 // ---- The tablet's screen ---------------------------------------------------------
-// While the tablet's pen draws in this window, the tablet shows this window's view
-// (if it can show pictures, screen.js): shortly after the view changes, and not in the
-// middle of a stroke or drag, a picture of it goes to the tablet.
+// While the tablet's pen draws in this window, the tablet shows this window's view (if it
+// can show pictures, screen.js), shortly after the view changes.
 
-const SCREEN_DELAY_MS = 400;
-let screenTimer = null;
+const feed = new Pen.ScreenFeed({ tablet, pen, client: CLIENT, picture: renderScreen, busy: () => !!gesture });
 
-const showsHere = () => !!state.root && tablet.status?.state === 'connected' && !!tablet.status.screen && tablet.here;
-
-function viewChanged() {
-  if (!showsHere()) return;
-  clearTimeout(screenTimer);
-  screenTimer = setTimeout(sendView, SCREEN_DELAY_MS);
-}
-
-async function sendView() {
-  if (!showsHere()) return;
-  if (pen.down || gesture) { viewChanged(); return; }
-  const done = pen.done; // the strokes up to this one are in the picture: the tablet stops drawing them itself
-  const canvas = await renderScreen();
-  const png = canvas && await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
-  if (!png || !showsHere()) return;
-  fetch(`/api/pen/view?client=${encodeURIComponent(CLIENT)}&done=${done}`, {
-    method: 'POST', headers: { 'Content-Type': 'image/png', 'X-Tracepaper': '1' }, body: png,
-  }).catch(() => {});
-}
+function viewChanged() { feed.changed(); }
 
 // The picture for the tablet's screen, or null if there is nothing to show.
 function renderScreen() {
@@ -769,14 +596,8 @@ function renderScreen() {
 
 // ---- Wiring -----------------------------------------------------------------
 
-INK_COLORS.forEach(([name, c], i) => {
-  const b = document.createElement('button');
-  b.className = 'tpv-swatch';
-  b.dataset.color = c;
-  b.title = `${name} (${i + 1})`;
-  b.setAttribute('aria-label', `${name} ink`);
-  b.style.setProperty('--c', c);
-  b.append(document.createElement('span'));
+INK_COLORS.forEach((_, i) => {
+  const b = swatch(i);
   b.addEventListener('click', () => setColor(i));
   ui.swatches.append(b);
 });
