@@ -21,6 +21,10 @@ from .sheet import INKSCAPE_NS, SVG_NS, TP_NS, fmt
 SVG, INK, TP = f"{{{SVG_NS}}}", f"{{{INKSCAPE_NS}}}", f"{{{TP_NS}}}"
 PLACEMENT = ("offset", "text-at", "angle")
 WIDTH_PX = 2000
+# The images show the sheet as on a screen this many pixels wide, at 2 image pixels to
+# each of its pixels, which is what line widths are in (SPEC.md §2.1).
+SCREEN_PX = WIDTH_PX / 2
+SHAPES = {"path", "line", "polyline", "polygon", "circle", "ellipse", "rect"}
 
 
 def find_sketch(path: Path) -> Optional[Path]:
@@ -114,11 +118,16 @@ def _bounds(points: list) -> tuple:
 def _render(source: str, png: Path, box: Optional[tuple] = None, fade: bool = False) -> None:
     """Render the sketch's SVG text to png; box = (x0, y0, x1, y1) in model mm shows only that."""
     root = ET.fromstring(source)
+    for el in root.iter():
+        if el.tag.rpartition("}")[2] in SHAPES:
+            el.set("vector-effect", "non-scaling-stroke")  # lines in pixels, as the viewer draws them
     if box is not None:
         x0, y0, x1, y1 = box
         root.set("viewBox", f"{fmt(x0)} {fmt(-y1)} {fmt(x1 - x0)} {fmt(y1 - y0)}")  # model y is up
-        root.set("width", f"{fmt(x1 - x0)}mm")
-        root.set("height", f"{fmt(y1 - y0)}mm")
+    # rsvg counts those pixels in the root's size, before scaling it to the image.
+    _, _, w, h = (float(v) for v in root.get("viewBox", "0 0 100 100").replace(",", " ").split())
+    root.set("width", f"{fmt(SCREEN_PX)}px")
+    root.set("height", f"{fmt(SCREEN_PX * h / w)}px")
     if fade:
         for g in _layers(root):
             if g is not _ink_layer(root):

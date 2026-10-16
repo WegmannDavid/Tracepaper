@@ -13,7 +13,7 @@ import { renderTree } from './tree.js';
 
 const REF_ID = 'tpv-ref';
 const INK_COLORS = [['Red', '#e11d48'], ['Blue', '#2563eb'], ['Green', '#16a34a'], ['Black', '#1f2937']];
-const INK_WIDTH_PX = 2.2; // stroke width on screen, at the zoom it was drawn at
+const INK_WIDTH_PX = 2.2; // stroke width on screen, at any zoom (SPEC.md §2.1)
 const MIN_STEP_PX = 0.8;  // pointer samples closer than this to the last one are dropped
 const HIT_PX = 8;         // how close the pointer must be to grab a label
 const ERASER_PX = 10;     // radius of the pen's eraser end, on screen
@@ -306,7 +306,8 @@ function beginStroke(clientX, clientY) {
   const path = document.createElementNS(SVG_NS, 'path');
   path.setAttribute('stroke', state.color);
   if (state.colorFrom?.id) path.setAttributeNS(A.TP_NS, 'tp:color-from', state.colorFrom.id);
-  path.setAttribute('stroke-width', A.fmt(INK_WIDTH_PX / pxPerUnit(state.ref), 3));
+  path.setAttribute('stroke-width', INK_WIDTH_PX);
+  path.setAttribute('vector-effect', 'non-scaling-stroke');
   path.setAttribute('fill', 'none');
   path.setAttribute('stroke-linecap', 'round');
   path.setAttribute('stroke-linejoin', 'round');
@@ -364,9 +365,9 @@ function pointsOf(path) {
 function eraseAt(clientX, clientY, removed) {
   const p = toLocal(state.ref, clientX, clientY);
   if (!p) return;
-  const r = ERASER_PX / pxPerUnit(state.ref);
+  const k = pxPerUnit(state.ref);
   for (const path of [...state.ink.children]) {
-    const pts = pointsOf(path), reach = r + (parseFloat(path.getAttribute('stroke-width')) || 0) / 2;
+    const pts = pointsOf(path), reach = (ERASER_PX + (parseFloat(path.getAttribute('stroke-width')) || 0) / 2) / k;
     const hit = pts.length === 1
       ? Math.hypot(p[0] - pts[0][0], p[1] - pts[0][1]) <= reach
       : pts.some((q, i) => i > 0 && A.segmentDistance(p, pts[i - 1], q) <= reach);
@@ -577,7 +578,6 @@ function clearInk() {
   markDirty();
 }
 
-// Bounds of the ink in model coordinates, including stroke width.
 // A copy of the sheet as drawn, without what the viewer adds to it.
 function sheetCopy() {
   const copy = state.root.cloneNode(true);

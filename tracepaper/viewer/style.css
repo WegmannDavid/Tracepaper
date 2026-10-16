@@ -122,6 +122,9 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) var(--tpv-panel, 220
 
 #tpv-paper { fill: #fff; filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.18)); }
 #tpv-host > svg { overflow: visible; }
+/* Every line is its width in pixels on screen, at any zoom, even in a sheet that doesn't
+   say so (SPEC.md §2.1). */
+#tpv-host * { vector-effect: non-scaling-stroke; }
 
 /* Annotation under the pointer in the Move tool. */
 .tpv-hover { stroke: #ea580c; fill: #ea580c; }

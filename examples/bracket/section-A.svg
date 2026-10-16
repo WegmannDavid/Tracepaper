@@ -5,64 +5,64 @@
   </metadata>
   <defs>
     <pattern id="tp-hatch" patternUnits="userSpaceOnUse" width="2" height="2" patternTransform="rotate(45)">
-      <path d="M1 0 V2" stroke="#1a1a1a" stroke-width="0.18" />
+      <path d="M1 0 V2" stroke="#1a1a1a" stroke-width="0.75" vector-effect="non-scaling-stroke" />
     </pattern>
   </defs>
   <g id="layer-hatch" inkscape:groupmode="layer" inkscape:label="Hatch" transform="scale(1,-1)" stroke="none" fill="url(#tp-hatch)">
-    <path id="hatch-upright" d="M0 0 L37 0 L37 5 L8 5 A3 3 0 0 0 5 8 L5 32 A3 3 0 0 0 8 35 L37 35 L37 40 L0 40 Z" />
-    <path id="hatch-base-end" d="M43 0 L60 0 L60 5 L43 5 Z" />
+    <path id="hatch-upright" d="M0 0 L37 0 L37 5 L8 5 A3 3 0 0 0 5 8 L5 32 A3 3 0 0 0 8 35 L37 35 L37 40 L0 40 Z" vector-effect="non-scaling-stroke" />
+    <path id="hatch-base-end" d="M43 0 L60 0 L60 5 L43 5 Z" vector-effect="non-scaling-stroke" />
   </g>
-  <g id="layer-outline" inkscape:groupmode="layer" inkscape:label="Outline" transform="scale(1,-1)" stroke="#1a1a1a" stroke-width="0.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path id="cut-upright" d="M0 0 L37 0 L37 5 L8 5 A3 3 0 0 0 5 8 L5 32 A3 3 0 0 0 8 35 L37 35 L37 40 L0 40 Z" tp:source="base, upright and flange, left of the hole" />
-    <path id="cut-base-end" d="M43 0 L60 0 L60 5 L43 5 Z" tp:source="base, right of the hole" />
+  <g id="layer-outline" inkscape:groupmode="layer" inkscape:label="Outline" transform="scale(1,-1)" stroke="#1a1a1a" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path id="cut-upright" d="M0 0 L37 0 L37 5 L8 5 A3 3 0 0 0 5 8 L5 32 A3 3 0 0 0 8 35 L37 35 L37 40 L0 40 Z" vector-effect="non-scaling-stroke" tp:source="base, upright and flange, left of the hole" />
+    <path id="cut-base-end" d="M43 0 L60 0 L60 5 L43 5 Z" vector-effect="non-scaling-stroke" tp:source="base, right of the hole" />
   </g>
-  <g id="layer-center" inkscape:groupmode="layer" inkscape:label="Center" transform="scale(1,-1)" stroke="#6b7280" stroke-width="0.25" fill="none" stroke-dasharray="8 1.5 1.5 1.5">
-    <line id="hole-axis" x1="40" y1="-3" x2="40" y2="8" tp:source="mount hole" />
+  <g id="layer-center" inkscape:groupmode="layer" inkscape:label="Center" transform="scale(1,-1)" stroke="#6b7280" fill="none" stroke-dasharray="16 4 3 4">
+    <line id="hole-axis" x1="40" y1="-3" x2="40" y2="8" vector-effect="non-scaling-stroke" tp:source="mount hole" />
   </g>
-  <g id="layer-construction" inkscape:groupmode="layer" inkscape:label="Construction" transform="scale(1,-1)" stroke="#9ca3af" stroke-width="0.25" fill="none" stroke-dasharray="2 1" style="display:none">
-    <circle id="fillet-circle" cx="8" cy="8" r="3" tp:source="inner fillet, base" />
-    <circle id="flange-fillet-circle" cx="8" cy="32" r="3" tp:source="inner fillet, flange" />
+  <g id="layer-construction" inkscape:groupmode="layer" inkscape:label="Construction" transform="scale(1,-1)" stroke="#9ca3af" fill="none" stroke-dasharray="4 3" style="display:none">
+    <circle id="fillet-circle" cx="8" cy="8" r="3" vector-effect="non-scaling-stroke" tp:source="inner fillet, base" />
+    <circle id="flange-fillet-circle" cx="8" cy="32" r="3" vector-effect="non-scaling-stroke" tp:source="inner fillet, flange" />
   </g>
-  <g id="layer-dimensions" inkscape:groupmode="layer" inkscape:label="Dimensions" transform="scale(1,-1)" stroke="#475569" fill="#475569" stroke-width="0.25">
+  <g id="layer-dimensions" inkscape:groupmode="layer" inkscape:label="Dimensions" transform="scale(1,-1)" stroke="#475569" fill="#475569">
     <g id="d-length" tp:type="distance" tp:dim="linear" tp:p1="0 0" tp:p2="60 0" tp:dir="x" tp:offset="-16" tp:label="60" tp:refs="cut-upright cut-base-end" tp:value="60" tp:source="LENGTH">
-      <path d="M0 -1.05 L0 -17.75 M60 -1.05 L60 -17.75 M0 -16 L60 -16" fill="none" />
+      <path d="M0 -1.05 L0 -17.75 M60 -1.05 L60 -17.75 M0 -16 L60 -16" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M0 -16 L2.625 -16.525 L2.625 -15.475 Z M60 -16 L57.375 -15.475 L57.375 -16.525 Z" stroke="none" />
       <text transform="translate(30 -15.125) scale(1,-1)" text-anchor="middle" stroke="none">60</text>
     </g>
     <g id="d-hole-x" tp:type="distance" tp:dim="linear" tp:p1="0 0" tp:p2="40 0" tp:dir="x" tp:offset="-9" tp:label="40" tp:refs="cut-upright hole-axis" tp:value="40" tp:source="HOLE_X">
-      <path d="M0 -1.05 L0 -10.75 M40 -1.05 L40 -10.75 M0 -9 L40 -9" fill="none" />
+      <path d="M0 -1.05 L0 -10.75 M40 -1.05 L40 -10.75 M0 -9 L40 -9" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M0 -9 L2.625 -9.525 L2.625 -8.475 Z M40 -9 L37.375 -8.475 L37.375 -9.525 Z" stroke="none" />
       <text transform="translate(20 -8.125) scale(1,-1)" text-anchor="middle" stroke="none">40</text>
     </g>
     <g id="d-height" tp:type="distance" tp:dim="linear" tp:p1="0 0" tp:p2="0 40" tp:dir="y" tp:offset="9" tp:label="40" tp:refs="cut-upright" tp:value="40" tp:source="HEIGHT">
-      <path d="M-1.05 0 L-10.75 0 M-1.05 40 L-10.75 40 M-9 0 L-9 40" fill="none" />
+      <path d="M-1.05 0 L-10.75 0 M-1.05 40 L-10.75 40 M-9 0 L-9 40" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M-9 0 L-8.475 2.625 L-9.525 2.625 Z M-9 40 L-9.525 37.375 L-8.475 37.375 Z" stroke="none" />
       <text transform="translate(-9.875 20) rotate(90) scale(1,-1)" text-anchor="middle" stroke="none">40</text>
     </g>
     <g id="d-base-t" tp:type="distance" tp:dim="linear" tp:p1="60 0" tp:p2="60 5" tp:dir="y" tp:offset="-7" tp:label="5" tp:refs="cut-base-end" tp:value="5" tp:source="T">
-      <path d="M61.05 0 L68.75 0 M61.05 5 L68.75 5 M67 -4.725 L67 9.725" fill="none" />
+      <path d="M61.05 0 L68.75 0 M61.05 5 L68.75 5 M67 -4.725 L67 9.725" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M67 0 L66.475 -2.625 L67.525 -2.625 Z M67 5 L67.525 7.625 L66.475 7.625 Z" stroke="none" />
       <text transform="translate(66.125 2.5) rotate(90) scale(1,-1)" text-anchor="middle" stroke="none">5</text>
     </g>
     <g id="d-upright-t" tp:type="distance" tp:dim="linear" tp:p1="0 20" tp:p2="5 20" tp:dir="x" tp:offset="0" tp:text-at="2.2" tp:label="5" tp:refs="cut-upright" tp:value="5" tp:source="T">
-      <path d="M-4.725 20 L12.96 20" fill="none" />
+      <path d="M-4.725 20 L12.96 20" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M0 20 L-2.625 20.525 L-2.625 19.475 Z M5 20 L7.625 19.475 L7.625 20.525 Z" stroke="none" />
       <text transform="translate(11 20.875) scale(1,-1)" text-anchor="middle" stroke="none">5</text>
     </g>
     <g id="d-hole" tp:type="diameter" tp:dim="linear" tp:p1="37 5" tp:p2="43 5" tp:dir="x" tp:offset="5" tp:label="⌀6" tp:refs="hole-axis" tp:value="6" tp:source="HOLE_D">
-      <path d="M37 6.05 L37 11.75 M43 6.05 L43 11.75 M32.275 10 L47.725 10" fill="none" />
+      <path d="M37 6.05 L37 11.75 M43 6.05 L43 11.75 M32.275 10 L47.725 10" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M37 10 L34.375 10.525 L34.375 9.475 Z M43 10 L45.625 9.475 L45.625 10.525 Z" stroke="none" />
       <text transform="translate(40 10.875) scale(1,-1)" text-anchor="middle" stroke="none">⌀6</text>
     </g>
     <g id="d-fillet" tp:type="radius" tp:dim="radius" tp:center="8 8" tp:r="3" tp:angle="225" tp:offset="-13" tp:label="R3" tp:refs="cut-upright" tp:value="3" tp:source="FILLET">
-      <path d="M15.0711 15.0711 L5.8787 5.8787 M15.0711 15.0711 L21.1611 15.0711" fill="none" />
+      <path d="M15.0711 15.0711 L5.8787 5.8787 M15.0711 15.0711 L21.1611 15.0711" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M5.8787 5.8787 L8.1061 7.3636 L7.3636 8.1061 Z" stroke="none" />
       <text transform="translate(18.1161 15.9461) scale(1,-1)" text-anchor="middle" stroke="none">R3</text>
     </g>
   </g>
-  <g id="layer-constraints" inkscape:groupmode="layer" inkscape:label="Constraints" transform="scale(1,-1)" stroke="#7c3aed" fill="#7c3aed" stroke-width="0.25">
+  <g id="layer-constraints" inkscape:groupmode="layer" inkscape:label="Constraints" transform="scale(1,-1)" stroke="#7c3aed" fill="#7c3aed">
     <g id="c-square" tp:type="perpendicular" tp:anchor="0 0" tp:offset="-4 -4" tp:label="⊥" tp:refs="cut-upright">
-      <path d="M0 0 L-2.2676 -2.2676" fill="none" />
+      <path d="M0 0 L-2.2676 -2.2676" fill="none" vector-effect="non-scaling-stroke" />
       <circle cx="0" cy="0" r="0.35" stroke="none" />
       <text transform="translate(-4 -5.225) scale(1,-1)" text-anchor="middle" stroke="none">⊥</text>
     </g>
@@ -73,25 +73,25 @@
       <text transform="translate(52 6.775) scale(1,-1)" text-anchor="middle" stroke="none">=</text>
     </g>
   </g>
-  <g id="layer-changes" inkscape:groupmode="layer" inkscape:label="Changes" transform="scale(1,-1)" stroke="#d97706" stroke-width="0.6" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path id="new-flange" d="M5 32 A3 3 0 0 0 8 35 L37 35 L37 40 L5 40" tp:source="flange" />
-    <line id="flange-hole-alignment" x1="37" y1="35" x2="37" y2="5" tp:source="FLANGE_END = HOLE_X - HOLE_D / 2" stroke-width="0.25" stroke-dasharray="1.5 1" />
-    <g id="d-flange-len" tp:type="distance" tp:dim="linear" tp:p1="0 40" tp:p2="37 40" tp:dir="x" tp:offset="7" tp:label="37" tp:refs="cut-upright hole-axis" tp:value="HOLE_X - HOLE_D / 2" tp:source="FLANGE_END" fill="#d97706" stroke-width="0.25">
-      <path d="M0 41.05 L0 48.75 M37 41.05 L37 48.75 M0 47 L37 47" fill="none" />
+  <g id="layer-changes" inkscape:groupmode="layer" inkscape:label="Changes" transform="scale(1,-1)" stroke="#d97706" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path id="new-flange" d="M5 32 A3 3 0 0 0 8 35 L37 35 L37 40 L5 40" vector-effect="non-scaling-stroke" tp:source="flange" />
+    <line id="flange-hole-alignment" x1="37" y1="35" x2="37" y2="5" vector-effect="non-scaling-stroke" tp:source="FLANGE_END = HOLE_X - HOLE_D / 2" stroke-width="1" stroke-dasharray="6 4" />
+    <g id="d-flange-len" tp:type="distance" tp:dim="linear" tp:p1="0 40" tp:p2="37 40" tp:dir="x" tp:offset="7" tp:label="37" tp:refs="cut-upright hole-axis" tp:value="HOLE_X - HOLE_D / 2" tp:source="FLANGE_END" fill="#d97706" stroke-width="1">
+      <path d="M0 41.05 L0 48.75 M37 41.05 L37 48.75 M0 47 L37 47" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M0 47 L2.625 46.475 L2.625 47.525 Z M37 47 L34.375 47.525 L34.375 46.475 Z" stroke="none" />
       <text transform="translate(18.5 47.875) scale(1,-1)" text-anchor="middle" stroke="none">37</text>
     </g>
-    <g id="d-flange-t" tp:type="distance" tp:dim="linear" tp:p1="37 35" tp:p2="37 40" tp:dir="y" tp:offset="-7" tp:label="5" tp:refs="cut-upright" tp:value="5" tp:source="T" fill="#d97706" stroke-width="0.25">
-      <path d="M38.05 35 L45.75 35 M38.05 40 L45.75 40 M44 30.275 L44 44.725" fill="none" />
+    <g id="d-flange-t" tp:type="distance" tp:dim="linear" tp:p1="37 35" tp:p2="37 40" tp:dir="y" tp:offset="-7" tp:label="5" tp:refs="cut-upright" tp:value="5" tp:source="T" fill="#d97706" stroke-width="1">
+      <path d="M38.05 35 L45.75 35 M38.05 40 L45.75 40 M44 30.275 L44 44.725" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M44 35 L43.475 32.375 L44.525 32.375 Z M44 40 L44.525 42.625 L43.475 42.625 Z" stroke="none" />
       <text transform="translate(43.125 37.5) rotate(90) scale(1,-1)" text-anchor="middle" stroke="none">5</text>
     </g>
-    <g id="d-flange-fillet" tp:type="radius" tp:dim="radius" tp:center="8 32" tp:r="3" tp:angle="135" tp:offset="-13" tp:label="R3" tp:refs="cut-upright" tp:value="3" tp:source="FILLET" fill="#d97706" stroke-width="0.25">
-      <path d="M15.0711 24.9289 L5.8787 34.1213 M15.0711 24.9289 L21.1611 24.9289" fill="none" />
+    <g id="d-flange-fillet" tp:type="radius" tp:dim="radius" tp:center="8 32" tp:r="3" tp:angle="135" tp:offset="-13" tp:label="R3" tp:refs="cut-upright" tp:value="3" tp:source="FILLET" fill="#d97706" stroke-width="1">
+      <path d="M15.0711 24.9289 L5.8787 34.1213 M15.0711 24.9289 L21.1611 24.9289" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M5.8787 34.1213 L7.3636 31.8939 L8.1061 32.6364 Z" stroke="none" />
       <text transform="translate(18.1161 25.8039) scale(1,-1)" text-anchor="middle" stroke="none">R3</text>
     </g>
-    <g id="c-equal-flange" tp:type="equal" tp:anchor="25 35" tp:offset="0 -3.5" tp:label="=" tp:refs="d-upright-t d-base-t d-flange-t" fill="#d97706" stroke-width="0.25">
+    <g id="c-equal-flange" tp:type="equal" tp:anchor="25 35" tp:offset="0 -3.5" tp:label="=" tp:refs="d-upright-t d-base-t d-flange-t" fill="#d97706" stroke-width="1">
       <text transform="translate(25 30.275) scale(1,-1)" text-anchor="middle" stroke="none">=</text>
     </g>
   </g>

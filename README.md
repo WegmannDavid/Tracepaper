@@ -4,7 +4,7 @@ A visual aid for working on CAD geometry with an AI.
 
 The AI's build writes **views** of the model into a project folder:
 
-- **Sheets:** plain, layered SVG files showing geometry, dimensions and the constraints worth seeing. In the viewer you toggle layers, drag labels out of the way and sketch roughly what you want changed. Press Save, then tell the AI what you drew. It finds `<sheet>.sketch.svg` next to the sheet, makes the change in the real CAD pipeline and rebuilds, and the viewer reloads.
+- **Sheets:** plain, layered SVG files showing geometry, dimensions and the constraints worth seeing. In the viewer you toggle layers, drag labels out of the way and sketch roughly what you want changed. Lines stay the same few pixels wide at any zoom. Press Save, then tell the AI what you drew. It finds `<sheet>.sketch.svg` next to the sheet, makes the change in the real CAD pipeline and rebuilds, and the viewer reloads.
 - **Models:** 3D `.glb` files, such as a CadQuery assembly's export. For now the viewer shows them so you can look at the build's result, with no debugger needed.
 
 Tracepaper doesn't care which CAD tool or constraint solver is behind a sheet. The format is described in [SPEC.md](SPEC.md).

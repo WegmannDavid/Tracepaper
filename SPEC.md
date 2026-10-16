@@ -13,7 +13,7 @@ MUST, SHOULD and MAY are used as in RFC 2119.
 | `<name>.svg` | the AI | a sheet (§2) |
 | `<name>.sketch.svg` | the viewer, when the person presses Save | the sheet as it was on screen, plus their ink (§3) |
 
-- Both are plain SVG 1.1 and open in any browser or in Inkscape.
+- Both are plain SVG 1.1, plus SVG 2's `vector-effect` (§2.1), and open in any browser or in Inkscape.
 - The sketch file sits next to its sheet. A sheet's file name MUST NOT end in `.sketch.svg`.
 - A project folder can also hold 3D models, `.glb` files (§2.8). Sheets and models are the project's **views**; the viewer shows each in a window of its own (§5).
 - Tracepaper attributes and elements use the namespace `urn:tracepaper:0`, by convention with the prefix `tp`. The `0` is the format version (§6).
@@ -34,6 +34,9 @@ MUST, SHOULD and MAY are used as in RFC 2119.
 - One user unit is one millimetre: `width` and `height` MUST be in `mm` and equal the `viewBox` width and height.
 - The root SHOULD set `font-family` and `font-size`. The default text height is 3.5 mm.
 - Styling MUST use presentation attributes (`stroke="…"`), not CSS, so every renderer draws the sheet the same way.
+- **Lines are a set width on screen, at any zoom,** as in a CAD program. `stroke-width` and the lengths in `stroke-dasharray` are in pixels on the screen (CSS pixels), not millimetres. A line without a `stroke-width` is 1 pixel wide.
+- Every element with a stroke SHOULD carry `vector-effect="non-scaling-stroke"`, which tells other SVG renderers so. It isn't inherited, so it goes on each element, not on a group. The viewer draws every line this way regardless.
+- Everything else is in millimetres and scales with the drawing: text, arrowheads, and the spacing of hatching.
 - Sheets MUST NOT contain scripts or event-handler attributes.
 
 ### 2.2 Coordinates
@@ -70,7 +73,7 @@ Every attribute is optional free text unless stated otherwise.
 
 ```xml
 <g id="layer-outline" inkscape:groupmode="layer" inkscape:label="Outline"
-   transform="scale(1,-1)" stroke="#1a1a1a" stroke-width="0.5" fill="none">
+   transform="scale(1,-1)" stroke="#1a1a1a" stroke-width="1.5" fill="none">
 ```
 
 - Layers are `<g>` elements with `inkscape:groupmode="layer"`. `inkscape:label` is the name the person sees. This is Inkscape's convention, so Inkscape shows the same layers.
@@ -209,12 +212,12 @@ When the person presses Save, the viewer writes `<name>.sketch.svg` next to `<na
 
 ```xml
 <g id="tp-sketch" inkscape:groupmode="layer" inkscape:label="Sketch" transform="scale(1,-1)">
-  <path stroke="#e11d48" stroke-width="0.6" fill="none" stroke-linecap="round"
-        stroke-linejoin="round" d="M-1 37.5 L2.5 41 L3 41.5"/>
+  <path stroke="#e11d48" stroke-width="2.2" vector-effect="non-scaling-stroke" fill="none"
+        stroke-linecap="round" stroke-linejoin="round" d="M-1 37.5 L2.5 41 L3 41.5"/>
 </g>
 ```
 
-Each stroke is one `path` in model coordinates, using only `M` and `L` commands. `stroke-width` is in millimetres.
+Each stroke is one `path` in model coordinates, using only `M` and `L` commands. Its `stroke-width` is in pixels on screen, like every line's (§2.1).
 
 The person can also ink in a colour picked from the sheet. A stroke drawn that way carries `tp:color-from`: the id of the element the colour was picked from. That's the nearest element with an id: the shape itself, the dimension it belongs to, or its layer. It usually means the stroke belongs with that element, for example an extension of it.
 

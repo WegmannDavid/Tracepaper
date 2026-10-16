@@ -80,8 +80,8 @@ def section_a() -> Sheet:
     changes = sheet.layer("Changes")
     changes.path("new-flange", PathBuilder().move(T, top - FILLET).arc(T + FILLET, top, FILLET, ccw=False)
                  .line(FLANGE_END, top).line(FLANGE_END, HEIGHT).line(T, HEIGHT), source="flange")
-    changes.line("flange-hole-alignment", (FLANGE_END, top), (FLANGE_END, T), stroke_width=0.25,
-                 stroke_dasharray="1.5 1", source="FLANGE_END = HOLE_X - HOLE_D / 2")
+    changes.line("flange-hole-alignment", (FLANGE_END, top), (FLANGE_END, T), stroke_width=1,
+                 stroke_dasharray="6 4", source="FLANGE_END = HOLE_X - HOLE_D / 2")
     changes.linear("d-flange-len", (0, HEIGHT), (FLANGE_END, HEIGHT), fmt(FLANGE_END), dir="x", offset=7,
                    value="HOLE_X - HOLE_D / 2", refs="cut-upright hole-axis", source="FLANGE_END")
     changes.linear("d-flange-t", (FLANGE_END, top), (FLANGE_END, HEIGHT), fmt(T), dir="y", offset=-7,

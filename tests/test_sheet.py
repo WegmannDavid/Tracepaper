@@ -145,7 +145,23 @@ class SheetOutput(unittest.TestCase):
         self.assertEqual((dim.get("fill"), dim.get("stroke-width")), (None, None))
         # ...and thin with a solid fill on Changes, whose lines are heavy and unfilled.
         flange_dim = top[1].find("svg:g/svg:g", ns)
-        self.assertEqual((flange_dim.get("fill"), flange_dim.get("stroke-width")), ("#d97706", "0.25"))
+        self.assertEqual((flange_dim.get("fill"), flange_dim.get("stroke-width")), ("#d97706", "1"))
+
+    def test_lines_are_pixels_on_screen(self):
+        sheet = S.Sheet("Widths")
+        outline = sheet.layer("Outline")
+        outline.circle("hole", (0, 0), 3)
+        outline.path("cut", S.PathBuilder().move(0, 0).line(5, 0).line(5, 5).close(), fill=S.HATCH, stroke="none")
+        outline.text("note", (0, 8), "a note")
+        sheet.layer("Dimensions").linear("d-w", (0, 0), (5, 0), "5", dir="x", offset=-5)
+        root = ET.fromstring(sheet.tostring().split("\n", 1)[1])
+        drawn = [el for el in root.iter() if el.tag.rpartition("}")[2] in ("path", "circle", "line")]
+        lines = [el for el in drawn if el.get("stroke") != "none"]
+        # Every line says its width is on screen: the hole's, the hatching's and the dimension's.
+        self.assertEqual(len(lines), 3)
+        self.assertEqual({el.get("vector-effect") for el in lines}, {"non-scaling-stroke"})
+        widths = {g.get(f"{{{S.INKSCAPE_NS}}}label"): g.get("stroke-width") for g in root.findall(f"{{{S.SVG_NS}}}g")}
+        self.assertEqual(widths, {"Outline": "1.5", "Dimensions": None})  # the default: 1 pixel
 
 
 if __name__ == "__main__":

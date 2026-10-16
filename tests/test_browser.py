@@ -5,6 +5,7 @@ screenshot of the viewer with a sketch on it.
 """
 import base64
 import json
+import math
 import os
 import shutil
 import socket
@@ -340,6 +341,41 @@ class ViewerInFirefox(unittest.TestCase):
                          ("partial", "hidden", "visible"))
         self.assertEqual(got["allShown"]["Dimensions"], "visible")
         self.assertEqual([r[0] for r in got["refolded"]], ["Sketch", "Dimensions", "Outline", "Bolt"])
+
+    def test_lines_keep_their_width_on_screen(self):
+        self.open_viewer("tree.svg")
+        self.m.run("tp.setLayerVisible('Dimensions', false); done(true);")
+
+        def thickness(zoom):
+            """Zoom about the top of the bolt's circle, then how many pixels its line covers there."""
+            at = self.m.run(f"""
+                const p = screen(tp.state.ref, 20, 13);
+                stage.dispatchEvent(new WheelEvent('wheel', {{ deltaY: {-math.log(zoom) / 0.0015}, bubbles: true,
+                                                               cancelable: true, clientX: p.x, clientY: p.y }}));
+                requestAnimationFrame(() => requestAnimationFrame(() => {{
+                  const q = screen(tp.state.ref, 20, 13);
+                  done([Math.round(q.x), Math.round(q.y)]);
+                }}));
+            """)
+            png = self.m.call("WebDriver:TakeScreenshot", {"full": False, "hash": False})["value"]
+            return self.m.run(f"""
+                const img = new Image();
+                img.src = 'data:image/png;base64,{png}';
+                img.decode().then(() => {{
+                  const c = Object.assign(document.createElement('canvas'), {{ width: img.width, height: img.height }});
+                  const ctx = c.getContext('2d');
+                  ctx.drawImage(img, 0, 0);
+                  const d = ctx.getImageData({at[0]}, {at[1]} - 12, 1, 25).data;
+                  let dark = 0;
+                  for (let i = 0; i < d.length; i += 4) dark += d[i] + d[i + 1] + d[i + 2] < 384;
+                  done(dark);
+                }});
+            """)
+
+        # The circle doesn't give its width, nor say it's on screen: the Outline's 1.5 pixels.
+        near, close = thickness(1), thickness(20)
+        self.assertTrue(1 <= near <= 3, near)
+        self.assertLessEqual(abs(close - near), 1)
 
     def test_model_tree(self):
         self.open_viewer("hidden-screw.glb")
@@ -803,6 +839,8 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertEqual(list(layers)[-1], "Sketch")
         strokes = layers["Sketch"].findall(f"{SVG}path")
         self.assertEqual(len(strokes), 1)
+        self.assertEqual((strokes[0].get("stroke-width"), strokes[0].get("vector-effect")),
+                         ("2.2", "non-scaling-stroke"))  # pixels on screen, at any zoom
         xs = [float(v) for v in strokes[0].get("d").replace("M", "").replace("L", "").split()]
         self.assertEqual(len(xs), 8)
         for got, want in zip(xs, [52, 9, 56, 13, 60, 16, 64, 17]):

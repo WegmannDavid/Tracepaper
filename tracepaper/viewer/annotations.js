@@ -220,7 +220,8 @@ export function render(group, g, fs) {
   };
   const kids = [];
   if (g.lines.length) {
-    kids.push(make('path', { d: g.lines.map(([a, b]) => `M${P(a)} L${P(b)}`).join(' '), fill: 'none' }));
+    kids.push(make('path', { d: g.lines.map(([a, b]) => `M${P(a)} L${P(b)}`).join(' '), fill: 'none',
+                             'vector-effect': 'non-scaling-stroke' })); // its width on screen, as sheet.py writes it
   }
   if (g.arrows.length) {
     kids.push(make('path', { d: g.arrows.map((a) => arrowPath(a, fs)).join(' '), stroke: 'none' }));

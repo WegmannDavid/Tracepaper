@@ -41,22 +41,27 @@ K = dict(arrowLen=0.75, arrowHalf=0.15, extGap=0.3, extOver=0.5, textGap=0.25, c
 DEG = math.pi / 180
 EPS = 1e-6
 
+# Line widths and dashes are in pixels on screen, at any zoom (SPEC.md §2.1). Lines
+# without a width are 1 pixel wide.
 STYLES = {
-    "geometry": {"stroke": "#1a1a1a", "stroke-width": "0.5", "fill": "none",
+    "geometry": {"stroke": "#1a1a1a", "stroke-width": "1.5", "fill": "none",
                  "stroke-linecap": "round", "stroke-linejoin": "round"},
-    "thin": {"stroke": "#1a1a1a", "stroke-width": "0.25", "fill": "none"},
-    "hidden": {"stroke": "#1a1a1a", "stroke-width": "0.35", "fill": "none", "stroke-dasharray": "3 1.5"},
-    "center": {"stroke": "#6b7280", "stroke-width": "0.25", "fill": "none",
-               "stroke-dasharray": "8 1.5 1.5 1.5"},
-    "section": {"stroke": "#1a1a1a", "stroke-width": "0.35", "fill": "none",
-                "stroke-dasharray": "10 2 2 2"},
-    "construction": {"stroke": "#9ca3af", "stroke-width": "0.25", "fill": "none", "stroke-dasharray": "2 1"},
+    "thin": {"stroke": "#1a1a1a", "fill": "none"},
+    "hidden": {"stroke": "#1a1a1a", "fill": "none", "stroke-dasharray": "6 4"},
+    "center": {"stroke": "#6b7280", "fill": "none", "stroke-dasharray": "16 4 3 4"},
+    "section": {"stroke": "#1a1a1a", "stroke-width": "1.5", "fill": "none",
+                "stroke-dasharray": "20 4 4 4"},
+    "construction": {"stroke": "#9ca3af", "fill": "none", "stroke-dasharray": "4 3"},
     "hatch": {"stroke": "none", "fill": f"url(#{HATCH_ID})"},
-    "dimensions": {"stroke": "#475569", "fill": "#475569", "stroke-width": "0.25"},
-    "constraints": {"stroke": "#7c3aed", "fill": "#7c3aed", "stroke-width": "0.25"},
-    "changes": {"stroke": "#d97706", "stroke-width": "0.6", "fill": "none",
+    "dimensions": {"stroke": "#475569", "fill": "#475569"},
+    "constraints": {"stroke": "#7c3aed", "fill": "#7c3aed"},
+    "changes": {"stroke": "#d97706", "stroke-width": "2", "fill": "none",
                 "stroke-linecap": "round", "stroke-linejoin": "round"},
 }
+THIN = "1"  # the default width, which annotations' lines keep on any layer
+# Marks a line's width and dashes as pixels on screen for any SVG renderer. It isn't
+# inherited, so every shape carries it.
+SCREEN_WIDTH = {"vector-effect": "non-scaling-stroke"}
 
 # Style used when Sheet.layer() is called with one of the suggested names (SPEC.md §2.4).
 LAYER_STYLES = {
@@ -241,7 +246,7 @@ def text_transform(at: Point, angle: float = 0) -> str:
 def _render(group: ET.Element, g: dict, fs: float) -> None:
     if g["lines"]:
         ET.SubElement(group, _svg("path"),
-                      {"d": " ".join(f"M{_pt(a)} L{_pt(b)}" for a, b in g["lines"]), "fill": "none"})
+                      {"d": " ".join(f"M{_pt(a)} L{_pt(b)}" for a, b in g["lines"]), "fill": "none", **SCREEN_WIDTH})
     if g["arrows"]:
         ET.SubElement(group, _svg("path"),
                       {"d": " ".join(_arrow_d(t, d, fs) for t, d in g["arrows"]), "stroke": "none"})
@@ -303,7 +308,7 @@ class Layer:
         # Text and annotation arrows need a solid fill even when the layer's shapes have none,
         # and annotations stay thin on layers with heavy lines, such as Changes.
         self._fill = None if self._fill_attr.startswith("#") else self.color
-        self._thin = None if self._width == "0.25" else "0.25"
+        self._thin = None if self._width in (None, THIN) else THIN
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "layer"
         attrs = {"id": f"{parent.element.get('id')}-{slug}" if parent else f"layer-{slug}",
                  _ink("groupmode"): "layer", _ink("label"): name}
@@ -327,7 +332,7 @@ class Layer:
 
     def _shape(self, tag: str, id: str, attrs: dict, source: Optional[str], extra: dict,
                points: Iterable[Point]) -> ET.Element:
-        el = ET.SubElement(self.element, _svg(tag), {"id": id, **attrs})
+        el = ET.SubElement(self.element, _svg(tag), {"id": id, **attrs, **({} if tag == "text" else SCREEN_WIDTH)})
         if source:
             el.set(_tp("source"), source)
         el.attrib.update(_attrs(extra))
@@ -488,7 +493,8 @@ class Sheet:
             pattern = ET.SubElement(defs, _svg("pattern"), {
                 "id": HATCH_ID, "patternUnits": "userSpaceOnUse", "width": "2", "height": "2",
                 "patternTransform": "rotate(45)"})
-            ET.SubElement(pattern, _svg("path"), {"d": "M1 0 V2", "stroke": "#1a1a1a", "stroke-width": "0.18"})
+            ET.SubElement(pattern, _svg("path"), {"d": "M1 0 V2", "stroke": "#1a1a1a", "stroke-width": "0.75",
+                                                  **SCREEN_WIDTH})  # 2 mm apart, but thin at any zoom
         for layer in self.layers:
             root.append(layer.element)
         return root

@@ -123,18 +123,18 @@ export function colourAt(root, clientX, clientY) {
   return null;
 }
 
-// The box the strokes in the ink layer cover, with their width, in its coordinates.
+// The box the strokes in the ink layer cover, in its coordinates. Their width is on screen,
+// not in these: growViewBox's margin leaves room for it.
 export function inkBounds(ink) {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, w = 0;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of ink.querySelectorAll('path')) {
     const n = (p.getAttribute('d') ?? '').match(NUMBER) ?? [];
     for (let i = 0; i + 1 < n.length; i += 2) {
       const x = +n[i], y = +n[i + 1];
       x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
     }
-    w = Math.max(w, parseFloat(p.getAttribute('stroke-width')) || 0);
   }
-  return x0 <= x1 ? { x0: x0 - w, y0: y0 - w, x1: x1 + w, y1: y1 + w } : null;
+  return x0 <= x1 ? { x0, y0, x1, y1 } : null;
 }
 
 function lengthMm(s) {
