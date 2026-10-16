@@ -2,7 +2,7 @@
 // constraint labels and sketch on top, with the mouse or a tablet's pen.
 // Save writes <sheet>.sketch.svg (SPEC.md §3).
 import * as A from './annotations.js';
-import { $, CLIENT, fetchOk, listViews, renderViewsMenu, toaster, viewUrl } from './page.js';
+import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import * as Pen from './pen.js';
 import { renderView } from './screen.js';
 import {
@@ -855,8 +855,9 @@ window.addEventListener('keyup', (e) => {
 
 window.addEventListener('beforeunload', (e) => { if (state.dirty) e.preventDefault(); });
 
-window.addEventListener('resize', () => tablet.render()); // the tablet's drawing area follows the canvas's shape
-window.addEventListener('resize', viewChanged);
+// The window or the tree panel changes the view's shape, which the tablet's drawing area follows.
+new ResizeObserver(() => { tablet.render(); viewChanged(); }).observe(ui.stage);
+panelDivider(document.querySelector('main'));
 // Anything drawn changing changes the tablet's picture; the pointer's marks and highlights don't.
 new MutationObserver((changes) => {
   if (changes.some((c) => c.target !== ui.penCursor && c.target !== ui.pickBox && c.attributeName !== 'class')) {

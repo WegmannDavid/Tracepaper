@@ -6,7 +6,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CadControls } from './controls.js';
 import { Edges } from './edges.js';
-import { $, CLIENT, listViews, renderViewsMenu, toaster, viewUrl } from './page.js';
+import { $, CLIENT, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import { Tablet } from './pen.js';
 import { flatten, renderTree } from './tree.js';
 
@@ -282,6 +282,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key.toLowerCase() === 'f') frame(null);
 });
 new ResizeObserver(resize).observe(ui.canvas);
+panelDivider(document.querySelector('main'));
 document.title = `${viewName} · Tracepaper`;
 
 poll();

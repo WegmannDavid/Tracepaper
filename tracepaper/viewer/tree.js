@@ -54,6 +54,7 @@ export function renderTree(container, roots, { expanded, onToggle, topFirst = fa
     const name = document.createElement('span');
     name.className = 'tpv-node-name';
     name.textContent = node.name;
+    name.title = node.name; // in full, when the panel is too narrow for it
     row.append(twisty, eye, name);
     li.append(row);
     li.className = mark(node);

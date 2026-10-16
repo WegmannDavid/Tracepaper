@@ -621,6 +621,31 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertIn(["3D", "bracket.glb", "/view/bracket.glb"], views)
         self.assertIn(["2D", "section-A.svg", "/view/section-A.svg"], views)
 
+    def test_tree_panel_width(self):
+        drag = """
+            const main = document.querySelector('main'), divider = document.querySelector('.tpv-splitter');
+            const panel = () => Math.round(document.querySelector('.tpv-panel').getBoundingClientRect().width);
+            const view = () => Math.round(document.querySelector('.tpv-stage-wrap').getBoundingClientRect().width);
+            const press = (type, x) => divider.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true,
+              pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, clientX: x,
+              clientY: main.getBoundingClientRect().top + 100 }));
+        """
+        for view in ("section-A.svg", "bracket.glb"):  # sheets and models alike
+            with self.subTest(view):
+                self.open_viewer(view)
+                got = self.m.run(drag + """
+                    const before = { panel: panel(), view: view() };
+                    const x = divider.getBoundingClientRect().left + 4;
+                    press('pointerdown', x); press('pointermove', x - 150); press('pointerup', x - 150);
+                    done({ before, after: { panel: panel(), view: view() } });
+                """)
+                self.assertEqual(got["after"]["panel"], got["before"]["panel"] + 150)
+                self.assertEqual(got["after"]["view"], got["before"]["view"] - 150)
+        self.open_viewer("section-A.svg")  # another window: the width is remembered
+        self.assertEqual(self.m.run(drag + "done(panel());"), got["after"]["panel"])
+        self.assertEqual(self.m.run(drag + "divider.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));"
+                                           "done(panel());"), 220)  # the usual width again
+
     def test_mouse_starts_in_move(self):
         self.open_viewer()
         self.assertEqual(self.m.run("done([tp.state.tool, document.querySelector('[data-tool=move]')"
