@@ -7,21 +7,25 @@
 // (screw holes under a veneer) show through it. Instead, every opaque face draws its
 // number and depth into a picture of the view (pass), and an edge is drawn where
 //   - the face in front is its own: every edge between two faces is drawn by each, so
-//     where its line strays onto the neighbour, that one's copy shows; or
+//     where it runs over the neighbour, that one's copy shows; or
 //   - it is no further behind the surface in front than a fixed small distance, the same
 //     at any zoom (TOLERANCE of the model's size); in front of everything, as along
 //     silhouettes, it always is.
-// Behind transparent faces (glass), whose own edges are tested against depth as before,
-// the faces behind still count as in front.
+// Transparent faces (glass) aren't numbered: behind them, the faces behind count as in
+// front, and their own edges, numbered 0, are tested by depth alone.
 //
 // Edges are strips a set width on screen (WIDTH), not lines, which WebGL always draws a
 // single pixel wide: the view is drawn at a higher resolution than the screen's and
 // scaled down (supersampling), and lines would come out faint.
+//
+// All of it can be cut by slice planes (slices.js), whose caps take part in the numbering
+// as no face at all.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
-const NUMBERS = 1; // the camera layer the faces' numbers are drawn on
+export const NUMBERS = 1; // the camera layer the faces' numbers are drawn on
 const EDGES = 2; // and the edges
+const LAST = 1e9; // edges are drawn after everything else, which they don't depth-test
 const COLOR = [0x1f, 0x23, 0x28];
 const WIDTH = 1; // CSS pixels
 const TOLERANCE = 5e-5; // of the model's size
@@ -35,10 +39,14 @@ const strip = `
   uniform float width; // in pixels
   varying float vFace;
   varying vec2 vCentre; // the pixel on the edge itself, across from this one
+  #include <clipping_planes_pars_vertex>
   void main() {
+    vec4 mvPosition = modelViewMatrix * vec4(mix(start, end, position.x), 1.0);
+    #include <clipping_planes_vertex>
     vec4 a = projectionMatrix * modelViewMatrix * vec4(start, 1.0);
     vec4 b = projectionMatrix * modelViewMatrix * vec4(end, 1.0); // orthographic: w is 1
-    vec2 d = (b.xy - a.xy) * resolution;
+    vec2 d = (b.xy - a.xy) * resolution; // twice the length in pixels
+    if (length(d) < 1.0) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; } // seen end on: nothing to see
     vec2 along = length(d) > 0.0 ? normalize(d) : vec2(1.0, 0.0), across = vec2(-along.y, along.x);
     vec4 p = mix(a, b, position.x);
     vCentre = (p.xy * 0.5 + 0.5) * resolution;
@@ -55,26 +63,35 @@ const onFrontFace = `
   uniform vec3 color;
   varying float vFace;
   varying vec2 vCentre;
+  #include <clipping_planes_pars_fragment>
   void main() {
-    ivec2 last = textureSize(faces, 0) - 1;
-    ivec2 p = clamp(ivec2(gl_FragCoord.xy), ivec2(0), last);
+    #include <clipping_planes_fragment>
+    // Both tests look under the edge itself, so a strip is drawn or not across its whole
+    // width: tested pixel by pixel, its sides would come and go as the view moves, where
+    // a face beside the edge is seen edge on. Across the strip the edge also keeps its
+    // depth, while a surface at a slant doesn't.
+    ivec2 p = clamp(ivec2(vCentre), ivec2(0), textureSize(faces, 0) - 1);
     vec3 c = texelFetch(faces, p, 0).rgb;
     float front = dot(floor(c * 255.0 + 0.5), vec3(1.0, 256.0, 65536.0));
-    // Depth is compared under the edge itself: across the strip the edge keeps its depth,
-    // but a surface at a slant doesn't, and a pixel aside it may be as far back as a veneer.
-    float surface = texelFetch(depths, clamp(ivec2(vCentre), ivec2(0), last), 0).r;
+    float surface = texelFetch(depths, p, 0).r;
     if (front != floor(vFace + 0.5) && gl_FragCoord.z > surface + tolerance) discard;
     gl_FragColor = vec4(color, 1.0);
   }`;
 
-const plain = 'uniform vec3 color; void main() { gl_FragColor = vec4(color, 1.0); }';
-
 const numberShader = {
   vertexShader: `attribute float face; varying float vFace;
-    void main() { vFace = face; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    #include <clipping_planes_pars_vertex>
+    void main() {
+      vFace = face;
+      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mvPosition;
+      #include <clipping_planes_vertex>
+    }`,
   fragmentShader: `
     varying float vFace;
+    #include <clipping_planes_pars_fragment>
     void main() {
+      #include <clipping_planes_fragment>
       float n = floor(vFace + 0.5);
       gl_FragColor = vec4(mod(n, 256.0), mod(floor(n / 256.0), 256.0), floor(n / 65536.0), 255.0) / 255.0;
     }`,
@@ -112,18 +129,20 @@ export class Edges {
   constructor(renderer, camera) {
     Object.assign(this, { renderer, camera, shown: true, count: 0 });
     camera.layers.enable(EDGES);
+    // With a stencil buffer, which the slices' caps need.
+    const depths = new THREE.DepthTexture(1, 1, THREE.UnsignedInt248Type);
+    depths.format = THREE.DepthStencilFormat;
     this.faces = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-                                                      depthTexture: new THREE.DepthTexture(1, 1) });
+                                                      depthTexture: depths, stencilBuffer: true });
     const color = { value: new THREE.Vector3(...COLOR.map((c) => c / 255)) };
     const size = { resolution: { value: new THREE.Vector2(1, 1) }, width: { value: WIDTH } };
-    this.numbers = new THREE.ShaderMaterial({ ...numberShader, side: THREE.DoubleSide });
+    this.numbers = new THREE.ShaderMaterial({ ...numberShader, side: THREE.DoubleSide, clipping: true });
     this.material = new THREE.ShaderMaterial({
-      vertexShader: strip, fragmentShader: onFrontFace, depthTest: false, depthWrite: false,
+      vertexShader: strip, fragmentShader: onFrontFace, depthTest: false, depthWrite: false, clipping: true,
       uniforms: { ...size, color, faces: { value: this.faces.texture }, depths: { value: this.faces.depthTexture },
                   tolerance: { value: 0 } },
     });
-    // Edges of transparent faces, which aren't numbered: tested against depth.
-    this.depthTested = new THREE.ShaderMaterial({ vertexShader: strip, fragmentShader: plain, uniforms: { ...size, color } });
+    this.materials = [this.numbers, this.material]; // all of them, for the slice planes
   }
 
   // Give a part (an object the tree can hide) the edges of its faces, [{geometry,
@@ -134,16 +153,16 @@ export class Edges {
     for (const { geometry, material } of faces) {
       const outline = new THREE.EdgesGeometry(geometry, angle);
       if (material.transparent) {
-        clear.push(outline);
+        clear.push(numbered(outline, 0)); // the number of nothing: shown in front of nothing, else by depth
         continue;
       }
       const n = ++this.count;
       numbers.push(numbered(geometry, n));
       lines.push(numbered(outline, n));
     }
-    const edges = (list, material) => {
-      const mesh = new THREE.Mesh(strips(mergeGeometries(list)), material);
-      Object.assign(mesh, { frustumCulled: false, renderOrder: 1 }); // after the faces, which it may not test
+    const edges = (list) => {
+      const mesh = new THREE.Mesh(strips(mergeGeometries(list)), this.material);
+      Object.assign(mesh, { frustumCulled: false, renderOrder: LAST });
       mesh.layers.set(EDGES);
       part.add(mesh);
     };
@@ -151,13 +170,12 @@ export class Edges {
       const front = new THREE.Mesh(mergeGeometries(numbers), this.numbers);
       front.layers.set(NUMBERS);
       part.add(front);
-      edges(lines, this.material);
     }
-    if (clear.length) edges(clear, this.depthTested);
+    if (lines.length || clear.length) edges([...lines, ...clear]);
   }
 
   // The materials shared by every part, which a model being replaced mustn't dispose.
-  shared(material) { return [this.material, this.numbers, this.depthTested].includes(material); }
+  shared(material) { return this.materials.includes(material); }
 
   show(shown) {
     this.shown = shown;
@@ -168,10 +186,8 @@ export class Edges {
   resize() {
     const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     this.faces.setSize(size.x, size.y);
-    for (const m of [this.material, this.depthTested]) {
-      m.uniforms.resolution.value.copy(size);
-      m.uniforms.width.value = WIDTH * this.renderer.getPixelRatio();
-    }
+    this.material.uniforms.resolution.value.copy(size);
+    this.material.uniforms.width.value = WIDTH * this.renderer.getPixelRatio();
   }
 
   // Number the faces in front, for the edges of the render that follows. size: the model's.

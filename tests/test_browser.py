@@ -95,7 +95,10 @@ def boxes_glb(path, boxes):
                 position = add(flat, "f", 34962, "VEC3", 4, min=[min(flat[i::3]) for i in range(3)],
                                max=[max(flat[i::3]) for i in range(3)])
                 normals = add(normal * 4, "f", 34962, "VEC3", 4)
-                indices = add([0, 1, 2, 0, 2, 3], "H", 34963, "SCALAR", 6)
+                # Wound counterclockwise seen from outside, as CAD exports are: the corners go
+                # round u then v, which faces +x and +z but -y.
+                outward = (1 if side else -1) == (-1 if axis == 1 else 1)
+                indices = add([0, 1, 2, 0, 2, 3] if outward else [0, 2, 1, 0, 3, 2], "H", 34963, "SCALAR", 6)
                 meshes.append({"primitives": [{"attributes": {"POSITION": position, "NORMAL": normals},
                                                "indices": indices, "material": len(materials) - 1}]})
                 nodes.append({"mesh": len(meshes) - 1})
@@ -203,6 +206,9 @@ class ViewerInFirefox(unittest.TestCase):
         # A veneer 1 mm thick, and 0.5 mm under it a part whose edges must stay hidden.
         boxes_glb(cls.dir / "veneer.glb", [("veneer", (0, 0, 0), (100, 100, 1), (0.85, 0.85, 0.85)),
                                            ("under", (40, 40, -1), (60, 60, -0.5), (0.85, 0.85, 0.85))])
+        # A white block with a red one sealed inside it, for slicing.
+        boxes_glb(cls.dir / "core.glb", [("block", (0, 0, 0), (100, 100, 100), (0.9, 0.9, 0.9)),
+                                        ("core", (20, 40, 40), (30, 60, 60), (0.9, 0.1, 0.1))])
         # The bracket again, with its screw hidden at first.
         shutil.copy(cls.dir / "bracket.glb", cls.dir / "hidden-screw.glb")
         mark_hidden(cls.dir / "hidden-screw.glb", ["screw"])
@@ -364,7 +370,7 @@ class ViewerInFirefox(unittest.TestCase):
             let meshes = 0, edges = 0, faces = 0;
             const names = [];
             t.state.model.traverse((o) => {
-              if (o.isMesh && o.layers.isEnabled(0)) meshes++;
+              if (o.isMesh && o.visible && o.layers.isEnabled(0)) meshes++;
               if (o.isMesh && o.layers.isEnabled(2)) { edges++; faces += new Set(o.geometry.attributes.face.array).size; }
               if (o.name) names.push(o.name);
             });
@@ -553,6 +559,89 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertEqual(got["pressed"], "false")
         self.assertLess(got["off"] * 5, got["on"])  # the edges were most of the dark pixels
         self.assertEqual(got["again"], got["on"])
+
+    def test_slice_planes_cut_and_cap(self):
+        self.open_viewer("core.glb")
+        got = self.m.run("""
+            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+            const row = document.querySelector('.tpv-slice[data-axis="x"]');
+            const range = row.querySelector('input[type="range"]');
+            t.frame(t.LOOKS.right);  // looking at the cut, from +x
+            const at = (x) => { range.value = x; range.dispatchEvent(new Event('input')); };  // also turns it on
+            const look = () => new Promise((resolve) => {
+              const url = canvas.toDataURL();  // right after the render the slider's input caused
+              const img = new Image();
+              img.onload = () => {
+                const c = Object.assign(document.createElement('canvas'), { width: img.width, height: img.height });
+                c.getContext('2d').drawImage(img, 0, 0);
+                const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+                let red = 0, dark = 0;
+                // The middle of the view, where the block's cut face is.
+                const x0 = Math.round(c.width * 0.4), x1 = Math.round(c.width * 0.6);
+                const y0 = Math.round(c.height * 0.3), y1 = Math.round(c.height * 0.7);
+                for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+                  const i = 4 * (y * c.width + x), [r, g, b] = [d[i], d[i + 1], d[i + 2]];
+                  if (r > 150 && r - g > 80 && r - b > 80) red++;
+                  if (r + g + b < 3 * 100) dark++;
+                }
+                const i = 4 * (Math.round(c.height / 2) * c.width + Math.round(c.width / 2));
+                resolve({ red, dark, middle: [d[i], d[i + 1], d[i + 2]] });
+              };
+              img.src = url;
+            });
+            (async () => {
+              const whole = await look();  // nothing cut yet: the block's side
+              at(50);
+              const beyond = await look();  // cut, in front of the red one: the block's cap hides it
+              at(25);
+              const through = await look();  // through the red one: its cap shows
+              done({ whole, beyond, through, on: row.querySelector('input[type="checkbox"]').checked });
+            })();
+        """)
+        self.assertTrue(got["on"])
+        for name in ("whole", "beyond"):
+            self.assertEqual((got[name]["red"], got[name]["dark"]), (0, 0), (name, got))  # no red, no edges behind
+            self.assertTrue(all(v > 150 for v in got[name]["middle"]), (name, got))  # the block's colour, not empty
+        self.assertGreater(got["through"]["red"], 100)
+
+    def test_cut_holds_still_while_panning(self):
+        # Looking straight at a cut, the faces beside its outline are seen edge on. Edges
+        # there used to come and go with every fraction of a pixel the view moved.
+        self.open_viewer("bracket.glb")
+        got = self.m.run("""
+            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+            const range = document.querySelector('.tpv-slice[data-axis="x"] input[type="range"]');
+            t.frame(t.LOOKS.right);
+            range.value = (Number(range.min) + Number(range.max)) / 2;
+            range.dispatchEvent(new Event('input'));
+            const ink = () => new Promise((resolve) => {  // how dark the view is, in all
+              const img = new Image();
+              img.onload = () => {
+                const c = Object.assign(document.createElement('canvas'), { width: img.width, height: img.height });
+                c.getContext('2d').drawImage(img, 0, 0);
+                const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+                let n = 0;
+                for (let i = 0; i < d.length; i += 4) n += 765 - d[i] - d[i + 1] - d[i + 2];
+                resolve(n);
+              };
+              img.src = canvas.toDataURL();
+            });
+            (async () => {
+              const edges = [];
+              for (let i = 0; i < 12; i++) {
+                t.controls.pan(0.1, 0.07);  // renders
+                const on = await ink();
+                t.showEdges(false);
+                const off = await ink();
+                t.showEdges(true);
+                edges.push(on - off);  // the edges' own ink
+              }
+              const mean = edges.reduce((a, b) => a + b) / edges.length;
+              done({ mean, spread: Math.sqrt(edges.reduce((a, b) => a + (b - mean) ** 2, 0) / edges.length) });
+            })();
+        """)
+        self.assertGreater(got["mean"], 0)
+        self.assertLess(got["spread"] / got["mean"], 0.06, got)  # was 0.17
 
     def test_pen_follows_last_used_window(self):
         hub = self.server.pen_hub

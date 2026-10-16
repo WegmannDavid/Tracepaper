@@ -6,6 +6,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CadControls } from './controls.js';
 import { Edges } from './edges.js';
+import { Slices } from './slices.js';
 import { $, CLIENT, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import { Tablet } from './pen.js';
 import { flatten, renderTree } from './tree.js';
@@ -24,7 +25,7 @@ const LOOKS = {
 };
 const ui = {
   canvas: $('tpv-canvas'), view: $('tpv-view'), status: $('tpv-status'), empty: $('tpv-empty'),
-  toast: $('tpv-toast'), axes: $('tpv-axes'), edges: $('tpv-edges'), pen: $('tpv-pen'), penButton: $('tpv-pen-button'), fit: $('tpv-fit'), tree: $('tpv-layers'),
+  toast: $('tpv-toast'), axes: $('tpv-axes'), edges: $('tpv-edges'), slices: $('tpv-slices'), pen: $('tpv-pen'), penButton: $('tpv-pen-button'), fit: $('tpv-fit'), tree: $('tpv-layers'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
 const toast = toaster(ui.toast);
@@ -41,7 +42,8 @@ const toScene = ([x, y, z]) => new THREE.Vector3(x, z, -y);
 // say so, and keep the rest of the page working.
 let renderer = null;
 try {
-  renderer = new THREE.WebGLRenderer({ canvas: ui.canvas, antialias: true });
+  renderer = new THREE.WebGLRenderer({ canvas: ui.canvas, antialias: true, stencil: true }); // stencil: slice caps
+  renderer.localClippingEnabled = true;
   renderer.setPixelRatio(window.devicePixelRatio * SUPERSAMPLE);
 } catch (err) {
   ui.empty.textContent = `This browser can't draw 3D right now: ${err.message} `
@@ -60,6 +62,7 @@ const controls = new CadControls(camera, ui.canvas);
 controls.addEventListener('change', render);
 
 const edges = renderer && new Edges(renderer, camera);
+const slices = new Slices();
 const state = {
   model: null, mtime: null, half: 1, loads: 0,
   tree: [], expanded: new Set(),
@@ -72,6 +75,7 @@ function render() {
   if (renderer) {
     edges.pass(scene, state.half * 2);
     renderer.render(scene, camera);
+    slices.outline(renderer, edges);
   }
   renderAxes();
 }
@@ -110,7 +114,7 @@ function frame(look) {
   if (!state.model) return;
   const box = new THREE.Box3();
   state.model.updateMatrixWorld(true);
-  state.model.traverseVisible((o) => { if (o.isMesh && o.layers.isEnabled(0)) box.expandByObject(o); }); // the faces
+  state.model.traverseVisible((o) => { if (o.isMesh && o.layers.isEnabled(0) && !o.userData.slice) box.expandByObject(o); });
   if (box.isEmpty()) box.setFromObject(state.model);
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   if (!(sphere.radius > 0)) return;
@@ -131,7 +135,7 @@ function frame(look) {
 // Each CAD face is a mesh of its own in the file. They are drawn merged instead, one mesh
 // per part and colour, which takes far fewer draw calls: a part is the nearest object the
 // tree can hide (a named node), and the tree hides whole parts. Each face's edges
-// (edges.js) are worked out before.
+// (edges.js) are worked out before. Gives the parts, [{part, meshes}].
 function prepare(gltf) {
   const root = gltf.scene, json = gltf.parser.json.nodes ?? [];
   const named = (o) => !!json[gltf.parser.associations.get(o)?.nodes]?.name;
@@ -143,7 +147,9 @@ function prepare(gltf) {
     while (part !== root && !named(part)) part = part.parent;
     parts.set(part, [...(parts.get(part) ?? []), o]);
   });
+  const prepared = [];
   for (const [part, meshes] of parts) {
+    const drawn = [];
     const toPart = part.matrixWorld.clone().invert();
     const faces = meshes.map((mesh) => ({
       geometry: mesh.geometry.clone().applyMatrix4(toPart.clone().multiply(mesh.matrixWorld)), material: mesh.material,
@@ -155,14 +161,20 @@ function prepare(gltf) {
                                 polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
       const own = faces.filter((f) => f.material === material).map((f) => f.geometry);
       const merged = mergeGeometries(own); // null if they don't fit together: then one by one
-      for (const geometry of merged ? [merged] : own) part.add(new THREE.Mesh(geometry, material));
+      for (const geometry of merged ? [merged] : own) {
+        const mesh = new THREE.Mesh(geometry, material);
+        part.add(mesh);
+        drawn.push(mesh);
+      }
     }
     for (const mesh of meshes) {
       mesh.geometry.dispose();
       if (mesh === part) mesh.geometry = new THREE.BufferGeometry(); // the tree holds on to it
       else mesh.removeFromParent();
     }
+    prepared.push({ part, meshes: drawn });
   }
+  return prepared;
 }
 
 // The tree of the model's named glTF nodes (SPEC.md §2.8). Faces and unnamed nodes don't
@@ -207,6 +219,59 @@ function renderPanel() {
   });
 }
 
+// ---- Slice planes along CAD's axes (slices.js), set in the panel
+
+function buildSliceControls() {
+  const colors = Object.fromEntries(AXES.map(([name, , color]) => [name, color]));
+  const rows = slices.planes.map((p) => {
+    const row = document.createElement('div');
+    row.className = 'tpv-slice';
+    row.dataset.axis = p.axis;
+    row.style.setProperty('--axis', colors[p.axis]);
+    row.innerHTML = `<label title="Slice along ${p.axis.toUpperCase()}"><input type="checkbox"> ${p.axis.toUpperCase()}</label>`
+      + '<input type="range"><output></output>'
+      + '<button class="tpv-flip" aria-pressed="false" title="Cut away the other side">⇄</button>';
+    const on = row.querySelector('input[type="checkbox"]'), range = row.querySelector('input[type="range"]');
+    const out = row.querySelector('output'), flip = row.querySelector('button');
+    range.setAttribute('aria-label', `Slice along ${p.axis.toUpperCase()}, in mm`);
+    const changed = () => {
+      out.textContent = p.at.toFixed(1);
+      slices.update();
+      render();
+    };
+    on.addEventListener('change', () => { p.on = on.checked; changed(); });
+    range.addEventListener('input', () => { p.at = Number(range.value); p.on = on.checked = true; changed(); });
+    flip.addEventListener('click', () => { p.flip = !p.flip; flip.setAttribute('aria-pressed', String(p.flip)); changed(); });
+    p.ui = { range, out };
+    return row;
+  });
+  const corner = document.createElement('label');
+  corner.className = 'tpv-corner';
+  corner.title = 'Cut away only what lies beyond every plane that is on, as in a cutaway';
+  corner.innerHTML = '<input type="checkbox"> Cut a corner';
+  corner.querySelector('input').addEventListener('change', (e) => {
+    slices.corner = e.target.checked;
+    slices.update();
+    render();
+  });
+  ui.slices.replaceChildren(...rows, corner);
+}
+
+// The sliders span the model along CAD's axes. A plane starts in the middle, and keeps its
+// place when the model is rewritten, if that is still in it.
+function setSliceRanges(box) {
+  const span = { x: [box.min.x, box.max.x], y: [-box.max.z, -box.min.z], z: [box.min.y, box.max.y] };
+  for (const p of slices.planes) {
+    const [lo, hi] = span[p.axis];
+    Object.assign(p.ui.range, { min: lo, max: hi, step: (hi - lo) / 1000 || 1 });
+    if (!state.sliced || !(p.at >= lo && p.at <= hi)) p.at = (lo + hi) / 2;
+    p.ui.range.value = p.at;
+    p.ui.out.textContent = p.at.toFixed(1);
+  }
+  state.sliced = true;
+  slices.update();
+}
+
 // The CAD edges on or off, in this window.
 function showEdges(shown) {
   edges?.show(shown);
@@ -225,7 +290,12 @@ async function load(mtime) {
   const r = await fetch(`/api/file/${encodeURIComponent(viewName)}`, { cache: 'no-store' });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   const gltf = await new GLTFLoader().parseAsync(await r.arrayBuffer(), '');
-  prepare(gltf);
+  const parts = prepare(gltf);
+  const box = new THREE.Box3();
+  gltf.scene.updateMatrixWorld(true);
+  for (const { meshes } of parts) meshes.forEach((m) => box.expandByObject(m));
+  slices.setModel(parts, edges?.materials ?? [], box);
+  setSliceRanges(box);
   const first = !state.model;
   if (state.model) {
     scene.remove(state.model);
@@ -283,6 +353,7 @@ const tablet = new Tablet({
 for (const b of document.querySelectorAll('[data-look]')) b.addEventListener('click', () => frame(LOOKS[b.dataset.look]));
 ui.fit.addEventListener('click', () => frame(null));
 ui.edges.addEventListener('click', () => showEdges(!edges?.shown));
+buildSliceControls();
 ui.view.addEventListener('change', () => { if (ui.view.value !== viewName) location.href = viewUrl(ui.view.value); });
 window.addEventListener('pointerdown', () => tablet.claim(), true);
 ui.canvas.addEventListener('wheel', () => tablet.claim(), { passive: true });
@@ -302,4 +373,4 @@ tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten,
-  showEdges };
+  showEdges, slices };

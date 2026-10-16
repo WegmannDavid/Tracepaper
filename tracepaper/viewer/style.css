@@ -212,6 +212,15 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) var(--tpv-panel, 220
 }
 
 #tpv-layers, #tpv-layers ul { list-style: none; margin: 0; padding: 0; }
+
+/* The 3D view's slice planes, one row per axis in its colour. */
+.tpv-panel h2.tpv-section { margin-top: 18px; }
+.tpv-slice { display: grid; grid-template-columns: auto minmax(0, 1fr) 6ch auto; align-items: center; gap: 6px; margin: 2px 0; }
+.tpv-slice label { display: flex; align-items: center; gap: 4px; font-weight: 600; color: var(--axis); }
+.tpv-slice input[type="range"] { width: 100%; min-width: 0; accent-color: var(--axis); }
+.tpv-slice output { font: 12px ui-monospace, "DejaVu Sans Mono", monospace; color: var(--muted); text-align: right; }
+.tpv-slice .tpv-flip { padding: 2px 6px; }
+.tpv-corner { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--muted); }
 #tpv-layers ul { padding-left: 16px; }
 
 .tpv-layer { display: flex; align-items: center; gap: 4px; border-radius: 6px; }
