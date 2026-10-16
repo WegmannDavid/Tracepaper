@@ -640,6 +640,55 @@ class ViewerInFirefox(unittest.TestCase):
             self.assertTrue(all(v > 150 for v in got[name]["middle"]), (name, got))  # the block's colour, not empty
         self.assertGreater(got["through"]["red"], 100)
 
+    def test_section_only(self):
+        self.open_viewer("core.glb")
+        got = self.m.run("""
+            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+            const row = document.querySelector('.tpv-slice[data-axis="x"]');
+            const number = row.querySelector('input[type="number"]'), range = row.querySelector('input[type="range"]');
+            const section = document.querySelector('[data-option="section"] input');
+            const look = () => new Promise((resolve) => {  // what is drawn over the background, and how much is red
+              const img = new Image();
+              img.onload = () => {
+                const c = Object.assign(document.createElement('canvas'), { width: img.width, height: img.height });
+                c.getContext('2d').drawImage(img, 0, 0);
+                const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+                let drawn = 0, red = 0;
+                for (let i = 0; i < d.length; i += 4) {
+                  const [r, g, b] = [d[i], d[i + 1], d[i + 2]];
+                  drawn += Math.abs(r - 244) + Math.abs(g - 243) + Math.abs(b - 239) > 30;
+                  red += r > 150 && r - g > 80 && r - b > 80;
+                }
+                resolve({ drawn, red });
+              };
+              img.src = canvas.toDataURL();
+            });
+            (async () => {
+              t.frame(t.LOOKS.iso);
+              number.value = '25';
+              number.dispatchEvent(new Event('change'));  // typed in: through the red core
+              const cut = await look();
+              section.click();
+              const facing = t.camera.getWorldDirection(new t.THREE.Vector3()).toArray();
+              const straight = await look();
+              t.frame(t.LOOKS.iso);
+              const only = await look();
+              section.click();
+              const back = await look();
+              const p = t.slices.planes[0];
+              done({ at: p.at, on: p.on, range: Number(range.value), facing, cut, straight, only, back });
+            })();
+        """)
+        self.assertEqual((got["at"], got["on"], got["range"]), (25, True, 25))
+        for v, want in zip(got["facing"], (-1, 0, 0)):  # from +x, straight at the plane
+            self.assertAlmostEqual(v, want, places=6)
+        self.assertGreater(got["straight"]["red"], 100)  # the core's section
+        # From the side, only the cut face is left of the block's remaining slab: its top
+        # and front are gone.
+        self.assertGreater(got["only"]["red"], 100)
+        self.assertLess(got["only"]["drawn"], 0.8 * got["cut"]["drawn"], got)
+        self.assertLess(abs(got["back"]["drawn"] - got["cut"]["drawn"]), 0.01 * got["cut"]["drawn"], got)
+
     def test_cut_holds_still_while_panning(self):
         # Looking straight at a cut, the faces beside its outline are seen edge on. Edges
         # there used to come and go with every fraction of a pixel the view moved.

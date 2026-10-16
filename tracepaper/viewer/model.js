@@ -221,6 +221,14 @@ function renderPanel() {
 
 // ---- Slice planes along CAD's axes (slices.js), set in the panel
 
+// A section only, through one plane, is seen straight on, as a 2D section would be.
+const FACING = { x: LOOKS.right, y: LOOKS.front, z: LOOKS.top };
+function faceSection() {
+  const on = slices.planes.filter((p) => p.on);
+  if (slices.sectionOnly && on.length === 1) frame(FACING[on[0].axis]);
+  else render();
+}
+
 function buildSliceControls() {
   const colors = Object.fromEntries(AXES.map(([name, , color]) => [name, color]));
   const rows = slices.planes.map((p) => {
@@ -229,32 +237,60 @@ function buildSliceControls() {
     row.dataset.axis = p.axis;
     row.style.setProperty('--axis', colors[p.axis]);
     row.innerHTML = `<label title="Slice along ${p.axis.toUpperCase()}"><input type="checkbox"> ${p.axis.toUpperCase()}</label>`
-      + '<input type="range"><output></output>'
+      + '<input type="range"><input type="number" step="any">'
       + '<button class="tpv-flip" aria-pressed="false" title="Cut away the other side">⇄</button>';
     const on = row.querySelector('input[type="checkbox"]'), range = row.querySelector('input[type="range"]');
-    const out = row.querySelector('output'), flip = row.querySelector('button');
+    const number = row.querySelector('input[type="number"]'), flip = row.querySelector('button');
     range.setAttribute('aria-label', `Slice along ${p.axis.toUpperCase()}, in mm`);
-    const changed = () => {
-      out.textContent = p.at.toFixed(1);
+    number.setAttribute('aria-label', `Where to slice along ${p.axis.toUpperCase()}, in mm`);
+    number.title = 'Where the plane is, in mm: type a position';
+    // A plane just switched on is faced in a section only.
+    const changed = (wasOn) => {
       slices.update();
-      render();
+      if (p.on && !wasOn) faceSection();
+      else render();
     };
-    on.addEventListener('change', () => { p.on = on.checked; changed(); });
-    range.addEventListener('input', () => { p.at = Number(range.value); p.on = on.checked = true; changed(); });
-    flip.addEventListener('click', () => { p.flip = !p.flip; flip.setAttribute('aria-pressed', String(p.flip)); changed(); });
-    p.ui = { range, out };
+    const move = (at) => {
+      const wasOn = p.on;
+      Object.assign(p, { at, on: true });
+      on.checked = true;
+      changed(wasOn);
+    };
+    on.addEventListener('change', () => { const wasOn = p.on; p.on = on.checked; changed(wasOn); });
+    range.addEventListener('input', () => { number.value = Number(range.value).toFixed(1); move(Number(range.value)); });
+    number.addEventListener('change', () => {
+      const at = number.value.trim() === '' ? NaN : Number(number.value);
+      if (!Number.isFinite(at)) { number.value = p.at.toFixed(1); return; }
+      range.value = at;
+      move(at);
+    });
+    flip.addEventListener('click', () => { p.flip = !p.flip; flip.setAttribute('aria-pressed', String(p.flip)); changed(p.on); });
+    p.ui = { range, number };
     return row;
   });
-  const corner = document.createElement('label');
-  corner.className = 'tpv-corner';
-  corner.title = 'Cut away only what lies beyond every plane that is on, as in a cutaway';
-  corner.innerHTML = '<input type="checkbox"> Cut a corner';
-  corner.querySelector('input').addEventListener('change', (e) => {
-    slices.corner = e.target.checked;
+  const option = (text, title, set) => {
+    const label = document.createElement('label');
+    label.className = 'tpv-slice-option';
+    label.title = title;
+    label.innerHTML = `<input type="checkbox"> ${text}`;
+    label.querySelector('input').addEventListener('change', (e) => set(e.target.checked));
+    return label;
+  };
+  const corner = option('Cut a corner', 'Cut away only what lies beyond every plane that is on, as in a cutaway', (cut) => {
+    slices.corner = cut;
     slices.update();
     render();
   });
-  ui.slices.replaceChildren(...rows, corner);
+  const section = option('Section only', 'Show only where the planes cut the model, seen straight on when there is one',
+    (only) => {
+      slices.sectionOnly = only;
+      slices.update();
+      if (only) faceSection();
+      else render();
+    });
+  section.dataset.option = 'section';
+  corner.dataset.option = 'corner';
+  ui.slices.replaceChildren(...rows, section, corner);
 }
 
 // The sliders span the model along CAD's axes. A plane starts in the middle, and keeps its
@@ -266,7 +302,7 @@ function setSliceRanges(box) {
     Object.assign(p.ui.range, { min: lo, max: hi, step: (hi - lo) / 1000 || 1 });
     if (!state.sliced || !(p.at >= lo && p.at <= hi)) p.at = (lo + hi) / 2;
     p.ui.range.value = p.at;
-    p.ui.out.textContent = p.at.toFixed(1);
+    p.ui.number.value = p.at.toFixed(1);
   }
   state.sliced = true;
   slices.update();

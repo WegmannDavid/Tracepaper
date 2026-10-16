@@ -1,6 +1,7 @@
 // Slicing a 3D view with planes along CAD's axes, as in the OCP viewer. Each plane that
 // is on cuts away what lies beyond it (flipped: before it); in a corner cut, only what
-// lies beyond every plane that is on goes, as in a cutaway.
+// lies beyond every plane that is on goes, as in a cutaway. A section only shows just
+// where the planes cut: the caps and their outline, without the rest of the model.
 //
 // The cut parts are closed with caps in their colours, drawn with the stencil buffer: for
 // a part and a plane, the part's remaining faces are counted along each pixel's ray, back
@@ -85,8 +86,9 @@ export class Slices {
       down: counter(THREE.FrontSide, THREE.DecrementWrapStencilOp),
     }));
     this.corner = false;
+    this.sectionOnly = false;
     this.caps = []; // [{plane index, cap, number, matrix}] of the model shown
-    this.clipped = []; // the materials that the planes cut
+    this.clipped = []; // the materials that the planes cut: the model's own, faces and edges
   }
 
   // A model: parts [{part, meshes}] whose meshes are its faces, the materials besides
@@ -124,7 +126,7 @@ export class Slices {
     this.update();
   }
 
-  // Apply what this.planes and this.corner say.
+  // Apply what this.planes, this.corner and this.sectionOnly say.
   update() {
     for (const p of this.planes) {
       const along = new THREE.Vector3(...SCENE[p.axis]);
@@ -136,6 +138,7 @@ export class Slices {
       if (m.clippingPlanes?.length !== on.length || m.clipIntersection !== this.corner) m.needsUpdate = true;
       m.clippingPlanes = on;
       m.clipIntersection = this.corner;
+      m.visible = !(this.sectionOnly && on.length); // with no plane on, the whole model still
     }
     this.planes.forEach((p) => { p.up.clippingPlanes = [p.plane]; p.down.clippingPlanes = [p.plane]; });
     for (const { i, part, cap, number, size, centre } of this.caps) {
