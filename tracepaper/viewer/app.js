@@ -4,18 +4,19 @@
 import * as A from './annotations.js';
 import { $, CLIENT, fetchOk, listViews, renderViewsMenu, toaster, viewUrl } from './page.js';
 import * as Pen from './pen.js';
-import { flatten, renderTree } from './tree.js';
+import { renderView } from './screen.js';
+import {
+  NUMBER, SVG_NS, allNodes, buildTree, colourAt, ensureInkLayer, fontSizeOf as fontSizeIn, growViewBox, inkBounds,
+  inkLayerOf, isHidden, labelOf, parseSvg, pathOf, setHidden,
+} from './sheetdoc.js';
+import { renderTree } from './tree.js';
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
-const INK_NS = 'http://www.inkscape.org/namespaces/inkscape';
-const SKETCH_ID = 'tp-sketch';
 const REF_ID = 'tpv-ref';
 const INK_COLORS = [['Red', '#e11d48'], ['Blue', '#2563eb'], ['Green', '#16a34a'], ['Black', '#1f2937']];
 const INK_WIDTH_PX = 2.2; // stroke width on screen, at the zoom it was drawn at
 const MIN_STEP_PX = 0.8;  // pointer samples closer than this to the last one are dropped
 const HIT_PX = 8;         // how close the pointer must be to grab a label
 const ERASER_PX = 10;     // radius of the pen's eraser end, on screen
-const NUMBER = /-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi;
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 400;
 const POLL_MS = 1000;
@@ -54,74 +55,9 @@ const toast = toaster(ui.toast);
 
 // ---- Sheet document ---------------------------------------------------------
 
-const isLayer = (n) => n.namespaceURI === SVG_NS && n.localName === 'g' && n.getAttributeNS(INK_NS, 'groupmode') === 'layer';
-const layersOf = (parent) => [...parent.children].filter(isLayer); // its top-level layers
-const labelOf = (g) => g.getAttributeNS(INK_NS, 'label') || g.id || 'Layer';
-
-// The nodes of the tree (SPEC.md §2.4): groups with a name. Top-level ones are layers.
-const isNode = (n) => isLayer(n) || (n.namespaceURI === SVG_NS && n.localName === 'g' && n.hasAttributeNS(INK_NS, 'label'));
-const NOT_DRAWN = new Set(['defs', 'metadata', 'pattern', 'clipPath', 'mask', 'marker', 'symbol', 'style', 'script']);
-
-// A node's place in the tree, e.g. "Dimensions / Overall": how a window remembers it is hidden.
-function pathOf(g) {
-  const names = [];
-  for (let n = g; n && n !== state.root; n = n.parentNode) if (isNode(n)) names.unshift(labelOf(n));
-  return names.join(' / ');
-}
-
-// The tree of named groups under parent; unnamed groups in between don't count.
-function buildTree(parent, above = '') {
-  const nodes = [];
-  for (const child of parent.children) {
-    if (isNode(child)) {
-      const key = above ? `${above} / ${labelOf(child)}` : labelOf(child);
-      nodes.push({ key, name: labelOf(child), hidden: isHidden(child), el: child, children: buildTree(child, key) });
-    } else if (!NOT_DRAWN.has(child.localName)) {
-      nodes.push(...buildTree(child, above));
-    }
-  }
-  return nodes;
-}
-
-const allNodes = (root) => flatten(buildTree(root)).map((n) => n.el);
-const isHidden = (n) => n.getAttribute('display') === 'none' || n.style?.display === 'none';
-
-function setHidden(g, hidden) {
-  if (hidden) { g.style.display = 'none'; return; }
-  g.style.removeProperty('display');
-  if (g.getAttribute('display') === 'none') g.removeAttribute('display');
-  if (!g.getAttribute('style')) g.removeAttribute('style');
-}
-
 function shown(el) {
   for (let n = el; n && n !== ui.host; n = n.parentNode) if (n.nodeType === 1 && isHidden(n)) return false;
   return true;
-}
-
-function parseSvg(text) {
-  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
-  const root = doc.documentElement;
-  if (root.namespaceURI !== SVG_NS || root.localName !== 'svg') throw new Error('not a well-formed SVG file');
-  for (const s of root.querySelectorAll('script')) s.remove();
-  for (const el of [root, ...root.querySelectorAll('*')]) {
-    for (const a of [...el.attributes]) if (/^on/i.test(a.localName)) el.removeAttributeNode(a);
-  }
-  return document.importNode(root, true);
-}
-
-const inkLayerOf = (root) => layersOf(root).find((g) => g.id === SKETCH_ID || labelOf(g) === 'Sketch') ?? null;
-
-function ensureInkLayer(root) {
-  let ink = inkLayerOf(root);
-  if (!ink) {
-    ink = document.createElementNS(SVG_NS, 'g');
-    ink.setAttribute('id', SKETCH_ID);
-    ink.setAttributeNS(INK_NS, 'inkscape:groupmode', 'layer');
-    ink.setAttributeNS(INK_NS, 'inkscape:label', 'Sketch');
-    ink.setAttribute('transform', 'scale(1,-1)');
-  }
-  root.appendChild(ink); // always on top
-  return ink;
 }
 
 function mount(root) {
@@ -148,15 +84,7 @@ function mount(root) {
   hover = null;
 }
 
-function fontSizeOf(el) {
-  for (let n = el; n && n.nodeType === 1; n = n.parentNode) {
-    const v = parseFloat(n.getAttribute('font-size'));
-    if (v > 0) return v;
-    if (n === state.root) break;
-  }
-  return 3.5;
-}
-
+const fontSizeOf = (el) => fontSizeIn(el, state.root);
 const findAnnotation = (id) => (id ? state.annotations.find((g) => g.id === id) ?? null : null);
 
 async function openSheet(name, { reload = false } = {}) {
@@ -197,7 +125,7 @@ async function openSheet(name, { reload = false } = {}) {
       Object.assign(state, { moved: new Map(), undo: [], dirty: false });
     }
     for (const g of allNodes(root)) {
-      const visible = state.layerVis.get(pathOf(g));
+      const visible = state.layerVis.get(pathOf(g, root));
       if (visible !== undefined) setHidden(g, !visible);
     }
     Object.assign(state, { name, sheetMtime: info.mtime, sketchMtime });
@@ -242,7 +170,7 @@ function renderLayers() {
 
 // key is a node's path in the tree (pathOf); a top-level layer's path is its name.
 function setLayerVisible(key, visible) {
-  const g = state.root && allNodes(state.root).find((n) => pathOf(n) === key);
+  const g = state.root && allNodes(state.root).find((n) => pathOf(n, state.root) === key);
   if (!g) return;
   setHidden(g, !visible);
   state.layerVis.set(key, visible);
@@ -588,45 +516,6 @@ function usePicked() {
 
 // ---- Colour picker: ink in the colour of something on the sheet ----------------
 
-const SHAPES = new Set(['path', 'line', 'polyline', 'polygon', 'circle', 'ellipse', 'rect', 'text', 'tspan']);
-// The point itself first, then rings out to 6 px, so thin lines are easy to hit.
-const PICK_OFFSETS = [[0, 0], ...[2, 4, 6].flatMap((r) => Array.from({ length: 8 },
-  (_, i) => [r * Math.cos(i * Math.PI / 4), r * Math.sin(i * Math.PI / 4)]))];
-
-function toHex(css) {
-  const m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+)(%?))?\s*\)$/.exec(css);
-  if (!m || (m[4] !== undefined && +m[4] === 0)) return null; // not a plain colour, or transparent
-  return `#${[m[1], m[2], m[3]].map((v) => Math.round(+v).toString(16).padStart(2, '0')).join('')}`;
-}
-
-// The colour an element is drawn in: text by its fill, other shapes by their outline, else their fill.
-function paintOf(el) {
-  const cs = getComputedStyle(el);
-  const paints = el.localName === 'text' || el.localName === 'tspan' ? [cs.fill] : [cs.stroke, cs.fill];
-  for (const p of paints) {
-    const hex = toHex(p);
-    if (hex) return hex;
-  }
-  return null;
-}
-
-// The visible shape under the pointer and its colour; from names the nearest element
-// with an id (the shape, its dimension, or its layer) and the layer.
-function pickAt(clientX, clientY) {
-  for (const [dx, dy] of PICK_OFFSETS) {
-    for (const el of document.elementsFromPoint(clientX + dx, clientY + dy)) {
-      if (!SHAPES.has(el.localName) || !state.root.contains(el)) continue;
-      const color = paintOf(el);
-      if (!color) continue; // e.g. the hatching's pattern fill: look further down
-      const named = el.closest('[id]');
-      const id = named && named !== state.root && state.root.contains(named) ? named.id : null;
-      const layer = allNodes(state.root).filter((g) => g.contains(el)).pop(); // the innermost
-      return { el, color, from: { id, layer: layer ? pathOf(layer) : null } };
-    }
-  }
-  return null;
-}
-
 const describe = (from) => [from.id, from.layer && `(${from.layer})`].filter(Boolean).join(' ');
 
 function showPickBox(el) {
@@ -641,13 +530,13 @@ function showPickBox(el) {
 }
 
 function previewPick(clientX, clientY) {
-  const hit = pickAt(clientX, clientY);
+  const hit = colourAt(state.root, clientX, clientY);
   showPickBox(hit?.el ?? null);
   if (hit) ui.coords.textContent += `   ${hit.color}  ${describe(hit.from)}`;
 }
 
 function pickColor(clientX, clientY) {
-  const hit = pickAt(clientX, clientY);
+  const hit = colourAt(state.root, clientX, clientY);
   if (!hit) {
     toast('Nothing to pick a colour from here');
     return;
@@ -689,52 +578,24 @@ function clearInk() {
 }
 
 // Bounds of the ink in model coordinates, including stroke width.
-function inkBounds() {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, w = 0;
-  for (const p of state.ink.querySelectorAll('path')) {
-    const n = (p.getAttribute('d') ?? '').match(NUMBER) ?? [];
-    for (let i = 0; i + 1 < n.length; i += 2) {
-      const x = +n[i], y = +n[i + 1];
-      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
-    }
-    w = Math.max(w, parseFloat(p.getAttribute('stroke-width')) || 0);
-  }
-  return x0 <= x1 ? { x0: x0 - w, y0: y0 - w, x1: x1 + w, y1: y1 + w } : null;
-}
-
-function lengthMm(s) {
-  const m = /^\s*([\d.]+)\s*(mm|cm|in|pt|px)?\s*$/.exec(s ?? '');
-  if (!m) return NaN;
-  const per = { mm: 1, cm: 10, in: 25.4, pt: 25.4 / 72, px: 25.4 / 96 };
-  return +m[1] * per[m[2] ?? 'px'];
-}
-
-// Enlarge the saved sheet so ink drawn past its edge isn't cut off.
-function growViewBox(svg, b) {
-  const vb = (svg.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(Number);
-  if (!b || vb.length !== 4 || !vb.every(Number.isFinite)) return;
-  const [vx, vy, vw, vh] = vb, m = 2;
-  const x0 = Math.min(vx, Math.floor(b.x0 - m)), y0 = Math.min(vy, Math.floor(-b.y1 - m));
-  const x1 = Math.max(vx + vw, Math.ceil(b.x1 + m)), y1 = Math.max(vy + vh, Math.ceil(-b.y0 + m));
-  if (x0 === vx && y0 === vy && x1 === vx + vw && y1 === vy + vh) return;
-  const mmPerUnit = lengthMm(svg.getAttribute('width')) / vw || 1;
-  svg.setAttribute('viewBox', `${x0} ${y0} ${x1 - x0} ${y1 - y0}`);
-  svg.setAttribute('width', `${A.fmt((x1 - x0) * mmPerUnit)}mm`);
-  svg.setAttribute('height', `${A.fmt((y1 - y0) * mmPerUnit)}mm`);
-}
-
-async function save() {
-  if (!state.root || state.busy) return;
-  const name = state.name;
+// A copy of the sheet as drawn, without what the viewer adds to it.
+function sheetCopy() {
   const copy = state.root.cloneNode(true);
   copy.querySelector(`#${REF_ID}`)?.remove();
   for (const n of copy.querySelectorAll('.tpv-hover')) {
     n.classList.remove('tpv-hover');
     if (!n.getAttribute('class')) n.removeAttribute('class');
   }
+  return copy;
+}
+
+async function save() {
+  if (!state.root || state.busy) return;
+  const name = state.name;
+  const copy = sheetCopy();
   copy.setAttributeNS(A.TP_NS, 'tp:sketch-of', name);
   copy.setAttributeNS(A.TP_NS, 'tp:saved', new Date().toISOString());
-  growViewBox(copy, inkBounds());
+  growViewBox(copy, inkBounds(state.ink));
   const body = `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(copy)}\n`;
   state.gen++;
   try {
@@ -872,9 +733,8 @@ function showPenCursor(c) {
 
 // ---- The tablet's screen ---------------------------------------------------------
 // While the tablet's pen draws in this window, the tablet shows this window's view
-// (if it can show pictures): shortly after the view changes, and not in the middle of
-// a stroke or drag, a picture of it goes to the tablet. It covers the part of the
-// screen that the pen covers (pen.js), so the pen lines up with what it draws on.
+// (if it can show pictures, screen.js): shortly after the view changes, and not in the
+// middle of a stroke or drag, a picture of it goes to the tablet.
 
 const SCREEN_DELAY_MS = 400;
 let screenTimer = null;
@@ -899,39 +759,12 @@ async function sendView() {
   }).catch(() => {});
 }
 
-// The tablet's whole screen as it is held, with the view where the pen's area is.
-async function renderScreen() {
+// The picture for the tablet's screen, or null if there is nothing to show.
+function renderScreen() {
   const r = ui.stage.getBoundingClientRect();
-  const [w, h] = tablet.status?.pixels ?? [];
-  if (!state.root || !r.width || !r.height || !w || !h) return null;
-  const a = Pen.activeArea(tablet.size, r), k = w / tablet.size.width; // screen pixels per tablet mm
-  const copy = state.root.cloneNode(true);
-  copy.querySelector(`#${REF_ID}`)?.remove();
-  for (const n of copy.querySelectorAll('.tpv-hover')) n.classList.remove('tpv-hover');
-  copy.setAttribute('overflow', 'visible');
-  const { s, x, y } = state.cam;
-  const font = getComputedStyle(ui.stage).fontFamily.replaceAll('"', "'");
-  const svg = `<svg xmlns="${SVG_NS}" width="${a.width * k}" height="${a.height * k}" `
-    + `viewBox="0 0 ${r.width} ${r.height}" font-family="${font}">`
-    + `<g transform="translate(${x} ${y}) scale(${s})">${new XMLSerializer().serializeToString(copy)}</g></svg>`;
-  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
-  try {
-    const img = new Image();
-    img.src = url;
-    await img.decode();
-    const canvas = document.createElement('canvas');
-    Object.assign(canvas, { width: w, height: h });
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, w, h);
-    ctx.drawImage(img, a.x * k, a.y * k, a.width * k, a.height * k);
-    ctx.strokeStyle = '#999'; // the edge of where the pen draws
-    ctx.lineWidth = 2;
-    ctx.strokeRect(a.x * k - 1, a.y * k - 1, a.width * k + 2, a.height * k + 2);
-    return canvas;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  if (!state.root || !r.width || !r.height || !tablet.status?.pixels) return null;
+  return renderView({ sheet: sheetCopy(), cam: state.cam, stage: r, size: tablet.size,
+                      pixels: tablet.status.pixels, font: getComputedStyle(ui.stage).fontFamily });
 }
 
 // ---- Wiring -----------------------------------------------------------------
