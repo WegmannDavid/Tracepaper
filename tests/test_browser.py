@@ -17,7 +17,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from tracepaper.model import mark_hidden
+from tracepaper.model import mark_hidden, write_glb
 from tracepaper.pen import screen_size, tablet_size
 from tracepaper.server import make_server
 from tracepaper.sheet import PathBuilder, Sheet
@@ -61,6 +61,53 @@ const until = (cond, done, ms = 8000) => {
 };
 const done = arguments[arguments.length - 1];
 """
+
+
+def boxes_glb(path, boxes):
+    """A .glb of named boxes, (name, (x0, y0, z0), (x1, y1, z1), (r, g, b)) in mm with z up,
+    each face a mesh of its own as in CAD exports, under a root turning z up into glTF's y up."""
+    data, views, accessors, meshes, materials, nodes = bytearray(), [], [], [], [], []
+
+    def add(values, fmt, target, kind, count, **extra):
+        views.append({"buffer": 0, "byteOffset": len(data), "byteLength": len(values) * struct.calcsize(fmt),
+                      "target": target})
+        data.extend(struct.pack(f"<{len(values)}{fmt}", *values))
+        data.extend(b"\0" * (-len(data) % 4))
+        accessors.append({"bufferView": len(views) - 1, "componentType": 5126 if fmt == "f" else 5123,
+                          "count": count, "type": kind, **extra})
+        return len(accessors) - 1
+
+    for name, lo, hi, color in boxes:
+        materials.append({"pbrMetallicRoughness": {"baseColorFactor": [*color, 1]}})
+        children = []
+        for axis in range(3):
+            for side in (0, 1):
+                u, v = [a for a in range(3) if a != axis]
+                corners = []
+                for cu, cv in ((0, 0), (1, 0), (1, 1), (0, 1)):
+                    c = [0, 0, 0]
+                    c[axis] = (lo, hi)[side][axis]
+                    c[u], c[v] = (lo, hi)[cu][u], (lo, hi)[cv][v]
+                    corners.append(c)
+                normal = [0, 0, 0]
+                normal[axis] = 1 if side else -1
+                flat = [x for c in corners for x in c]
+                position = add(flat, "f", 34962, "VEC3", 4, min=[min(flat[i::3]) for i in range(3)],
+                               max=[max(flat[i::3]) for i in range(3)])
+                normals = add(normal * 4, "f", 34962, "VEC3", 4)
+                indices = add([0, 1, 2, 0, 2, 3], "H", 34963, "SCALAR", 6)
+                meshes.append({"primitives": [{"attributes": {"POSITION": position, "NORMAL": normals},
+                                               "indices": indices, "material": len(materials) - 1}]})
+                nodes.append({"mesh": len(meshes) - 1})
+                children.append(len(nodes) - 1)
+        nodes.append({"name": name, "children": children})
+    root = {"name": "assembly", "rotation": [-0.5 ** 0.5, 0, 0, 0.5 ** 0.5],
+            "children": [i for i, n in enumerate(nodes) if "name" in n]}
+    nodes.append(root)
+    gltf = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [len(nodes) - 1]}], "nodes": nodes,
+            "meshes": meshes, "materials": materials, "accessors": accessors, "bufferViews": views,
+            "buffers": [{"byteLength": len(data)}]}
+    write_glb(path, gltf, bytes(data))
 
 
 class FakePen:
@@ -153,6 +200,9 @@ class ViewerInFirefox(unittest.TestCase):
         bolt = ET.SubElement(wrapper, f"{SVG}g", {f"{INK}label": "Bolt"})
         ET.SubElement(bolt, f"{SVG}circle", {"id": "bolt", "cx": "20", "cy": "10", "r": "3"})
         ET.ElementTree(root).write(cls.dir / "tree.svg", encoding="unicode")
+        # A veneer 1 mm thick, and 0.5 mm under it a part whose edges must stay hidden.
+        boxes_glb(cls.dir / "veneer.glb", [("veneer", (0, 0, 0), (100, 100, 1), (0.85, 0.85, 0.85)),
+                                           ("under", (40, 40, -1), (60, 60, -0.5), (0.85, 0.85, 0.85))])
         # The bracket again, with its screw hidden at first.
         shutil.copy(cls.dir / "bracket.glb", cls.dir / "hidden-screw.glb")
         mark_hidden(cls.dir / "hidden-screw.glb", ["screw"])
@@ -311,15 +361,19 @@ class ViewerInFirefox(unittest.TestCase):
         self.open_viewer("bracket.glb")
         look = """
             const t = window.tracepaper3d;
-            let meshes = 0, edges = 0;
+            let meshes = 0, edges = 0, faces = 0;
             const names = [];
-            t.state.model.traverse((o) => { if (o.isMesh) meshes++; if (o.isLineSegments) edges++;
-                                             if (o.name) names.push(o.name); });
+            t.state.model.traverse((o) => {
+              if (o.isMesh && o.layers.isEnabled(0)) meshes++;
+              if (o.isLineSegments) { edges++; faces += new Set(o.geometry.attributes.face.array).size; }
+              if (o.name) names.push(o.name);
+            });
             const dir = t.camera.position.clone().sub(t.controls.target).normalize();
         """
-        first = self.m.run(look + "done({ meshes, edges, names, dir: dir.toArray(), loads: t.state.loads });")
-        self.assertGreater(first["meshes"], 6)
-        self.assertEqual(first["edges"], first["meshes"])  # every face outlined
+        first = self.m.run(look + "done({ meshes, edges, faces, names, dir: dir.toArray(), loads: t.state.loads });")
+        # The faces are drawn merged, one mesh per part and colour, each part with its edges.
+        self.assertEqual((first["meshes"], first["edges"]), (2, 2))  # the body and the screw
+        self.assertEqual(first["faces"], 23)  # every face in the file outlined
         self.assertTrue({"bracket", "body", "screw"} <= set(first["names"]))
         for got in first["dir"]:  # isometric: CAD (1, -1, 1) is (1, 1, 1) in the y-up scene
             self.assertAlmostEqual(got, 3 ** -0.5, places=6)
@@ -419,6 +473,55 @@ class ViewerInFirefox(unittest.TestCase):
             const status = document.getElementById('tpv-pen'), button = document.getElementById('tpv-pen-button');
             done([status.hidden ? null : status.textContent, button.hidden ? null : button.textContent]);
         """)
+
+    def test_edges_under_a_surface_stay_hidden_at_any_zoom(self):
+        # Edges are tested against the face in front, not pushed-back faces: zoomed out,
+        # a push of a pixel's depth would be millimetres, and the part's edges would show.
+        self.open_viewer("veneer.glb")
+        got = self.m.run("""
+            const t = window.tracepaper3d, THREE = t.THREE, canvas = document.getElementById('tpv-canvas');
+            const results = [];
+            const next = (zooms) => {
+              if (!zooms.length) { done(results); return; }
+              t.frame(t.LOOKS.iso);
+              t.controls.zoomBy(1 / zooms[0]);  // renders
+              const url = canvas.toDataURL();  // before the picture is shown, while it is still there
+              // Where the hidden part's outline is on screen, and a little around it.
+              const r = canvas.getBoundingClientRect(), ratio = canvas.width / r.width;
+              const corners = [[40, 40], [60, 40], [60, 60], [40, 60]].map(([x, y]) => {
+                const p = t.toScene([x, y, -0.5]).project(t.camera);
+                return [(p.x + 1) / 2 * canvas.width, (1 - p.y) / 2 * canvas.height];
+              });
+              const xs = corners.map((c) => c[0]), ys = corners.map((c) => c[1]);
+              const box = [Math.min(...xs) - 3 * ratio, Math.min(...ys) - 3 * ratio,
+                           Math.max(...xs) + 3 * ratio, Math.max(...ys) + 3 * ratio];
+              const img = new Image();
+              img.onload = () => {
+                const c = document.createElement('canvas');
+                Object.assign(c, { width: canvas.width, height: canvas.height });
+                const ctx = c.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                const px = ctx.getImageData(0, 0, c.width, c.height).data;
+                let dark = 0, under = 0;
+                for (let y = 0; y < c.height; y++) {
+                  for (let x = 0; x < c.width; x++) {
+                    const i = 4 * (y * c.width + x);
+                    if (px[i] + px[i + 1] + px[i + 2] > 3 * 120) continue;
+                    dark++;
+                    if (x >= box[0] && x <= box[2] && y >= box[1] && y <= box[3]) under++;
+                  }
+                }
+                results.push({ zoom: zooms[0], dark, under, size: Math.round(box[2] - box[0]) });
+                next(zooms.slice(1));
+              };
+              img.src = url;
+            };
+            next([1, 0.2, 0.08]);
+        """)
+        for r in got:
+            self.assertGreater(r["size"], 8, r)  # the part covers some pixels
+            self.assertGreater(r["dark"], 20, r)  # the veneer's own edges are drawn
+            self.assertEqual(r["under"], 0, r)
 
     def test_pen_follows_last_used_window(self):
         hub = self.server.pen_hub

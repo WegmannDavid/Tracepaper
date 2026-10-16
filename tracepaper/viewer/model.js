@@ -3,7 +3,9 @@
 // when the file changes and keeps the camera.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CadControls } from './controls.js';
+import { Edges } from './edges.js';
 import { $, CLIENT, listViews, renderViewsMenu, toaster, viewUrl } from './page.js';
 import { Tablet } from './pen.js';
 import { flatten, renderTree } from './tree.js';
@@ -54,7 +56,7 @@ scene.add(camera);
 const controls = new CadControls(camera, ui.canvas);
 controls.addEventListener('change', render);
 
-const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x1f2328 });
+const edges = renderer && new Edges(renderer);
 const state = {
   model: null, mtime: null, half: 1, loads: 0,
   tree: [], expanded: new Set(),
@@ -64,7 +66,10 @@ let resolveReady;
 const ready = new Promise((resolve) => { resolveReady = resolve; });
 
 function render() {
-  renderer?.render(scene, camera);
+  if (renderer) {
+    edges.pass(scene, camera, state.half * 2);
+    renderer.render(scene, camera);
+  }
   renderAxes();
 }
 
@@ -87,6 +92,7 @@ function resize() {
   const w = ui.canvas.clientWidth, h = ui.canvas.clientHeight;
   if (!w || !h) return;
   renderer?.setSize(w, h, false);
+  edges?.resize();
   const aspect = w / h, half = state.half;
   Object.assign(camera, aspect >= 1
     ? { left: -half * aspect, right: half * aspect, top: half, bottom: -half }
@@ -119,17 +125,40 @@ function frame(look) {
   resize();
 }
 
-function prepare(root) {
-  const meshes = [];
-  root.traverse((o) => { if (o.isMesh) meshes.push(o); });
-  for (const mesh of meshes) {
-    for (const m of [mesh.material].flat()) {
+// Each CAD face is a mesh of its own in the file. They are drawn merged instead, one mesh
+// per part and colour, which takes far fewer draw calls: a part is the nearest object the
+// tree can hide (a named node), and the tree hides whole parts. Each face's edges
+// (edges.js) are worked out before.
+function prepare(gltf) {
+  const root = gltf.scene, json = gltf.parser.json.nodes ?? [];
+  const named = (o) => !!json[gltf.parser.associations.get(o)?.nodes]?.name;
+  root.updateMatrixWorld(true);
+  const parts = new Map();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    let part = o;
+    while (part !== root && !named(part)) part = part.parent;
+    parts.set(part, [...(parts.get(part) ?? []), o]);
+  });
+  for (const [part, meshes] of parts) {
+    const toPart = part.matrixWorld.clone().invert();
+    const faces = meshes.map((mesh) => ({
+      geometry: mesh.geometry.clone().applyMatrix4(toPart.clone().multiply(mesh.matrixWorld)), material: mesh.material,
+    }));
+    edges?.add(part, faces, EDGE_ANGLE);
+    for (const material of new Set(faces.map((f) => f.material))) {
       // CAD colours, not metal: the glTF default would be fully metallic.
-      Object.assign(m, { metalness: 0, roughness: 0.7, side: THREE.DoubleSide,
-                         polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+      Object.assign(material, { metalness: 0, roughness: 0.7, side: THREE.DoubleSide,
+                                polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+      const own = faces.filter((f) => f.material === material).map((f) => f.geometry);
+      const merged = mergeGeometries(own); // null if they don't fit together: then one by one
+      for (const geometry of merged ? [merged] : own) part.add(new THREE.Mesh(geometry, material));
     }
-    // Each CAD face is its own mesh, so its outline and any sharp folds are the CAD edges.
-    mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, EDGE_ANGLE), edgeMaterial));
+    for (const mesh of meshes) {
+      mesh.geometry.dispose();
+      if (mesh === part) mesh.geometry = new THREE.BufferGeometry(); // the tree holds on to it
+      else mesh.removeFromParent();
+    }
   }
 }
 
@@ -178,7 +207,7 @@ function renderPanel() {
 function dispose(root) {
   root.traverse((o) => {
     o.geometry?.dispose();
-    if (o.material && o.material !== edgeMaterial) [o.material].flat().forEach((m) => m.dispose());
+    if (o.material && !edges?.shared(o.material)) [o.material].flat().forEach((m) => m.dispose());
   });
 }
 
@@ -186,7 +215,7 @@ async function load(mtime) {
   const r = await fetch(`/api/file/${encodeURIComponent(viewName)}`, { cache: 'no-store' });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   const gltf = await new GLTFLoader().parseAsync(await r.arrayBuffer(), '');
-  prepare(gltf.scene);
+  prepare(gltf);
   const first = !state.model;
   if (state.model) {
     scene.remove(state.model);
