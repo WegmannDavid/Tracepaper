@@ -102,7 +102,7 @@ function render(listing) {
   key = next;
   $('tpv-list').replaceChildren(...list(viewTree(listing.views)).children);
   $('tpv-empty').hidden = listing.views.length > 0;
-  $('tpv-empty').textContent = 'No views yet: sheets (.svg) and models (.glb) in this folder and its subfolders show up here.';
+  $('tpv-empty').textContent = 'No views yet: sheets (.svg), models (.glb) and slicer projects (.3mf) in this folder and its subfolders show up here.';
 }
 
 async function refresh() {

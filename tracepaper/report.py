@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
-from .server import SKETCH_SUFFIX, view_of_sketch
+from .server import MODEL_SUFFIXES, SKETCH_SUFFIX, view_of_sketch
 from .sheet import INKSCAPE_NS, SVG_NS, TP_NS, fmt
 
 SVG, INK, TP = f"{{{SVG_NS}}}", f"{{{INKSCAPE_NS}}}", f"{{{TP_NS}}}"
@@ -151,7 +151,7 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
     # The view it is of sits next to it, under the name it gives (once a path from the project).
     of = Path(root.get(f"{TP}sketch-of") or view_of_sketch(sketch_path.name)).name
     sheet_path = sketch_path.with_name(of)
-    model = sheet_path.suffix.lower() == ".glb"  # drawn over a 3D view (SPEC.md §3.1)
+    model = sheet_path.suffix.lower() in MODEL_SUFFIXES  # drawn over a 3D view (SPEC.md §3.1)
     sheet = ET.parse(sheet_path).getroot() if not model and sheet_path.is_file() else None
     view = root.find(f"{SVG}metadata/{TP}view")
 

@@ -6,6 +6,7 @@ The AI's build writes **views** of the model into a folder of their own, such as
 
 - **Sheets:** plain, layered SVG files showing geometry, dimensions and the constraints worth seeing. In the viewer you toggle layers, drag labels out of the way and sketch roughly what you want changed. Lines stay the same few pixels wide at any zoom. Press Save, then tell the AI what you drew. It finds `<sheet>.sketch.svg` next to the sheet, makes the change in the real CAD pipeline and rebuilds, and the viewer reloads.
 - **Models:** 3D `.glb` files, such as a CadQuery assembly's export. The viewer shows them so you can look at the build's result, with no debugger needed, and you can slice them and sketch over them as on sheets.
+- **Slicer projects:** `.3mf` files as OrcaSlicer or Bambu Studio save them. The viewer shows them in 3D: the printer's plate and where the pieces sit on it, in their filaments' colours, so you can check the layout. To print, open the same file in the slicer.
 
 Tracepaper doesn't care which CAD tool or constraint solver is behind a sheet. The format is described in [SPEC.md](SPEC.md).
 
@@ -18,10 +19,11 @@ python3 -m tracepaper view examples     # from this directory
 ```
 
 - **The project page** shows the views folder as a tree: its subfolders and the sheets and models in them. Click a folder to fold it; the browser remembers which are folded. A folded folder says when a sketch inside it waits for the AI. Each view opens in a window of its own, so you can put several side by side, and a view's window has a menu of all views, grouped by folder.
-- **The views folder** holds only views: every `.svg` and `.glb` in it shows up. The build arranges them in subfolders as it likes, writes each view over its old file, and deletes views it no longer makes, but never empties the folder wholesale: your saved sketches wait next to their views until the AI has handled them.
+- **The views folder** holds only views: every `.svg`, `.glb` and `.3mf` in it shows up. The build arranges them in subfolders as it likes, writes each view over its old file, and deletes views it no longer makes, but never empties the folder wholesale: your saved sketches wait next to their views until the AI has handled them.
 - **Updates:** a window updates by itself when its file changes. A 3D view keeps the camera where you left it.
 - **3D views:** the mouse works as in the OCP CAD viewer. Drag to rotate: near the middle it tips the model over, near the edge it turns it about the line of sight; with `Ctrl` only up/down counts, with `Alt` only sideways. Right-drag or `Shift`-drag to pan, scroll or middle-drag to zoom. Iso, Top, Front and Right (keys `0`, `7`, `1`, `3`) look from the standard directions, Fit (`F`) frames what's shown, and Edges (`E`) switches the edges off and on. **Slice**, below the tree, cuts the model with planes along X, Y and Z, as the OCP viewer does: switch a plane on, drag its slider or type where it goes in mm, and `⇄` keeps the other side. Cut parts are closed in their own colours. *Section only* leaves just those cut faces, seen straight on when one plane is on, and *Cut a corner* takes away only what lies beyond all the planes.
 - **Sketching over a 3D view:** press **Sketch** (`P`) and draw with the mouse, or with the reMarkable's pen. You draw on the plane you're looking at, so while there's ink the view only pans and zooms; turning it first asks to wipe the ink. Save writes `<model>.glb.sketch.svg`, a picture of the view with your ink over it, placed in the model. In *Section only*, looking straight at the section, the ink is on the section's plane.
+- **Slicer projects** open in the 3D view, where the tree has the plate, each piece by name, and the printer's build volume, hidden at first: show it to check that tall pieces fit. The orange corner of the plate is the part the printer keeps for itself.
 - **The tree panel:** both kinds of view show their named parts, a sheet's named groups and a model's assembly tree, in the same panel. It starts folded, showing only the top level; `▸` unfolds a node. Click a node's eye to hide it and everything in it, in that window only. Half an eye means something below the node is hidden. What starts hidden comes from the file.
 - **After updating Tracepaper,** restart a running `tracepaper view`. Pages come fresh from disk, but the server behind them doesn't.
 
@@ -98,6 +100,8 @@ Anything that writes SVG following [SPEC.md](SPEC.md) works. For Python there's 
 
 - [`examples/bracket/make_sheets.py`](examples/bracket/make_sheets.py) draws a section and a top view of a bracket.
 - [`examples/cabinet/make_views.py`](examples/cabinet/make_views.py) writes a cabinet as a model and a section with nested groups that have the same names in both.
+
+Slicer projects come from the slicer's own command line, for OrcaSlicer `orca-slicer --load-settings "machine.json;process.json" --load-filaments filament.json --export-3mf plate.3mf pieces.stl …`. The viewer reads them itself (`tracepaper/plate.py`), and never slices or prints.
 
 Models are written by the CAD code itself. For CadQuery, use `tracepaper.model.export(assembly, "bracket.glb", hidden=["screw"])`: it writes the assembly and marks the listed parts as hidden at first. See [`examples/bracket/make_model.py`](examples/bracket/make_model.py), which needs CadQuery. The 3D view uses [three.js](https://threejs.org) 0.170.0, bundled in `tracepaper/viewer/vendor/` (MIT).
 

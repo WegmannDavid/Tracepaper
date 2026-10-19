@@ -60,14 +60,19 @@ def read_glb(path: Union[str, Path]) -> tuple:
     return gltf, binary
 
 
-def write_glb(path: Union[str, Path], gltf: dict, binary: bytes) -> None:
+def glb_bytes(gltf: dict, binary: bytes) -> bytes:
+    """The .glb file of the glTF JSON and its binary chunk."""
     text = json.dumps(gltf, separators=(",", ":")).encode()
     text += b" " * (-len(text) % 4)  # chunks are 4-byte aligned; JSON pads with spaces
     binary += b"\0" * (-len(binary) % 4)
     chunks = struct.pack("<II", len(text), JSON_CHUNK) + text
     if binary:
         chunks += struct.pack("<II", len(binary), BIN_CHUNK) + binary
-    Path(path).write_bytes(struct.pack("<III", GLB_MAGIC, 2, 12 + len(chunks)) + chunks)
+    return struct.pack("<III", GLB_MAGIC, 2, 12 + len(chunks)) + chunks
+
+
+def write_glb(path: Union[str, Path], gltf: dict, binary: bytes) -> None:
+    Path(path).write_bytes(glb_bytes(gltf, binary))
 
 
 def tree(gltf: dict) -> list:

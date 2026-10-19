@@ -1,6 +1,6 @@
 ---
 name: tracepaper
-description: Show CAD geometry to the user in the Tracepaper viewer, as 2D sheets (layered SVG drawings) and 3D models (.glb), both of which they sketch on with the mouse or a reMarkable pen, and turn their sketches back into real changes in the project's CAD model. Use when the user mentions Tracepaper, sheets, views, a sketch they drew or saved, *.sketch.svg files, or wants to see, review or mark up a part, assembly, section, profile or 3D result of a CAD model, for example instead of stopping at a debugger breakpoint.
+description: Show CAD geometry to the user in the Tracepaper viewer, as 2D sheets (layered SVG drawings), 3D models (.glb) and slicer projects for the 3D printer (.3mf), which they sketch on with the mouse or a reMarkable pen, and turn their sketches back into real changes in the project's CAD model. Use when the user mentions Tracepaper, sheets, views, a sketch they drew or saved, *.sketch.svg files, or wants to see, review or mark up a part, assembly, section, profile, print plate or 3D result of a CAD model, for example instead of stopping at a debugger breakpoint.
 ---
 
 # Tracepaper
@@ -9,6 +9,7 @@ Tracepaper is a visual aid between the user and you. The project's build writes 
 
 - **Sheets** (`.svg`): 2D drawings of the current geometry and the constraints worth seeing. The user sketches roughly what they want changed and presses Save. They then tell you what they drew, and you make the change in the real CAD model.
 - **Models** (`.glb`): 3D views of the result, so the user can look at what the build produced without a debugger. They can slice them, and sketch over the view the same way, which saves `<model>.glb.sketch.svg`.
+- **Slicer projects** (`.3mf`): what goes to the 3D printer, as OrcaSlicer or Bambu Studio saves it. The viewer shows the printer's plate and where the pieces sit on it, so the user can check the layout. They open the same file in the slicer to print.
 
 Tracepaper never holds the model. It's a lens on whatever pipeline the project uses, for example build123d, CadQuery, FreeCAD, DXF or plain code. The user opens the views folder in the viewer, which shows it as a tree of subfolders and views; each view opens in its own browser window and updates by itself when the build rewrites its file.
 
@@ -38,7 +39,7 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
 
 The user sees the views folder as a tree, so its layout is part of what you show them.
 
-- Put every view in one folder of its own, such as `build/views/`, not among the sources or other build output (STEP, STL, caches). Every `.svg` and `.glb` file in it shows up as a view, so put nothing else there.
+- Put every view in one folder of its own, such as `build/views/`, not among the sources or other build output (STEP, STL, caches). Every `.svg`, `.glb` and `.3mf` file in it shows up as a view, so put nothing else there.
 - Group the views in subfolders by what they're for, for example the whole assembly and its sections in `window/`, and test pieces in `tests/`. A handful of views can stay at the top. When a flat folder has grown past about ten views, propose subfolders to the user.
 - Never empty the folder on a rebuild (`rm -rf`, `shutil.rmtree`): the user's sketch files wait next to their views until you've handled them. Write each view over its old file, and delete only views the build no longer makes.
 - Keep a view's name and folder stable, since the user's open window and any sketch file are tied to it. Move or rename views only once their sketch files are handled, and tell the user, because their open windows still show the old file.
@@ -69,6 +70,19 @@ The user sees the views folder as a tree, so its layout is part of what you show
 - Name the assembly's parts and group them into subassemblies, since that becomes the tree the user hides things with. The top assembly itself isn't shown, so its children are the top level, which is all the user sees until they unfold a node. Give the parts colours.
 - Spec §2.8 has the details: millimetres, z up, faces as separate primitives, which CadQuery all does by default.
 
+## Making slicer projects (.3mf)
+
+When the user wants to print pieces, the build lays them out and writes the slicer project; the user checks it in the viewer, then opens it in their slicer and prints from there. Tracepaper never slices or prints, and you don't press print either.
+
+- Write the project with the slicer's command line into the views folder, for example `build/views/print/<name>.3mf`. Export it outside the views folder first and then move it in (`os.replace`), so the viewer never reads half a file.
+- With OrcaSlicer: `orca-slicer --load-settings "machine.json;process.json" --load-filaments "filament.json" --arrange 0 --orient 0 --export-3mf <file> <pieces.stl …>`.
+  - Its command line doesn't follow a preset's `inherits`, so merge each preset with its parents yourself.
+  - It leaves `result.json` and a log in its working directory: run it in a scratch folder, and check `result.json` for errors.
+  - `--slice 0` also slices every plate into the file, which shows Orca's warnings in `result.json` and `Metadata/slice_info.config`.
+- The STL files' names become the pieces' names in the viewer's tree (without `.stl`), so name them after the pieces.
+- The viewer shows the pieces in their filament's colour, the part of the plate the printer keeps for itself in orange, and the build volume, hidden at first: check tall pieces against `printable_height` yourself.
+- Spec §2.9 has the details.
+
 ## When the user says they sketched something
 
 1. Run `tracepaper inspect <views folder>` and look at all three images. It takes the newest sketch file anywhere under the folder. Its list of what was hidden tells you what the user wasn't looking at.
@@ -78,7 +92,7 @@ The user sees the views folder as a tree, so its layout is part of what you show
    - Arrows from an existing dimension to new geometry usually mean "same as this".
    - A stroke's `tp:color-from` names the element whose colour they drew in, which usually means it belongs with or extends that element.
    - `tp:view` maps sheet coordinates into 3D.
-   - A `<model>.glb.sketch.svg` was drawn over a 3D view: its View layer is a picture of what they saw, and the strokes are in mm on the plane they looked at. `tp:view` places that plane in the model (point = origin + x·xdir + y·(normal × xdir)), but not how deep along `normal` they meant it: tell that from the picture, from what lies under the strokes, and from what they said. From a standard direction the coordinates are CAD's own (from the right: x is CAD y, y is CAD z). In a section (`slices` says `section at …`) seen straight on, the plane is the section's and the depth is exact. `hidden` and `slices` say what they had hidden or cut away.
+   - A `<model>.glb.sketch.svg` (or `<project>.3mf.sketch.svg`, over a slicer project, in the slicer's coordinates) was drawn over a 3D view: its View layer is a picture of what they saw, and the strokes are in mm on the plane they looked at. `tp:view` places that plane in the model (point = origin + x·xdir + y·(normal × xdir)), but not how deep along `normal` they meant it: tell that from the picture, from what lies under the strokes, and from what they said. From a standard direction the coordinates are CAD's own (from the right: x is CAD y, y is CAD z). In a section (`slices` says `section at …`) seen straight on, the plane is the section's and the depth is exact. `hidden` and `slices` say what they had hidden or cut away.
 3. Change the real model in the project's own pipeline. Take sizes from what they wrote or said; otherwise pick sensible values, using the sketch's rough size as a first guess.
 4. Regenerate all affected sheets and models. Put the new feature and its dimensions on a **Changes** layer, which the `tracepaper.sheet` helper draws in amber. Carry over any label positions they dragged (listed under "Moved labels").
 5. Delete the sketch file. Its existence means "not handled yet", and the viewer clears the ink when it disappears.

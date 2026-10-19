@@ -21,14 +21,18 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from . import plate
 from .pen import PenHub
 
 SVG_NS = "http://www.w3.org/2000/svg"
 SKETCH_SUFFIX = ".sketch.svg"
-KINDS = {".svg": "sheet", ".glb": "model"}
+# A slicer's project (.3mf) is shown as a model: its plate and pieces (plate.py).
+KINDS = {".svg": "sheet", ".glb": "model", ".3mf": "model"}
+MODEL_SUFFIXES = {suffix for suffix, kind in KINDS.items() if kind == "model"}
 SKIP_DIRS = {"node_modules", "__pycache__", "venv"}
 MAX_SKETCH_BYTES = 50 * 1024 * 1024
 MAX_VIEW_BYTES = 8 * 1024 * 1024  # a picture of the view for the tablet's screen
+MODELS_KEPT = 4  # slicer projects kept converted, for windows reloading them
 KEEPALIVE = 5  # seconds between keep-alives on the pen stream, which notice closed windows
 LAST_WINDOW = 10  # seconds after the last window closed that the tablet is let go
 VIEWER_DIR = Path(__file__).resolve().parent / "viewer"
@@ -40,7 +44,7 @@ VIEW_TYPES = {"sheet": "image/svg+xml", "model": "model/gltf-binary"}
 
 def sketch_path(view: Path) -> Path:
     """Where a view's sketch file goes: name.sketch.svg for a sheet name.svg, and
-    name.glb.sketch.svg for a model name.glb (SPEC.md §3)."""
+    name.glb.sketch.svg for a model name.glb, or name.3mf.sketch.svg (SPEC.md §3)."""
     stem = view.name[: -len(".svg")] if view.suffix.lower() == ".svg" else view.name
     return view.with_name(stem + SKETCH_SUFFIX)
 
@@ -48,7 +52,7 @@ def sketch_path(view: Path) -> Path:
 def view_of_sketch(name: str) -> str:
     """The view a sketch file's name is for: the inverse of sketch_path."""
     stem = name[: -len(SKETCH_SUFFIX)]
-    return stem if stem.lower().endswith(".glb") else stem + ".svg"
+    return stem if Path(stem).suffix.lower() in MODEL_SUFFIXES else stem + ".svg"
 
 
 def list_views(directory: Path) -> list:
@@ -90,6 +94,25 @@ class ViewerServer(ThreadingHTTPServer):
         self.pen_hub = PenHub(pen.size_mm, getattr(pen, "pixels", None)) if pen is not None else None
         port = self.server_address[1]
         self.allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        self._models = {}  # path -> (mtime, size, .glb): slicer projects already turned into models
+        self._models_lock = threading.Lock()
+
+    def view_file(self, path: Path) -> bytes:
+        """A view's file as its page reads it. A slicer project becomes a model, a .glb
+        (plate.py), once for each version of it. Raises ValueError if that fails."""
+        if path.suffix.lower() != ".3mf":
+            return path.read_bytes()
+        stat = path.stat()
+        with self._models_lock:
+            cached = self._models.get(path)
+            if cached and cached[:2] == (stat.st_mtime_ns, stat.st_size):
+                return cached[2]
+        data = plate.to_glb(path)
+        with self._models_lock:
+            self._models[path] = (stat.st_mtime_ns, stat.st_size, data)
+            while len(self._models) > MODELS_KEPT:
+                self._models.pop(next(iter(self._models)))
+        return data
 
     def window_closed(self) -> None:
         """A page's pen stream ended: let the tablet go if no window comes back soon."""
@@ -190,9 +213,11 @@ class Handler(BaseHTTPRequestHandler):
                 if view is None:
                     return self._error(404, "no such view")
                 try:
-                    data = (sketch_path(view[0]) if sketch else view[0]).read_bytes()
+                    data = sketch_path(view[0]).read_bytes() if sketch else self.server.view_file(view[0])
                 except FileNotFoundError:
-                    return self._error(404, "no sketch for this view")
+                    return self._error(404, "no sketch for this view" if sketch else "the view's file is gone")
+                except ValueError as e:
+                    return self._error(422, str(e))
                 return self._send(200, data, VIEW_TYPES["sheet" if sketch else view[1]])
         self._error(404, "not found")
 
@@ -322,7 +347,7 @@ def make_server(target: Path, port: int = 0, pen=None) -> ViewerServer:
         if initial.endswith(SKETCH_SUFFIX):
             initial = view_of_sketch(initial)
     else:
-        raise SystemExit(f"tracepaper: {target} is not a directory, an .svg or a .glb file")
+        raise SystemExit(f"tracepaper: {target} is not a directory, an .svg, .glb or .3mf file")
     try:
         return ViewerServer(("127.0.0.1", port), directory, initial, pen)
     except OSError:

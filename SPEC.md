@@ -13,11 +13,12 @@ MUST, SHOULD and MAY are used as in RFC 2119.
 | `<name>.svg` | the AI | a sheet (§2) |
 | `<name>.sketch.svg` | the viewer, when the person presses Save | the sheet as it was on screen, plus their ink (§3) |
 | `<name>.glb.sketch.svg` | the viewer, when the person presses Save on a model | a picture of the model's view, plus their ink (§3.1) |
+| `<name>.3mf` | the AI's build, with the slicer's command line | a slicer project, shown in 3D: the printer's plate and the pieces on it (§2.9) |
 
 - Both are plain SVG 1.1, plus SVG 2's `vector-effect` (§2.1), and open in any browser or in Inkscape.
 - The sketch file sits next to its sheet. A sheet's file name MUST NOT end in `.sketch.svg`.
-- A project also has 3D models, `.glb` files (§2.8). Sheets and models are the project's **views**; the viewer shows each in a window of its own (§5).
-- **The views folder.** The views live in a folder of their own, such as `build/views/`, and in its subfolders, which group them by what they're for. Every `.svg` and `.glb` file in it is a view, so it SHOULD hold nothing else, such as STEP files or caches. The viewer shows the folder as a tree (§5).
+- A project also has 3D models, `.glb` files (§2.8), and slicer projects, `.3mf` files (§2.9). Sheets, models and slicer projects are the project's **views**; the viewer shows each in a window of its own (§5).
+- **The views folder.** The views live in a folder of their own, such as `build/views/`, and in its subfolders, which group them by what they're for. Every `.svg`, `.glb` and `.3mf` file in it is a view, so it SHOULD hold nothing else, such as STEP files or caches. The viewer shows the folder as a tree (§5).
 - The build writes each view in place of the old one, and deletes only views it no longer makes. It MUST NOT empty the views folder wholesale, since sketch files wait there next to their views until the AI has handled them.
 - Tracepaper attributes and elements use the namespace `urn:tracepaper:0`, by convention with the prefix `tp`. The `0` is the format version (§6).
 - An existing sketch file means "not handled yet". The AI deletes it once it has acted on it. A sketch file of either kind ends in `.sketch.svg`.
@@ -204,6 +205,19 @@ A model is a glTF 2.0 binary file (`.glb`) showing a part or an assembly in 3D. 
 - **Faces:** each CAD face SHOULD be its own primitive, as OpenCascade writes it. The viewer draws each primitive's outline as the model's edges.
 - **Writing:** write to a temporary file and rename it into place, so the viewer never reads half a model.
 
+### 2.9 Slicer projects
+
+A slicer project is a 3MF file (`.3mf`) as OrcaSlicer or Bambu Studio saves it: what goes to the 3D printer. A sliced one, `.gcode.3mf`, shows the same. The viewer shows it as a model (§2.8), read-only: the printer's plate and the pieces where the slicer put them, so the person can check the layout before they open the file in the slicer and print from there. Tracepaper never slices and never prints.
+
+- **What the viewer reads:** the build items and their meshes (3MF core, with the production extension's components in other files), and from `Metadata/`:
+  - `project_settings.config`: `printable_area`, `bed_exclude_area`, `printable_height` and `filament_colour`;
+  - `model_settings.config`: each object's name and filament, which of its parts are modifiers, and how many plates there are.
+- **The tree:** `Plate` (or `Plate 1`, `Plate 2`, …, laid out side by side as the slicer lays them out), then each piece under its name without a mesh file's extension (`sash_tenon_01.stl` shows as `sash_tenon_01`; a repeated name gets ` (2)`), then `Build volume`, hidden at first. Modifiers, negative parts and support blockers and enforcers aren't shown.
+- **What it looks like:** pieces in their filament's colour, shaded flat as slicers show meshes, with edges where the surface folds by more than 25°. The plate is drawn 2 mm thick below z = 0, and the part of it the printer keeps for itself (`bed_exclude_area`) in orange.
+- **Coordinates** are the slicer's: millimetres, z up, the plate's origin as in `printable_area`. Fronts face −y, as in §2.8.
+- **Other 3MF files** show their objects, without a plate.
+- **Sketching** over it works as over a model, and Save writes `<name>.3mf.sketch.svg` (§3.1).
+
 ## 3. Sketch files
 
 When the person presses Save, the viewer writes `<name>.sketch.svg` next to `<name>.svg`:
@@ -228,12 +242,12 @@ Strokes are rough by design. They show the general shape of a change and where i
 
 ### 3.1 Sketches over models
 
-The person can also draw over a model's 3D view (§2.8). Save then writes `<name>.glb.sketch.svg` next to `<name>.glb`. It is a sheet (§2) whose plane is the one the camera looked at:
+The person can also draw over a model's 3D view (§2.8), or a slicer project's (§2.9). Save then writes `<name>.glb.sketch.svg` next to `<name>.glb`, or `<name>.3mf.sketch.svg` next to `<name>.3mf`. It is a sheet (§2) whose plane is the one the camera looked at:
 
 - **Coordinates.** Millimetres on that plane, x to the right on screen and y up. `tp:view` places them in the model as in §2.3: `normal` points towards the viewer and `xdir` to the right, and `origin` is a point of the plane. A stroke point (x, y) is the model point origin + x·xdir + y·(normal × xdir), give or take a depth along `normal`, which a drawing over a 3D view doesn't say. The plane is through the middle of the view, or, when the view looks straight at a section (Section only), the section's plane, where the depth is exact. From a standard direction the coordinates are CAD's own: from the right, x is CAD y and y is CAD z.
 - **`tp:view`** also says what was on screen: `kind="model view"`; `title`, the model and the direction looked from; `area`, the part of the plane in view (`"x0 y0 x1 y1"`); `hidden`, the model's tree nodes that were hidden (paths, separated by `; `); and `slices`, what the slice planes left of the model, in words, such as `kept: x ≤ 412.5` or `section at x = 412.5`.
 - **The View layer** holds a picture of the view as it was, an `image` covering `area`. The Sketch layer holds the ink, as in §3.
-- **The root** gets `tp:sketch-of="<name>.glb"`.
+- **The root** gets `tp:sketch-of="<name>.glb"` (or `"<name>.3mf"`).
 
 Ink belongs to the direction it was drawn from, so the viewer doesn't turn the view while there is ink on it; it only pans and zooms.
 
@@ -247,7 +261,7 @@ Ink belongs to the direction it was drawn from, so the viewer doesn't turn the v
 
 **Acting on a sketch**
 
-1. Find the newest `*.sketch.svg` in the views folder. One named `<name>.glb.sketch.svg` was drawn over a model (§3.1).
+1. Find the newest `*.sketch.svg` in the views folder. One named `<name>.glb.sketch.svg` or `<name>.3mf.sketch.svg` was drawn over a model or a slicer project (§3.1).
 2. Look at it. `tracepaper inspect` does both steps: it lists the strokes, picked colours and moved labels, and renders the whole sheet, a close-up of the ink, and the close-up with the drawing faded. Without it, render with `rsvg-convert -b white -z 6 X.sketch.svg -o x.png`; for a close-up, render a copy whose root `viewBox` is set to the Sketch layer's bounds (with y negated), plus a margin.
 3. Work out what the sketch is and where it goes. Stroke coordinates are model coordinates. Nearby ids and `tp:source` pointers say what the strokes touch, and `tp:view` maps them into 3D. Over a model, the picture shows what the strokes were drawn on, and `tp:view` places them in the model up to a depth along the line of sight. A stroke's `tp:color-from` names the element whose colour it was drawn in. Ink in a sheet colour can be hard to tell apart from the drawing; rendering the Sketch layer alone helps.
 4. Change the real model, in its own pipeline. The sketch gives the shape and a rough size. Exact values come from what the person said or wrote, or from a sensible choice.
@@ -261,7 +275,7 @@ If the result isn't right, the person sketches again or says so, and the loop re
 `tracepaper view <views folder, or one view>` serves the viewer on 127.0.0.1 and opens it in a browser. The viewer:
 
 - shows the views folder (§1) on a project page, as a tree: its subfolders, which the person can fold, and the sheets and models in them. A folded folder says when a sketch inside it is waiting. Each view opens in a window of its own, so several can be watched side by side, and reloads when its file changes on disk. A view's window has a menu of all views, grouped by folder;
-- shows models (§2.8) in 3D: rotate, pan, zoom, standard directions, and slices along the axes, or just the sections there. The camera stays where it is when the model reloads;
+- shows models (§2.8) and slicer projects (§2.9) in 3D: rotate, pan, zoom, standard directions, and slices along the axes, or just the sections there. The camera stays where it is when the model reloads;
 - shows each view's tree (§2.4, §2.8) in the same panel, folded at first so only the top level shows, where the person can unfold nodes and hide and show them in that window. Their choices last while the window is open, including when the file is rewritten, and aren't stored;
 - toggles layers, lets the person drag annotations (§2.6), and provides a pen with a few colours, on sheets and over models, where the view only pans and zooms while there is ink, and turning it first asks to wipe the ink (§3.1);
 - can take ink from a drawing tablet, such as a reMarkable 2, which the person connects and disconnects in a view's window; connecting takes the tablet from any other viewer that has it. The tablet covers the current view of the window the person used last with the mouse (or connected from, or opened last), fitted at one scale for both axes so drawings keep their proportions, while the mouse keeps doing everything else. A tablet with a screen shows a sheet's view, lined up with the pen; over a model it shows only the frame of where the pen draws, and the person looks at the window;

@@ -18,10 +18,16 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from tracepaper import plate
 from tracepaper.model import mark_hidden, write_glb
 from tracepaper.pen import screen_size, tablet_size
 from tracepaper.server import make_server
 from tracepaper.sheet import PathBuilder, Sheet
+
+try:
+    from test_plate import write_3mf  # run by `unittest discover tests`, which puts tests/ on the path
+except ImportError:
+    from tests.test_plate import write_3mf
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "bracket"
 SVG = "{http://www.w3.org/2000/svg}"
@@ -213,6 +219,13 @@ class ViewerInFirefox(unittest.TestCase):
         # The bracket again, with its screw hidden at first.
         shutil.copy(cls.dir / "bracket.glb", cls.dir / "hidden-screw.glb")
         mark_hidden(cls.dir / "hidden-screw.glb", ["screw"])
+        # A slicer's project: two pieces on the plate, in the first and the second filament.
+        write_3mf(cls.dir / "plate.3mf", [("left.stl", (60, 60, 10), 20, 1), ("right.stl", (180, 120, 15), 30, 2)])
+        # A model whose parts are a single mesh each, as many programs write them: a slab and a block on it.
+        single = plate._Glb()
+        for name, box in (("slab", plate._box(0, 0, -2, 200, 200, 0)), ("block", plate._box(50, 50, 0, 60, 60, 10))):
+            single.node(name, [single.primitive(*box, single.material("#9ca3af"))])
+        (cls.dir / "single.glb").write_bytes(single.bytes())
         cls.server = make_server(cls.dir / "section-A.svg", 0, FakePen())
         cls.server.pen.hub = cls.server.pen_hub
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -257,7 +270,7 @@ class ViewerInFirefox(unittest.TestCase):
                                                 "args": []})
         base = f"http://127.0.0.1:{self.server.server_address[1]}"
         self.m.call("WebDriver:Navigate", {"url": f"{base}/view/{view}" if view else self.server.url})
-        if view and view.endswith(".glb"):
+        if view and view.endswith((".glb", ".3mf")):
             self.assertTrue(self.m.run("until(() => !!window.tracepaper3d?.state.model, done);"))
         else:
             self.assertTrue(self.m.run(f"until(() => window.tracepaper && tp.state.root && tp.state.name"
@@ -377,6 +390,44 @@ class ViewerInFirefox(unittest.TestCase):
         near, close = thickness(1), thickness(20)
         self.assertTrue(1 <= near <= 3, near)
         self.assertLessEqual(abs(close - near), 1)
+
+    def test_slicer_project(self):
+        self.open_viewer("plate.3mf")
+        got = self.m.run("""
+            const t = window.tracepaper3d;
+            const rows = [...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
+              r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.visible === 'true']);
+            const piece = (name) => {
+              const node = t.flatten(t.state.tree).find((n) => n.key === name).obj;
+              const meshes = [];
+              // Its surface: not the node (emptied, holding the rest), its edges, or the slice planes' meshes.
+              node.traverse((o) => {
+                if (o.isMesh && o !== node && !o.userData.slice && !o.material.isShaderMaterial) meshes.push(o);
+              });
+              const box = new t.THREE.Box3().setFromObject(meshes[0]);
+              return { color: meshes[0].material.color.getHexString(), flat: meshes[0].material.flatShading,
+                       min: box.min.toArray().map(Math.round), max: box.max.toArray().map(Math.round) };
+            };
+            done({ rows, left: piece('left'), right: piece('right') });
+        """)
+        self.assertEqual(got["rows"], [["Plate", True], ["left", True], ["right", True], ["Build volume", False]])
+        self.assertEqual(got["right"]["color"], "ff0000")  # the second filament's colour
+        self.assertEqual(got["left"]["color"], "00ff00")
+        self.assertTrue(got["right"]["flat"])  # shaded flat, as a slicer shows a mesh
+        # Where the slicer put it, 30 mm wide around (180, 120, 15); the scene is y up, so CAD (x, y, z) is (x, z, -y).
+        self.assertEqual((got["right"]["min"], got["right"]["max"]), ([165, 0, -135], [195, 30, -105]))
+
+    def test_fit_frames_what_is_shown(self):
+        self.open_viewer("single.glb")
+        half = self.m.run("""
+            const t = window.tracepaper3d;
+            [...document.querySelectorAll('#tpv-layers .tpv-layer')].find((r) => r.textContent.includes('slab'))
+              .querySelector('.tpv-eye').click();
+            t.frame();
+            done(t.state.half);
+        """)
+        # Just the block, not the slab, nor the slice planes the block's part holds.
+        self.assertAlmostEqual(half, (10 ** 2 + 10 ** 2 + 10 ** 2) ** 0.5 / 2 * 1.08, delta=0.1)
 
     def test_model_tree(self):
         self.open_viewer("hidden-screw.glb")

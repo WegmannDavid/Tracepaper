@@ -1,7 +1,8 @@
 // Tracepaper's 3D view: a .glb model, such as a CadQuery assembly's export, in its
-// colours and with the edges between its faces. Rotate, pan and zoom; it reloads
-// when the file changes and keeps the camera. Sketch over it with the mouse or a
-// tablet's pen; Save writes <model>.glb.sketch.svg (SPEC.md §3.1).
+// colours and with the edges between its faces, or a slicer's project (.3mf), which the
+// server turns into one. Rotate, pan and zoom; it reloads when the file changes and keeps
+// the camera. Sketch over it with the mouse or a tablet's pen; Save writes
+// <model>.glb.sketch.svg (SPEC.md §3.1).
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -129,7 +130,11 @@ function frame(look) {
   if (!state.model || (look && turns(look) && !mayTurn())) return;
   const box = new THREE.Box3();
   state.model.updateMatrixWorld(true);
-  state.model.traverseVisible((o) => { if (o.isMesh && o.layers.isEnabled(0) && !o.userData.slice) box.expandByObject(o); });
+  state.model.traverseVisible((o) => {
+    if (!o.isMesh || !o.layers.isEnabled(0) || o.userData.slice || !o.geometry.attributes.position) return;
+    o.geometry.computeBoundingBox(); // its own, without its children: a part holds its slice planes' meshes
+    box.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));
+  });
   if (box.isEmpty()) box.setFromObject(state.model);
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   if (!(sphere.radius > 0)) return;

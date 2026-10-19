@@ -3,9 +3,16 @@ import json
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
-from tracepaper.server import make_server
+from tracepaper import server as S
+from tracepaper.server import make_server, view_of_sketch
+
+try:
+    from test_plate import write_3mf  # run by `unittest discover tests`, which puts tests/ on the path
+except ImportError:
+    from tests.test_plate import write_3mf
 
 SHEET = '<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 -10 10 10"/>'
 MODEL = b"glTF fake model"
@@ -64,6 +71,24 @@ class ServerTest(unittest.TestCase):
         self.assertEqual([v["name"] for v in listing["views"]],
                          ["a.svg", "b.svg", "models/a/b/c/d/deep.glb", "models/part.glb"])
         self.assertIn(b"model.js", self.request("GET", "/view/models/a/b/c/d/deep.glb")[1])
+
+    def test_slicer_projects_are_models(self):
+        write_3mf(self.dir / "plate.3mf", [("piece", (50, 50, 5), 10, 1)])
+        (self.dir / "broken.3mf").write_text("not a zip")
+        listing = json.loads(self.request("GET", "/api/views")[1])
+        self.assertIn(("plate.3mf", "model"), [(v["name"], v["kind"]) for v in listing["views"]])
+        self.assertIn(b"model.js", self.request("GET", "/view/plate.3mf")[1])
+        with mock.patch.object(S.plate, "to_glb", wraps=S.plate.to_glb) as convert:
+            status, data = self.request("GET", "/api/file/plate.3mf")
+            self.assertEqual(self.request("GET", "/api/file/plate.3mf")[1], data)
+        self.assertEqual((status, data[:4]), (200, b"glTF"))
+        self.assertEqual(convert.call_count, 1)  # kept for the next window, until the file changes
+        status, data = self.request("GET", "/api/file/broken.3mf")
+        self.assertEqual(status, 422)
+        self.assertIn("broken.3mf is not a 3MF file", json.loads(data)["error"])
+        self.assertEqual(self.put_sketch("plate.3mf", SHEET)[0], 200)
+        self.assertTrue((self.dir / "plate.3mf.sketch.svg").is_file())
+        self.assertEqual(view_of_sketch("plate.3mf.sketch.svg"), "plate.3mf")
 
     def test_pages(self):
         self.assertIn(b"project.js", self.request("GET", "/")[1])
