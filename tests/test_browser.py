@@ -935,6 +935,74 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertIn(["3D", "bracket.glb", "/view/bracket.glb"], views)
         self.assertIn(["2D", "section-A.svg", "/view/section-A.svg"], views)
 
+    def test_project_page_shows_the_folders_tree(self):
+        parts = self.dir / "parts"
+        nested = parts / "brackets"
+        nested.mkdir(parents=True)
+        for name in ("part 10.svg", "part 2.svg"):
+            shutil.copy(self.dir / "section-A.svg", nested / name)
+        shutil.copy(self.dir / "bracket.glb", parts / "assembly.glb")
+        (nested / "part 2.sketch.svg").write_text((self.dir / "section-A.svg").read_text())  # waiting for the AI
+        describe = """
+            const describe = (ul) => [...ul.children].map((li) => {
+              const row = li.querySelector(':scope > .tpv-folder');
+              if (!row) return li.querySelector('.tpv-view-name').textContent;
+              const waiting = row.querySelector('.tpv-waiting');
+              return { folder: row.querySelector('.tpv-view-name').textContent,
+                       open: row.getAttribute('aria-expanded') === 'true',
+                       shown: !li.querySelector(':scope > ul').hidden,
+                       waiting: !!waiting && getComputedStyle(waiting).display !== 'none',
+                       items: describe(li.querySelector(':scope > ul')) };
+            });
+            const folder = (name) => [...document.querySelectorAll('.tpv-folder')]
+              .find((b) => b.querySelector('.tpv-view-name').textContent === name);
+        """
+        try:
+            self.open_viewer()
+            base = f"http://127.0.0.1:{self.server.server_address[1]}"
+            self.m.call("WebDriver:Navigate", {"url": f"{base}/"})
+            self.m.run("try { localStorage.clear(); } catch {} done();")
+            got = self.m.run(describe + """
+                until(() => folder('brackets') && describe(document.getElementById('tpv-list')), done);
+            """)
+            # Folders first, then the views, in the order of their names with numbers counted.
+            self.assertEqual(got[0], {
+                "folder": "parts", "open": True, "shown": True, "waiting": False, "items": [
+                    {"folder": "brackets", "open": True, "shown": True, "waiting": False,
+                     "items": ["part 2.svg", "part 10.svg"]},
+                    "assembly.glb"]})
+            self.assertIn("section-A.svg", got[1:])
+            href = self.m.run("done(new URL([...document.querySelectorAll('.tpv-view-link')]"
+                              ".find((a) => a.textContent.includes('part 10')).href).pathname);")
+            self.assertEqual(href, "/view/parts/brackets/part%2010.svg")
+            # Folded, a folder says a sketch inside it waits; folding is remembered.
+            got = self.m.run(describe + """
+                folder('brackets').click();
+                done(describe(document.getElementById('tpv-list'))[0].items[0]);
+            """)
+            self.assertEqual({k: got[k] for k in ("open", "shown", "waiting")},
+                             {"open": False, "shown": False, "waiting": True})
+            self.m.call("WebDriver:Navigate", {"url": f"{base}/"})
+            got = self.m.run(describe + """
+                until(() => folder('brackets') && describe(document.getElementById('tpv-list'))[0], done);
+            """)
+            self.assertEqual((got["waiting"], got["items"][0]["open"], got["items"][0]["shown"]), (False, False, False))
+            # A view's window groups the menu of views by folder.
+            self.open_viewer("section-A.svg")
+            menu = self.m.run("""
+                until(() => document.querySelector('#tpv-sheet optgroup')
+                  && [...document.getElementById('tpv-sheet').children].map((el) => el.tagName === 'OPTGROUP'
+                       ? [el.label, [...el.children].map((o) => [o.textContent, o.value])] : el.value), done);
+            """)
+            self.assertIn("section-A.svg", menu)
+            self.assertEqual(menu[-2:], [
+                ["parts", [["assembly.glb  (3D)", "parts/assembly.glb"]]],
+                ["parts/brackets", [["part 2.svg ✎", "parts/brackets/part 2.svg"],
+                                    ["part 10.svg", "parts/brackets/part 10.svg"]]]])
+        finally:
+            shutil.rmtree(parts)
+            self.m.run("try { localStorage.clear(); } catch {} done();")
+
     def test_tree_panel_width(self):
         drag = """
             const main = document.querySelector('main'), divider = document.querySelector('.tpv-splitter');

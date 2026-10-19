@@ -26,8 +26,7 @@ from .pen import PenHub
 SVG_NS = "http://www.w3.org/2000/svg"
 SKETCH_SUFFIX = ".sketch.svg"
 KINDS = {".svg": "sheet", ".glb": "model"}
-SKIP_DIRS = {"node_modules", "__pycache__"}
-MAX_DEPTH = 3  # how many folders below the project folder are searched for views
+SKIP_DIRS = {"node_modules", "__pycache__", "venv"}
 MAX_SKETCH_BYTES = 50 * 1024 * 1024
 MAX_VIEW_BYTES = 8 * 1024 * 1024  # a picture of the view for the tablet's screen
 KEEPALIVE = 5  # seconds between keep-alives on the pen stream, which notice closed windows
@@ -53,15 +52,15 @@ def view_of_sketch(name: str) -> str:
 
 
 def list_views(directory: Path) -> list:
-    """(name, path, kind) of the sheets and models in directory and the folders below it.
+    """(name, path, kind) of the sheets and models in directory and all the folders below it,
+    which the project page shows as a tree.
 
     name is the path relative to directory, with "/" between folders.
     """
     found = []
     for root, dirs, files in os.walk(directory):
         rel = Path(root).relative_to(directory)
-        depth = len(rel.parts)
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS] if depth < MAX_DEPTH else []
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS]
         for f in files:
             kind = KINDS.get(Path(f).suffix.lower())
             if kind and not f.startswith(".") and not f.endswith(SKETCH_SUFFIX):

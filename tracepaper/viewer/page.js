@@ -17,14 +17,47 @@ export async function fetchOk(url, init = {}) {
 // The project's views: {dir, initial, views: [{name, kind, mtime, sketch}]}.
 export const listViews = async () => (await fetchOk('/api/views')).json();
 
-// The menu of views in a page's toolbar, with current chosen. It is only rebuilt when
-// the views change, so that it doesn't close while the person has it open.
+const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }); // "part 2" before "part 10"
+
+// The views as the tree of folders they're in. A folder is {name, path, folders, views},
+// where path is its names joined with "/" ("" for the views folder itself), and each
+// view gets file, its file name. Folders and views are each in order of their names.
+export function viewTree(views) {
+  const folder = (name, path) => ({ name, path, folders: new Map(), views: [] });
+  const root = folder('', '');
+  for (const v of views) {
+    const names = v.name.split('/');
+    let f = root;
+    for (const name of names.slice(0, -1)) {
+      if (!f.folders.has(name)) f.folders.set(name, folder(name, f.path ? `${f.path}/${name}` : name));
+      f = f.folders.get(name);
+    }
+    f.views.push({ ...v, file: names.at(-1) });
+  }
+  const sorted = (f) => ({
+    ...f,
+    folders: [...f.folders.values()].sort((a, b) => byName.compare(a.name, b.name)).map(sorted),
+    views: f.views.sort((a, b) => byName.compare(a.file, b.file)),
+  });
+  return sorted(root);
+}
+
+// The menu of views in a page's toolbar, with current chosen: the views folder's own
+// views, then a group for each folder. It is only rebuilt when the views change, so that
+// it doesn't close while the person has it open.
 export function renderViewsMenu(select, views, current) {
   const key = JSON.stringify(views.map((v) => [v.name, v.kind, !!v.sketch]));
   if (select.dataset.key !== key) {
     select.dataset.key = key;
-    select.replaceChildren(...views.map((v) => new Option(
-      `${v.name}${v.kind === 'model' ? '  (3D)' : ''}${v.sketch ? ' ✎' : ''}`, v.name)));
+    const option = (v) => new Option(`${v.file}${v.kind === 'model' ? '  (3D)' : ''}${v.sketch ? ' ✎' : ''}`, v.name);
+    const groups = (f) => f.folders.flatMap((sub) => {
+      const g = document.createElement('optgroup');
+      g.label = sub.path;
+      g.append(...sub.views.map(option));
+      return [...(sub.views.length ? [g] : []), ...groups(sub)];
+    });
+    const tree = viewTree(views);
+    select.replaceChildren(...tree.views.map(option), ...groups(tree));
   }
   select.value = current ?? '';
   select.disabled = views.length === 0;

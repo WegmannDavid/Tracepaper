@@ -16,7 +16,9 @@ MUST, SHOULD and MAY are used as in RFC 2119.
 
 - Both are plain SVG 1.1, plus SVG 2's `vector-effect` (§2.1), and open in any browser or in Inkscape.
 - The sketch file sits next to its sheet. A sheet's file name MUST NOT end in `.sketch.svg`.
-- A project folder can also hold 3D models, `.glb` files (§2.8). Sheets and models are the project's **views**; the viewer shows each in a window of its own (§5).
+- A project also has 3D models, `.glb` files (§2.8). Sheets and models are the project's **views**; the viewer shows each in a window of its own (§5).
+- **The views folder.** The views live in a folder of their own, such as `build/views/`, and in its subfolders, which group them by what they're for. Every `.svg` and `.glb` file in it is a view, so it SHOULD hold nothing else, such as STEP files or caches. The viewer shows the folder as a tree (§5).
+- The build writes each view in place of the old one, and deletes only views it no longer makes. It MUST NOT empty the views folder wholesale, since sketch files wait there next to their views until the AI has handled them.
 - Tracepaper attributes and elements use the namespace `urn:tracepaper:0`, by convention with the prefix `tp`. The `0` is the format version (§6).
 - An existing sketch file means "not handled yet". The AI deletes it once it has acted on it. A sketch file of either kind ends in `.sketch.svg`.
 
@@ -239,13 +241,13 @@ Ink belongs to the direction it was drawn from, so the viewer doesn't turn the v
 
 **Making sheets**
 
-1. Project the part of the model that matters into a sheet: a section, a projection, a 2D sketch. Use the pipeline's own tools, or `tracepaper.sheet` from Python.
+1. Project the part of the model that matters into a sheet: a section, a projection, a 2D sketch. Use the pipeline's own tools, or `tracepaper.sheet` from Python. Write it into the views folder (§1), in the subfolder for what it shows.
 2. Give elements stable ids and `tp:source` pointers, and fill in `tp:view`.
 3. Show the constraints and dimensions that help the person judge the design. Put the rest on hidden layers or leave them out. Which ones to show is worked out in conversation.
 
 **Acting on a sketch**
 
-1. Find the newest `*.sketch.svg` in the project. One named `<name>.glb.sketch.svg` was drawn over a model (§3.1).
+1. Find the newest `*.sketch.svg` in the views folder. One named `<name>.glb.sketch.svg` was drawn over a model (§3.1).
 2. Look at it. `tracepaper inspect` does both steps: it lists the strokes, picked colours and moved labels, and renders the whole sheet, a close-up of the ink, and the close-up with the drawing faded. Without it, render with `rsvg-convert -b white -z 6 X.sketch.svg -o x.png`; for a close-up, render a copy whose root `viewBox` is set to the Sketch layer's bounds (with y negated), plus a margin.
 3. Work out what the sketch is and where it goes. Stroke coordinates are model coordinates. Nearby ids and `tp:source` pointers say what the strokes touch, and `tp:view` maps them into 3D. Over a model, the picture shows what the strokes were drawn on, and `tp:view` places them in the model up to a depth along the line of sight. A stroke's `tp:color-from` names the element whose colour it was drawn in. Ink in a sheet colour can be hard to tell apart from the drawing; rendering the Sketch layer alone helps.
 4. Change the real model, in its own pipeline. The sketch gives the shape and a rough size. Exact values come from what the person said or wrote, or from a sensible choice.
@@ -256,9 +258,9 @@ If the result isn't right, the person sketches again or says so, and the loop re
 
 ## 5. The viewer (informative)
 
-`tracepaper view <project folder, or one view>` serves the viewer on 127.0.0.1 and opens it in a browser. The viewer:
+`tracepaper view <views folder, or one view>` serves the viewer on 127.0.0.1 and opens it in a browser. The viewer:
 
-- lists the project's views (sheets and models in the folder and up to three folders below it) on a project page. Each view opens in a window of its own, so several can be watched side by side, and reloads when its file changes on disk;
+- shows the views folder (§1) on a project page, as a tree: its subfolders, which the person can fold, and the sheets and models in them. A folded folder says when a sketch inside it is waiting. Each view opens in a window of its own, so several can be watched side by side, and reloads when its file changes on disk. A view's window has a menu of all views, grouped by folder;
 - shows models (§2.8) in 3D: rotate, pan, zoom, standard directions, and slices along the axes, or just the sections there. The camera stays where it is when the model reloads;
 - shows each view's tree (§2.4, §2.8) in the same panel, folded at first so only the top level shows, where the person can unfold nodes and hide and show them in that window. Their choices last while the window is open, including when the file is rewritten, and aren't stored;
 - toggles layers, lets the person drag annotations (§2.6), and provides a pen with a few colours, on sheets and over models, where the view only pans and zooms while there is ink, and turning it first asks to wipe the ink (§3.1);

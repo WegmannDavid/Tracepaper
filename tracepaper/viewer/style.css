@@ -311,6 +311,22 @@ main.tpv-project { display: block; overflow: auto; }
 .tpv-kind.model { background: #dbe6fd; color: #1d4ed8; }
 .tpv-view-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tpv-view-info { flex: none; color: var(--muted); font-size: 12px; }
+.tpv-waiting { color: var(--ok); }
+/* The project folder's tree: a folder's row folds what's in it, indented below it. */
+.tpv-list ul { list-style: none; margin: 0; padding: 0 0 0 20px; }
+.tpv-folder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  text-align: left;
+}
+.tpv-folder .tpv-view-name { font-weight: 600; }
+.tpv-folder-twisty { flex: none; width: 32px; text-align: center; color: var(--muted); }
+.tpv-folder[aria-expanded="true"] .tpv-waiting { display: none; } /* the view itself says so */
 
 @media (max-width: 720px) {
   main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }

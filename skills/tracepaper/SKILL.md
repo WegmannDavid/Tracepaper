@@ -5,12 +5,12 @@ description: Show CAD geometry to the user in the Tracepaper viewer, as 2D sheet
 
 # Tracepaper
 
-Tracepaper is a visual aid between the user and you. The project's build writes **views** of the model into a folder:
+Tracepaper is a visual aid between the user and you. The project's build writes **views** of the model into a folder of their own, the **views folder** (for example `build/views/`):
 
 - **Sheets** (`.svg`): 2D drawings of the current geometry and the constraints worth seeing. The user sketches roughly what they want changed and presses Save. They then tell you what they drew, and you make the change in the real CAD model.
 - **Models** (`.glb`): 3D views of the result, so the user can look at what the build produced without a debugger. They can slice them, and sketch over the view the same way, which saves `<model>.glb.sketch.svg`.
 
-Tracepaper never holds the model. It's a lens on whatever pipeline the project uses, for example build123d, CadQuery, FreeCAD, DXF or plain code. The user opens the folder in the viewer, which lists all views; each opens in its own browser window and updates by itself when the build rewrites its file.
+Tracepaper never holds the model. It's a lens on whatever pipeline the project uses, for example build123d, CadQuery, FreeCAD, DXF or plain code. The user opens the views folder in the viewer, which shows it as a tree of subfolders and views; each view opens in its own browser window and updates by itself when the build rewrites its file.
 
 ## Before anything else: read the spec
 
@@ -23,7 +23,7 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
 
 ## Tools
 
-- **`tracepaper view <views folder, or one view>`** starts the viewer, a local web page. Given a folder, it opens the project page listing the views (also in subfolders, up to three levels down).
+- **`tracepaper view <views folder, or one view>`** starts the viewer, a local web page. Given the views folder, it opens the project page, which shows the folder's tree.
   - Run it in the background and give the user the URL it prints.
   - If a viewer already runs for the same directory (`pgrep -af "tracepaper view"`), reuse it.
   - The user connects their reMarkable 2 from a sheet's toolbar when they want to draw with it, and disconnects it there or on the tablet. A viewer doesn't hold the tablet otherwise, and connecting in one takes it from any other, so you never need to stop a viewer for the tablet. While connected, the tablet's e-ink screen shows the sheet the pen draws in, in greys.
@@ -33,6 +33,15 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
 - **`tracepaper.sheet`** is a Python helper for writing sheets (`from tracepaper.sheet import Sheet, PathBuilder, HATCH`). It's optional; anything that writes SVG following the spec works.
 - **`tracepaper.model`** writes models: `export(assembly, path, hidden=[...])`, see below.
 - **`rsvg-convert -b white -w 2000 sheet.svg -o sheet.png`** renders a sheet so you can check it before showing it.
+
+## The views folder
+
+The user sees the views folder as a tree, so its layout is part of what you show them.
+
+- Put every view in one folder of its own, such as `build/views/`, not among the sources or other build output (STEP, STL, caches). Every `.svg` and `.glb` file in it shows up as a view, so put nothing else there.
+- Group the views in subfolders by what they're for, for example the whole assembly and its sections in `window/`, and test pieces in `tests/`. A handful of views can stay at the top. When a flat folder has grown past about ten views, propose subfolders to the user.
+- Never empty the folder on a rebuild (`rm -rf`, `shutil.rmtree`): the user's sketch files wait next to their views until you've handled them. Write each view over its old file, and delete only views the build no longer makes.
+- Keep a view's name and folder stable, since the user's open window and any sketch file are tied to it. Move or rename views only once their sketch files are handled, and tell the user, because their open windows still show the old file.
 
 ## Making sheets
 
@@ -54,7 +63,7 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
 
 ## Making models (3D views)
 
-- At the end of the build, write the assembly the user wants to look at into the views folder with `tracepaper.model.export(assembly, "views/window.glb", hidden=[...])`. It writes a CadQuery assembly safely: to a temporary file first, then renamed, so the viewer never reads half a file.
+- At the end of the build, write the assembly the user wants to look at into the views folder with `tracepaper.model.export(assembly, "build/views/window/window.glb", hidden=[...])`. It writes a CadQuery assembly safely: to a temporary file first, then renamed, so the viewer never reads half a file.
 - `hidden` lists what starts hidden when the user opens the model, as paths in the tree (`"Steel / Z profile"`) or plain names (`"Glass"` hides every part called Glass). Set it when the user asks for a default, such as "glass hidden".
 - Write only what they'd look at, typically the coloured assembly, not every intermediate shape. Use separate files for separate things, for example the whole window and one corner joint.
 - Name the assembly's parts and group them into subassemblies, since that becomes the tree the user hides things with. The top assembly itself isn't shown, so its children are the top level, which is all the user sees until they unfold a node. Give the parts colours.
@@ -62,7 +71,7 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
 
 ## When the user says they sketched something
 
-1. Run `tracepaper inspect <project or sheet folder>` and look at all three images. Its list of what was hidden tells you what the user wasn't looking at.
+1. Run `tracepaper inspect <views folder>` and look at all three images. It takes the newest sketch file anywhere under the folder. Its list of what was hidden tells you what the user wasn't looking at.
 2. Work out what they want:
    - Strokes are rough: they give shape and position, not exact sizes.
    - Handwriting next to a sketch, like "2", "R5" or "45°", is a value.

@@ -2,7 +2,7 @@
 
 A visual aid for working on CAD geometry with an AI.
 
-The AI's build writes **views** of the model into a project folder:
+The AI's build writes **views** of the model into a folder of their own, such as `build/views/`:
 
 - **Sheets:** plain, layered SVG files showing geometry, dimensions and the constraints worth seeing. In the viewer you toggle layers, drag labels out of the way and sketch roughly what you want changed. Lines stay the same few pixels wide at any zoom. Press Save, then tell the AI what you drew. It finds `<sheet>.sketch.svg` next to the sheet, makes the change in the real CAD pipeline and rebuilds, and the viewer reloads.
 - **Models:** 3D `.glb` files, such as a CadQuery assembly's export. The viewer shows them so you can look at the build's result, with no debugger needed, and you can slice them and sketch over them as on sheets.
@@ -14,10 +14,11 @@ Tracepaper doesn't care which CAD tool or constraint solver is behind a sheet. T
 Needs Python 3.9 or newer and a browser; there are no other dependencies.
 
 ```sh
-python3 -m tracepaper view examples/bracket     # from this directory
+python3 -m tracepaper view examples     # from this directory
 ```
 
-- **The project page** lists the folder's sheets and models, including up to three folders down. Each view opens in a window of its own, so you can put several side by side.
+- **The project page** shows the views folder as a tree: its subfolders and the sheets and models in them. Click a folder to fold it; the browser remembers which are folded. A folded folder says when a sketch inside it waits for the AI. Each view opens in a window of its own, so you can put several side by side, and a view's window has a menu of all views, grouped by folder.
+- **The views folder** holds only views: every `.svg` and `.glb` in it shows up. The build arranges them in subfolders as it likes, writes each view over its old file, and deletes views it no longer makes, but never empties the folder wholesale: your saved sketches wait next to their views until the AI has handled them.
 - **Updates:** a window updates by itself when its file changes. A 3D view keeps the camera where you left it.
 - **3D views:** the mouse works as in the OCP CAD viewer. Drag to rotate: near the middle it tips the model over, near the edge it turns it about the line of sight; with `Ctrl` only up/down counts, with `Alt` only sideways. Right-drag or `Shift`-drag to pan, scroll or middle-drag to zoom. Iso, Top, Front and Right (keys `0`, `7`, `1`, `3`) look from the standard directions, Fit (`F`) frames what's shown, and Edges (`E`) switches the edges off and on. **Slice**, below the tree, cuts the model with planes along X, Y and Z, as the OCP viewer does: switch a plane on, drag its slider or type where it goes in mm, and `⇄` keeps the other side. Cut parts are closed in their own colours. *Section only* leaves just those cut faces, seen straight on when one plane is on, and *Cut a corner* takes away only what lies beyond all the planes.
 - **Sketching over a 3D view:** press **Sketch** (`P`) and draw with the mouse, or with the reMarkable's pen. You draw on the plane you're looking at, so while there's ink the view only pans and zooms; turning it first asks to wipe the ink. Save writes `<model>.glb.sketch.svg`, a picture of the view with your ink over it, placed in the model. In *Section only*, looking straight at the section, the ink is on the section's plane.
@@ -28,7 +29,7 @@ To get a `tracepaper` command for use in other projects:
 
 ```sh
 pip install --user -e .
-tracepaper view path/to/sheets                  # a directory, or a single sheet .svg
+tracepaper view build/views                     # the views folder, or a single view
 ```
 
 | | |

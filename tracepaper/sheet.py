@@ -505,7 +505,9 @@ class Sheet:
         return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode") + "\n"
 
     def save(self, path: Union[str, Path]) -> Path:
+        """Write the sheet to path, making its folder if need be."""
         path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(self.tostring(), encoding="utf-8")
         tmp.replace(path)  # the viewer may be reading the old file

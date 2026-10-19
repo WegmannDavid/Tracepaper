@@ -69,6 +69,16 @@ class ModelTest(unittest.TestCase):
             M.mark_hidden(self.path, ["Steel / missing"])
         self.assertIn("Steel / Z profile", str(caught.exception))  # it says what there is
 
+    def test_export_into_a_new_folder(self):
+        class Assembly:  # writes as CadQuery's Assembly.export does
+            def export(self, path, exportType):
+                write_test_glb(Path(path), json.loads(json.dumps(ASSEMBLY)), [0])
+
+        path = Path(self.tmp.name) / "views" / "window" / "window.glb"
+        self.assertEqual(M.export(Assembly(), path, hidden=["Glass"]), path)
+        self.assertEqual(M.tree(M.read_glb(path)[0])[0][0], "Steel")
+        self.assertEqual(list(path.parent.iterdir()), [path])
+
     def test_export_with_cadquery(self):
         try:
             import cadquery as cq

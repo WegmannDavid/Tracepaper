@@ -54,6 +54,17 @@ class ServerTest(unittest.TestCase):
         self.assertEqual([bool(v["sketch"]) for v in listing["views"]], [False, True, False])
         self.assertTrue(self.server.url.endswith("/view/b.svg"))
 
+    def test_lists_views_in_folders_at_any_depth(self):
+        deep = self.dir / "models" / "a" / "b" / "c" / "d"
+        deep.mkdir(parents=True)
+        (deep / "deep.glb").write_bytes(MODEL)
+        (self.dir / "venv" / "lib").mkdir(parents=True)
+        (self.dir / "venv" / "lib" / "icon.svg").write_text(SHEET)  # a Python environment's files aren't views
+        listing = json.loads(self.request("GET", "/api/views")[1])
+        self.assertEqual([v["name"] for v in listing["views"]],
+                         ["a.svg", "b.svg", "models/a/b/c/d/deep.glb", "models/part.glb"])
+        self.assertIn(b"model.js", self.request("GET", "/view/models/a/b/c/d/deep.glb")[1])
+
     def test_pages(self):
         self.assertIn(b"project.js", self.request("GET", "/")[1])
         self.assertIn(b"app.js", self.request("GET", "/view/a.svg")[1])

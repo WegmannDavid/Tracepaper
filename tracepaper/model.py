@@ -23,9 +23,11 @@ def export(assembly, path: Union[str, Path], hidden: Iterable[str] = ()) -> Path
 
     Each entry of hidden is a node's path in the viewer's tree ("Steel / Z profile")
     or just a name, which hides every node of that name. The file is written to a
-    temporary name and renamed into place, so the viewer never reads half of it.
+    temporary name and renamed into place, so the viewer never reads half of it, and
+    its folder is made if it isn't there yet.
     """
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     assembly.export(str(tmp), exportType="GLB")
     try:

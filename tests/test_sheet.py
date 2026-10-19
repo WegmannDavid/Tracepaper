@@ -147,6 +147,13 @@ class SheetOutput(unittest.TestCase):
         flange_dim = top[1].find("svg:g/svg:g", ns)
         self.assertEqual((flange_dim.get("fill"), flange_dim.get("stroke-width")), ("#d97706", "1"))
 
+    def test_save_into_a_new_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "views" / "sections" / "a.svg"
+            self.assertEqual(S.Sheet("A").save(path), path)
+            self.assertEqual(ET.parse(path).getroot().tag, f"{{{S.SVG_NS}}}svg")
+            self.assertEqual(list(path.parent.iterdir()), [path])
+
     def test_lines_are_pixels_on_screen(self):
         sheet = S.Sheet("Widths")
         outline = sheet.layer("Outline")
