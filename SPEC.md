@@ -84,7 +84,7 @@ Every attribute is optional free text unless stated otherwise.
 - **The tree.** A sheet's nodes are its *named groups*: `<g>` elements with an `inkscape:label`. The top-level nodes are the layers. Below them, every named group is a node too, whether it's a sublayer (`inkscape:groupmode="layer"`, as Inkscape writes them) or a named part holding several drawings of it. Unnamed groups in between don't count: the named groups inside them belong to the nearest named group above. Models have the same kind of tree (§2.8), and the viewer shows both in the same panel.
 - Order is drawing order: later nodes are drawn on top. The viewer lists the topmost first. Hiding a node hides everything in it.
 - Every top-level layer MUST have exactly `transform="scale(1,-1)"`. Nested groups SHOULD NOT have a `transform`, so everything stays in model coordinates.
-- A node that starts hidden has `style="display:none"`. The AI decides what starts visible. The person can hide or show any node in their window; that choice isn't stored.
+- A node that starts hidden has `style="display:none"`. The AI decides what starts visible. The person can hide or show any node in their window, also one inside a hidden node (§5); that choice isn't stored.
 - All drawing SHOULD be inside layers.
 - The label `Sketch` and the id `tp-sketch` are reserved for the person's ink (§3). It is always a top-level layer.
 
@@ -222,7 +222,7 @@ A slicer project is a 3MF file (`.3mf`) as OrcaSlicer or Bambu Studio saves it: 
 
 When the person presses Save, the viewer writes `<name>.sketch.svg` next to `<name>.svg`:
 
-- **The sheet as it was on screen.** Layers the person hid have `style="display:none"`. Annotations they dragged carry new placement attributes and redrawn graphics. Scripts and event-handler attributes are removed.
+- **The sheet as it was on screen.** Nodes the person hid have `visibility="hidden"`, which the nodes inside them inherit, and a node they showed again inside a hidden one has `visibility="visible"`. Nodes hidden in the sheet are hidden this way too. Annotations they dragged carry new placement attributes and redrawn graphics. Scripts and event-handler attributes are removed.
 - **Root attributes.** The root gets `tp:sketch-of="<name>.svg"` and `tp:saved="<ISO 8601 time>"`.
 - **Size.** The viewer MAY enlarge `viewBox`, `width` and `height` so that ink drawn past the edge of the sheet is kept.
 - **Ink layer.** The ink is the last layer:
@@ -245,7 +245,7 @@ Strokes are rough by design. They show the general shape of a change and where i
 The person can also draw over a model's 3D view (§2.8), or a slicer project's (§2.9). Save then writes `<name>.glb.sketch.svg` next to `<name>.glb`, or `<name>.3mf.sketch.svg` next to `<name>.3mf`. It is a sheet (§2) whose plane is the one the camera looked at:
 
 - **Coordinates.** Millimetres on that plane, x to the right on screen and y up. `tp:view` places them in the model as in §2.3: `normal` points towards the viewer and `xdir` to the right, and `origin` is a point of the plane. A stroke point (x, y) is the model point origin + x·xdir + y·(normal × xdir), give or take a depth along `normal`, which a drawing over a 3D view doesn't say. The plane is through the middle of the view, or, when the view looks straight at a section (Section only), the section's plane, where the depth is exact. From a standard direction the coordinates are CAD's own: from the right, x is CAD y and y is CAD z.
-- **`tp:view`** also says what was on screen: `kind="model view"`; `title`, the model and the direction looked from; `area`, the part of the plane in view (`"x0 y0 x1 y1"`); `hidden`, the model's tree nodes that were hidden (paths, separated by `; `); and `slices`, what the slice planes left of the model, in words, such as `kept: x ≤ 412.5` or `section at x = 412.5`.
+- **`tp:view`** also says what was on screen: `kind="model view"`; `title`, the model and the direction looked from; `area`, the part of the plane in view (`"x0 y0 x1 y1"`); `hidden`, the model's tree nodes that were hidden (paths, separated by `; `), not counting those inside them; `shown`, nodes shown again inside a hidden one; `transparent="true"` for the transparent view, where every face was see-through; and `slices`, what the slice planes left of the model, in words, such as `kept: x ≤ 412.5` or `section at x = 412.5`.
 - **The View layer** holds a picture of the view as it was, an `image` covering `area`. The Sketch layer holds the ink, as in §3.
 - **The root** gets `tp:sketch-of="<name>.glb"` (or `"<name>.3mf"`).
 
@@ -276,7 +276,8 @@ If the result isn't right, the person sketches again or says so, and the loop re
 
 - shows the build folder (§1) on a project page, as a tree of its views: its subfolders, which the person can fold, and the sheets and models in them. A folded folder says when a sketch inside it is waiting. Each view opens in a window of its own, so several can be watched side by side, and reloads when its file changes on disk. A view's window has a menu of all views, grouped by folder;
 - shows models (§2.8) and slicer projects (§2.9) in 3D: rotate, pan, zoom, standard directions, and slices along the axes, or just the sections there. The camera stays where it is when the model reloads;
-- shows each view's tree (§2.4, §2.8) in the same panel, folded at first so only the top level shows, where the person can unfold nodes and hide and show them in that window. Their choices last while the window is open, including when the file is rewritten, and aren't stored;
+- shows each view's tree (§2.4, §2.8) in the same panel, folded at first so only the top level shows, where the person can unfold nodes and hide and show them in that window, as in the OCP viewer: a node's eye shows or hides it with everything inside it, also a node inside a hidden one, and says when only part of that shows; `Ctrl`+click on a name shows only that node (once more: everything), `Alt`+click hides it. A part drawn in one colour shows it beside its name. The person's choices last while the window is open, including when the file is rewritten, and aren't stored;
+- has a transparent view of models, as the OCP viewer does: every face half see-through, so what is inside or behind shows;
 - toggles layers, lets the person drag annotations (§2.6), and provides a pen with a few colours, on sheets and over models, where the view only pans and zooms while there is ink, and turning it first asks to wipe the ink (§3.1);
 - can take ink from a drawing tablet, such as a reMarkable 2, which the person connects and disconnects in a view's window; connecting takes the tablet from any other viewer that has it. The tablet covers the current view of the window the person used last with the mouse (or connected from, or opened last), fitted at one scale for both axes so drawings keep their proportions, while the mouse keeps doing everything else. A tablet with a screen shows a sheet's view, lined up with the pen; over a model it shows only the frame of where the pen draws, and the person looks at the window;
 - writes the sketch file on Save (§3), and clears the ink once the AI has deleted that file;

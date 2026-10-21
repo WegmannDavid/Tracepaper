@@ -100,7 +100,8 @@ export class Slices {
     this.clipped = [...new Set([...parts.flatMap((p) => p.meshes.map((m) => m.material)), ...materials])];
     const size = box.getSize(new THREE.Vector3()).length() * 1.1, centre = box.getCenter(new THREE.Vector3());
     parts.forEach(({ part, meshes }, k) => {
-      if (meshes.every((m) => m.material.transparent)) return; // not a solid, like a slicer's build volume: no caps
+      // Transparent in the file: no solid, like a slicer's build volume, so no caps.
+      if (meshes.every((m) => m.material.userData.base?.transparent ?? m.material.transparent)) return;
       this.planes.forEach((p, i) => {
         const order = CAPS + 2 * (AXES.length * k + i);
         for (const mesh of meshes) {

@@ -226,6 +226,14 @@ class ViewerInFirefox(unittest.TestCase):
         for name, box in (("slab", plate._box(0, 0, -2, 200, 200, 0)), ("block", plate._box(50, 50, 0, 60, 60, 10))):
             single.node(name, [single.primitive(*box, single.material("#9ca3af"))])
         (cls.dir / "single.glb").write_bytes(single.bytes())
+        # Parts in a group and beside it, each in a colour of its own.
+        nested = plate._Glb()
+        for name, x, colour in (("a", 0, "#ff0000"), ("b", 20, "#00ff00"), ("c", 40, "#0000ff")):
+            nested.node(name, [nested.primitive(*plate._box(x, 0, 0, x + 10, 10, 10), nested.material(colour))])
+        nodes = nested.gltf["nodes"]
+        nodes.append({"name": "group", "children": [1, 2]})
+        nodes[0]["children"] = [len(nodes) - 1, 3]
+        (cls.dir / "nested.glb").write_bytes(nested.bytes())
         cls.server = make_server(cls.dir / "section-A.svg", 0, FakePen())
         cls.server.pen.hub = cls.server.pen_hub
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -324,36 +332,52 @@ class ViewerInFirefox(unittest.TestCase):
         self.open_viewer("tree.svg")
         got = self.m.run("""
             const rows = () => [...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
-              r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.visible === 'true',
-              r.classList.contains('tpv-under-hidden')]);
+              r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.state]);
+            const row = (name) => [...document.querySelectorAll('#tpv-layers .tpv-layer')]
+              .find((r) => r.querySelector('.tpv-node-name').textContent === name);
+            const eye = (name) => row(name).querySelector('.tpv-eye').click();
+            const click = (name, keys) => row(name).querySelector('.tpv-node-name')
+              .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...keys }));
+            const shows = (id) => { const el = document.getElementById(id);
+              return el.getClientRects().length > 0 && getComputedStyle(el).visibility === 'visible'; };
+            const node = (label) => [...tp.state.root.querySelectorAll('g')]
+              .find((g) => g.getAttributeNS('http://www.inkscape.org/namespaces/inkscape', 'label') === label);
             const folded = rows();  // the tree starts folded
             for (let t; (t = document.querySelector('#tpv-layers .tpv-twisty[aria-label^="Unfold"]'));) t.click();
             const before = rows();
-            const states = () => Object.fromEntries([...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
-              r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.state]));
-            const partly = states();
-            tp.setLayerVisible('Dimensions', false);
-            const parentOff = rows();
-            const hiddenByParent = document.getElementById('d-w').getClientRects().length === 0;
-            tp.setLayerVisible('Dimensions', true);
-            tp.setLayerVisible('Dimensions / Details', true);
-            const detailsOn = rows();
-            const allShown = states();
+            eye('Dimensions');  // partly shown: shows all of it
+            const all = rows();
+            eye('Dimensions');  // hides all of it
+            const none = { rows: rows(), width: shows('d-w') };
+            eye('Overall');  // shows just that, inside the hidden layer
+            const overall = { rows: rows(), width: shows('d-w'), height: shows('d-h'),
+                              saved: ['Dimensions', 'Overall', 'Details'].map((l) => node(l).getAttribute('visibility')) };
+            click('Bolt', { ctrlKey: true });  // only the bolt
+            const bolt = { rows: rows(), box: shows('box'), bolt: shows('bolt') };
+            click('Bolt', { ctrlKey: true });  // once more: everything
+            const again = rows();
+            click('Outline', { altKey: true });  // hides it
+            const outline = rows();
             document.querySelector('.tpv-twisty:not([disabled])').click();  // fold Dimensions again
-            done({ folded, before, partly, parentOff, hiddenByParent, detailsOn, allShown, refolded: rows() });
+            done({ folded, before, all, none, overall, bolt, again, outline, refolded: rows() });
         """)
         self.assertEqual([r[0] for r in got["folded"]], ["Sketch", "Dimensions", "Outline"])
-        self.assertEqual(got["before"], [["Sketch", True, False], ["Dimensions", True, False],
-                                         ["Details", False, False], ["Overall", True, False],
-                                         ["Outline", True, False], ["Bolt", True, False]])
-        self.assertEqual(got["parentOff"][1:4], [["Dimensions", False, False], ["Details", False, True],
-                                                 ["Overall", True, True]])
-        self.assertTrue(got["hiddenByParent"])  # a sublayer's content disappears with its parent
-        self.assertEqual(got["detailsOn"][2], ["Details", True, False])
-        # A shown node with something hidden below it gets the half-crossed eye.
-        self.assertEqual((got["partly"]["Dimensions"], got["partly"]["Details"], got["partly"]["Outline"]),
-                         ("partial", "hidden", "visible"))
-        self.assertEqual(got["allShown"]["Dimensions"], "visible")
+        self.assertEqual(got["before"], [["Sketch", "visible"], ["Dimensions", "partial"], ["Details", "hidden"],
+                                         ["Overall", "visible"], ["Outline", "visible"], ["Bolt", "visible"]])
+        self.assertEqual(got["all"][1:4], [["Dimensions", "visible"], ["Details", "visible"], ["Overall", "visible"]])
+        self.assertEqual(got["none"]["rows"][1:4], [["Dimensions", "hidden"], ["Details", "hidden"],
+                                                    ["Overall", "hidden"]])
+        self.assertFalse(got["none"]["width"])
+        # A sublayer shown on its own inside its hidden layer, as the sketch file saves it.
+        self.assertEqual(got["overall"]["rows"][1:4], [["Dimensions", "partial"], ["Details", "hidden"],
+                                                       ["Overall", "visible"]])
+        self.assertEqual((got["overall"]["width"], got["overall"]["height"]), (True, False))
+        self.assertEqual(got["overall"]["saved"], ["hidden", "visible", None])
+        self.assertEqual(got["bolt"]["rows"], [["Sketch", "hidden"], ["Dimensions", "hidden"], ["Details", "hidden"],
+                                               ["Overall", "hidden"], ["Outline", "partial"], ["Bolt", "visible"]])
+        self.assertEqual((got["bolt"]["box"], got["bolt"]["bolt"]), (False, True))
+        self.assertEqual({state for _, state in got["again"]}, {"visible"})
+        self.assertEqual(got["outline"][4:], [["Outline", "hidden"], ["Bolt", "hidden"]])
         self.assertEqual([r[0] for r in got["refolded"]], ["Sketch", "Dimensions", "Outline", "Bolt"])
 
     def test_lines_keep_their_width_on_screen(self):
@@ -465,7 +489,7 @@ class ViewerInFirefox(unittest.TestCase):
             const t = window.tracepaper3d;
             const rows = () => [...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
               r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.visible === 'true']);
-            const shown = () => Object.fromEntries(t.flatten(t.state.tree).map((n) => [n.key, n.obj.visible]));
+            const shown = () => Object.fromEntries(t.flatten(t.state.tree).map((n) => [n.key, n.obj.userData.own.visible]));
             const click = (name) => [...document.querySelectorAll('#tpv-layers .tpv-layer')]
               .find((r) => r.querySelector('.tpv-node-name').textContent === name).querySelector('.tpv-eye').click();
         """
@@ -480,6 +504,72 @@ class ViewerInFirefox(unittest.TestCase):
         model.write_bytes(model.read_bytes())
         self.assertTrue(self.m.run("until(() => window.tracepaper3d.state.loads === 2, done);"))
         self.assertEqual(self.m.run(rows + "done(shown());"), {"body": False, "screw": True})
+
+    def test_model_tree_as_in_the_ocp_viewer(self):
+        self.open_viewer("nested.glb")
+        tree = """
+            const t = window.tracepaper3d;
+            for (let tw; (tw = document.querySelector('#tpv-layers .tpv-twisty[aria-label^="Unfold"]'));) tw.click();
+            const row = (name) => [...document.querySelectorAll('#tpv-layers .tpv-layer')]
+              .find((r) => r.querySelector('.tpv-node-name').textContent === name);
+            const eye = (name) => row(name).querySelector('.tpv-eye').click();
+            const click = (name, keys) => row(name).querySelector('.tpv-node-name')
+              .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...keys }));
+            const look = () => ({
+              rows: [...document.querySelectorAll('#tpv-layers .tpv-layer')].map((r) => [
+                r.querySelector('.tpv-node-name').textContent, r.querySelector('.tpv-eye').dataset.state,
+                r.querySelector('.tpv-node-color')?.style.getPropertyValue('--c') ?? null]),
+              shown: t.flatten(t.state.tree).filter((n) => n.obj.userData.own?.visible).map((n) => n.key) });
+        """
+        got = self.m.run(tree + """
+            const first = look();
+            eye('group');  // hides it, with what's inside
+            const hidden = look();
+            eye('a');  // shows just a, inside the hidden group
+            const a = look();
+            click('c', { ctrlKey: true });  // only c
+            const c = look();
+            click('c', { ctrlKey: true });  // once more: everything
+            const again = look();
+            click('b', { altKey: true });  // hides b
+            done({ first, hidden, a, c, again, b: look() });
+        """)
+        # Each part shows its colour; the group, which draws nothing itself, doesn't.
+        self.assertEqual(got["first"]["rows"], [["group", "visible", None], ["a", "visible", "#ff0000"],
+                                                ["b", "visible", "#00ff00"], ["c", "visible", "#0000ff"]])
+        self.assertEqual(got["hidden"]["shown"], ["c"])
+        self.assertEqual([r[1] for r in got["hidden"]["rows"]], ["hidden", "hidden", "hidden", "visible"])
+        self.assertEqual(got["a"]["shown"], ["group / a", "c"])
+        self.assertEqual([r[1] for r in got["a"]["rows"]], ["partial", "visible", "hidden", "visible"])
+        self.assertEqual(got["c"]["shown"], ["c"])
+        self.assertEqual(got["again"]["shown"], ["group / a", "group / b", "c"])
+        self.assertEqual(got["b"]["shown"], ["group / a", "c"])
+        self.assertEqual(got["b"]["rows"][0][1], "partial")
+
+    def test_transparent_view(self):
+        self.open_viewer("core.glb")  # a white block with a red core sealed inside
+        pixel = """
+            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+            t.frame(t.LOOKS.iso);  // renders
+            const p = t.toScene([25, 40, 50]).project(t.camera);  // the middle of the core's front, away from edges
+            const x = Math.round((p.x + 1) / 2 * canvas.width), y = Math.round((1 - p.y) / 2 * canvas.height);
+            const img = new Image();
+            img.onload = () => {
+              const c = Object.assign(document.createElement('canvas'), { width: img.width, height: img.height });
+              c.getContext('2d').drawImage(img, 0, 0);
+              done({ rgb: [...c.getContext('2d').getImageData(x, y, 1, 1).data.slice(0, 3)],
+                     pressed: document.getElementById('tpv-transparent').getAttribute('aria-pressed') });
+            };
+            img.src = canvas.toDataURL();
+        """
+        solid = self.m.run(pixel)
+        seen = self.m.run("document.getElementById('tpv-transparent').click();" + pixel)
+        back = self.m.run("window.tracepaper3d.setTransparent(false);" + pixel)
+        self.assertLess(abs(solid["rgb"][0] - solid["rgb"][1]), 20, solid)  # the block's grey
+        # The red core through it, with the block and the core both half see-through, as in the OCP viewer.
+        self.assertGreater(seen["rgb"][0] - seen["rgb"][1], solid["rgb"][0] - solid["rgb"][1] + 15, (solid, seen))
+        self.assertEqual((solid["pressed"], seen["pressed"]), ("false", "true"))
+        self.assertEqual(back, solid)
 
     def test_model_view(self):
         self.open_viewer("bracket.glb")

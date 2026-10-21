@@ -15,7 +15,7 @@ import { ScreenFeed, Tablet } from './pen.js';
 import { renderBlank } from './screen.js';
 import { SVG_NS, growViewBox, inkBounds, inkLayerOf, parseSvg } from './sheetdoc.js';
 import { Slices } from './slices.js';
-import { flatten, renderTree } from './tree.js';
+import { flatten, hiddenAndShown, renderTree } from './tree.js';
 
 const POLL_MS = 1000;
 // Drawn at this many times the screen's resolution and scaled down, which smooths edges and
@@ -35,6 +35,7 @@ const ui = {
   penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), fit: $('tpv-fit'), tree: $('tpv-layers'),
   bar: $('tpv-bar'), ink: $('tpv-ink'), inkLayer: $('tp-sketch'), sketch: $('tpv-sketch'), swatches: $('tpv-swatches'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), save: $('tpv-save'), hint: $('tpv-hint'),
+  transparent: $('tpv-transparent'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
 const toast = toaster(ui.toast);
@@ -81,6 +82,7 @@ const state = {
   // Sketching: drawing with the mouse, in color; the undo list; whether the ink is unsaved;
   // the sketch file's time, while there is one; gen counts saves, which polls in flight ignore.
   drawing: false, color: INK_COLORS[0][1], undo: [], dirty: false, sketchMtime: null, gen: 0, saving: false,
+  transparent: false, // the transparent view
 };
 let resolveReady;
 const ready = new Promise((resolve) => { resolveReady = resolve; });
@@ -174,25 +176,33 @@ function prepare(gltf) {
     const faces = meshes.map((mesh) => ({
       geometry: mesh.geometry.clone().applyMatrix4(toPart.clone().multiply(mesh.matrixWorld)), material: mesh.material,
     }));
-    edges?.add(part, faces, EDGE_ANGLE);
-    for (const material of new Set(faces.map((f) => f.material))) {
+    // What the part draws itself, apart from the parts inside it: the tree hides it on its own.
+    const own = new THREE.Group();
+    part.add(own);
+    part.userData.own = own;
+    edges?.add(own, faces, EDGE_ANGLE);
+    const materials = [...new Set(faces.map((f) => f.material))];
+    for (const material of materials) {
       // CAD colours, not metal: the glTF default would be fully metallic.
       Object.assign(material, { metalness: 0, roughness: 0.7, side: THREE.DoubleSide,
                                 polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
-      const own = faces.filter((f) => f.material === material).map((f) => f.geometry);
-      const merged = mergeGeometries(own); // null if they don't fit together: then one by one
-      for (const geometry of merged ? [merged] : own) {
+      material.userData.base = { transparent: material.transparent, opacity: material.opacity,
+                                 depthWrite: material.depthWrite }; // as in the file, for the transparent view
+      const geometries = faces.filter((f) => f.material === material).map((f) => f.geometry);
+      const merged = mergeGeometries(geometries); // null if they don't fit together: then one by one
+      for (const geometry of merged ? [merged] : geometries) {
         const mesh = new THREE.Mesh(geometry, material);
-        part.add(mesh);
+        own.add(mesh);
         drawn.push(mesh);
       }
     }
+    own.userData.materials = materials;
     for (const mesh of meshes) {
       mesh.geometry.dispose();
       if (mesh === part) mesh.geometry = new THREE.BufferGeometry(); // the tree holds on to it
       else mesh.removeFromParent();
     }
-    prepared.push({ part, meshes: drawn });
+    prepared.push({ part: own, meshes: drawn });
   }
   return prepared;
 }
@@ -202,13 +212,19 @@ function prepare(gltf) {
 function buildTree(gltf) {
   const json = gltf.parser.json.nodes ?? [];
   const nodeOf = (o) => json[gltf.parser.associations.get(o)?.nodes];
-  const under = (obj, above) => obj.children.flatMap((child) => {
+  // A node hidden in the file starts hidden with everything inside it. A part drawn in one
+  // colour, with no parts inside it, shows that colour.
+  const under = (obj, above, hiddenAbove) => obj.children.flatMap((child) => {
     const def = nodeOf(child);
-    if (!def?.name) return under(child, above);
+    if (!def?.name) return under(child, above, hiddenAbove);
     const key = above ? `${above} / ${def.name}` : def.name;
-    return [{ key, name: def.name, hidden: !!def.extras?.tracepaper?.hidden, obj: child, children: under(child, key) }];
+    const hidden = hiddenAbove || !!def.extras?.tracepaper?.hidden, own = child.userData.own;
+    const children = under(child, key, hidden);
+    const colors = new Set(own?.userData.materials.map((m) => `#${m.color.getHexString()}`));
+    const color = !children.length && colors.size === 1 ? [...colors][0] : null;
+    return [{ key, name: def.name, hidden, own: !!own, color, obj: child, children }];
   });
-  const top = under(gltf.scene, '');
+  const top = under(gltf.scene, '', false);
   if (top.length !== 1 || !top[0].children.length) return top;
   const rekey = (n, above) => {
     const key = above ? `${above} / ${n.name}` : n.name;
@@ -217,11 +233,13 @@ function buildTree(gltf) {
   return top[0].children.map((c) => rekey(c, ''));
 }
 
-// Hide what the file or this window's person hid.
+// Hide what the file or this window's person hid: each part's own drawing, so that the parts
+// inside a hidden one can still show (tree.js).
 function applyTree() {
   for (const node of flatten(state.tree)) {
     if (state.choices.has(node.key)) node.hidden = state.choices.get(node.key);
-    node.obj.visible = !node.hidden;
+    node.obj.visible = true;
+    if (node.obj.userData.own) node.obj.userData.own.visible = !node.hidden;
   }
   renderPanel();
 }
@@ -229,11 +247,14 @@ function applyTree() {
 function renderPanel() {
   renderTree(ui.tree, state.tree, {
     expanded: state.expanded,
-    onToggle: (node, hidden) => {
-      state.choices.set(node.key, hidden);
-      node.hidden = hidden;
-      node.obj.visible = !hidden;
-      renderPanel();
+    onChange: (changes) => {
+      for (const [node, hidden] of changes) {
+        for (const n of flatten([node])) {
+          n.hidden = hidden;
+          state.choices.set(n.key, hidden);
+        }
+      }
+      applyTree();
       render();
     },
   });
@@ -329,6 +350,23 @@ function setSliceRanges(box) {
 }
 
 // The CAD edges on or off, in this window.
+// The transparent view, as in the OCP viewer: every face see-through, so that what is inside
+// or behind shows, with its edges.
+const SEE_THROUGH = 0.5; // of each face's opacity in the file
+
+function setTransparent(on) {
+  state.transparent = on;
+  const materials = new Set();
+  state.model?.traverse((o) => o.userData.materials?.forEach((m) => materials.add(m)));
+  for (const m of materials) {
+    const base = m.userData.base;
+    Object.assign(m, on ? { transparent: true, opacity: base.opacity * SEE_THROUGH, depthWrite: false } : base);
+    m.needsUpdate = true;
+  }
+  ui.transparent.setAttribute('aria-pressed', String(on));
+  render();
+}
+
 function showEdges(shown) {
   edges?.show(shown);
   ui.edges.setAttribute('aria-pressed', String(shown));
@@ -361,6 +399,7 @@ async function load(mtime) {
   scene.add(state.model);
   state.tree = buildTree(gltf);
   applyTree();
+  setTransparent(state.transparent);
   state.mtime = mtime;
   state.loads += 1;
   ui.empty.hidden = true;
@@ -591,12 +630,13 @@ function sketchDocument() {
   for (const [prefix, uri] of Object.entries(NS)) svg.setAttributeNS('http://www.w3.org/2000/xmlns/', `xmlns:${prefix}`, uri);
   set(svg, { width: `${fmt(w)}mm`, height: `${fmt(h)}mm`, viewBox: `${fmt(a.x0)} ${fmt(-a.y1)} ${fmt(w)} ${fmt(h)}`,
              'tp:sketch-of': name, 'tp:saved': new Date().toISOString() });
-  const hidden = flatten(state.tree).filter((n) => n.hidden).map((n) => n.key);
+  const { hidden, shown } = hiddenAndShown(state.tree);
   add(add(svg, 'metadata', {}), 'tp:view', {
     title: `${name}, ${lookName(back)}`, kind: 'model view',
     origin: vector(back.clone().multiplyScalar(inkPlanePoint(back).dot(back))), normal: vector(back), xdir: vector(right),
     area: [a.x0, a.y0, a.x1, a.y1].map((v) => fmt(v)).join(' '), hidden: hidden.length ? hidden.join('; ') : null,
-    slices: describeSlices(),
+    shown: shown.length ? shown.join('; ') : null, slices: describeSlices(),
+    transparent: state.transparent ? 'true' : null,
   });
   const layer = (id, label) => add(svg, 'g', { id, 'inkscape:groupmode': 'layer', 'inkscape:label': label, transform: 'scale(1,-1)' });
   add(layer('tp-view', 'View'), 'image', {
@@ -700,6 +740,7 @@ function screenChanged() { feed.changed(); }
 for (const b of document.querySelectorAll('[data-look]')) b.addEventListener('click', () => frame(LOOKS[b.dataset.look]));
 ui.fit.addEventListener('click', () => frame(null));
 ui.edges.addEventListener('click', () => showEdges(!edges?.shown));
+ui.transparent.addEventListener('click', () => setTransparent(!state.transparent));
 buildSliceControls();
 INK_COLORS.forEach((_, i) => {
   const b = swatch(i, false); // the number keys look from the standard directions here
@@ -738,6 +779,7 @@ window.addEventListener('keydown', (e) => {
   if (look) frame(LOOKS[look]);
   else if (key === 'f') frame(null);
   else if (key === 'e') showEdges(!edges?.shown);
+  else if (key === 't') setTransparent(!state.transparent);
   else if (key === 'p') setDrawing(!state.drawing);
   else if (key === 'escape') setDrawing(false);
 });
@@ -754,4 +796,4 @@ tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten,
-  showEdges, slices, ink, pen, save, undo, setDrawing, viewArea };
+  showEdges, setTransparent, slices, ink, pen, save, undo, setDrawing, viewArea };

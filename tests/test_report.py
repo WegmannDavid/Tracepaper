@@ -5,7 +5,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from tracepaper.report import find_sketch, inspect
+from tracepaper.report import find_sketch, hidden_and_shown, inspect
 from tracepaper.sheet import INKSCAPE_NS, SVG_NS, TP_NS
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "bracket" / "section-A.svg"
@@ -51,6 +51,20 @@ class ReportTest(unittest.TestCase):
             for name in ("section-A-full.png", "section-A-closeup.png", "section-A-ink.png"):
                 self.assertTrue((out / name).stat().st_size > 1000, name)
             self.assertEqual(sorted(p.suffix for p in out.iterdir()), [".png"] * 3)  # no leftovers
+
+    def test_nodes_shown_inside_hidden_ones(self):
+        # As the viewer saves them: a hidden layer (visibility, not display), one of its
+        # sublayers shown again, the other hidden with it.
+        g = lambda parent, label, **attrs: ET.SubElement(  # noqa: E731
+            parent, f"{{{SVG_NS}}}g", {f"{{{INKSCAPE_NS}}}label": label, **attrs})
+        root = ET.Element(f"{{{SVG_NS}}}svg")
+        dims = g(root, "Dimensions", visibility="hidden")
+        g(g(dims, "Overall", visibility="visible"), "Width")
+        g(dims, "Details")
+        g(root, "Notes", style="display:none")
+        g(g(root, "Outline"), "Bolt", style="visibility: hidden")
+        self.assertEqual(hidden_and_shown(root), (["Dimensions", "Notes", "Outline / Bolt"],
+                                                  ["Dimensions / Overall"]))
 
     def test_sketch_of_a_sheet_in_a_folder(self):
         path = make_sketch(self.dir)

@@ -23,13 +23,15 @@ export function pathOf(g, root) {
   return names.join(' / ');
 }
 
-// The tree of named groups under parent; unnamed groups in between don't count.
+// The tree of named groups under parent; unnamed groups in between don't count. A node's
+// hidden is whether its own drawing is (tree.js).
 export function buildTree(parent, above = '') {
   const nodes = [];
   for (const child of parent.children) {
     if (isNode(child)) {
       const key = above ? `${above} / ${labelOf(child)}` : labelOf(child);
-      nodes.push({ key, name: labelOf(child), hidden: isHidden(child), el: child, children: buildTree(child, key) });
+      nodes.push({ key, name: labelOf(child), hidden: isHidden(child), own: drawsItself(child), el: child,
+                   children: buildTree(child, key) });
     } else if (!NOT_DRAWN.has(child.localName)) {
       nodes.push(...buildTree(child, above));
     }
@@ -37,14 +39,49 @@ export function buildTree(parent, above = '') {
   return nodes;
 }
 
-export const allNodes = (root) => flatten(buildTree(root)).map((n) => n.el);
-export const isHidden = (n) => n.getAttribute('display') === 'none' || n.style?.display === 'none';
+// Whether a group draws anything itself, outside the nodes inside it.
+const drawsItself = (g) => [...g.children].some((c) => !isNode(c) && !NOT_DRAWN.has(c.localName)
+  && (c.localName !== 'g' || drawsItself(c)));
 
+export const allNodes = (root) => flatten(buildTree(root)).map((n) => n.el);
+
+const displayNone = (n) => n.getAttribute('display') === 'none' || n.style?.display === 'none';
+
+// Whether an element of a sheet is hidden: by display="none" on it or around it, or by
+// SVG's visibility, which is inherited unless set again. The viewer hides nodes with the
+// latter, so that a node inside a hidden one can be shown (tree.js).
+export function isHidden(el) {
+  for (let n = el; n?.namespaceURI === SVG_NS; n = n.parentNode) if (displayNone(n)) return true;
+  for (let n = el; n?.namespaceURI === SVG_NS; n = n.parentNode) {
+    const v = n.getAttribute('visibility');
+    if (v === 'hidden' || v === 'collapse') return true;
+    if (v === 'visible') return false;
+  }
+  return false;
+}
+
+// Hide or show a node with everything inside it: the nodes inside follow it again.
 export function setHidden(g, hidden) {
-  if (hidden) { g.style.display = 'none'; return; }
-  g.style.removeProperty('display');
-  if (g.getAttribute('display') === 'none') g.removeAttribute('display');
-  if (!g.getAttribute('style')) g.removeAttribute('style');
+  for (const n of g.querySelectorAll('g')) if (isNode(n)) n.removeAttribute('visibility');
+  if (displayNone(g)) {
+    g.style.removeProperty('display');
+    if (g.getAttribute('display') === 'none') g.removeAttribute('display');
+    if (!g.getAttribute('style')) g.removeAttribute('style');
+  }
+  g.removeAttribute('visibility');
+  if (isHidden(g) !== hidden) g.setAttribute('visibility', hidden ? 'hidden' : 'visible');
+}
+
+// Nodes that start hidden (display="none", SPEC.md §2.4) hidden by visibility instead, which
+// the nodes inside them can override.
+export function hideByVisibility(root) {
+  for (const g of allNodes(root)) {
+    if (!displayNone(g)) continue;
+    g.style.removeProperty('display');
+    if (g.getAttribute('display') === 'none') g.removeAttribute('display');
+    if (!g.getAttribute('style')) g.removeAttribute('style');
+    g.setAttribute('visibility', 'hidden');
+  }
 }
 
 export function parseSvg(text) {

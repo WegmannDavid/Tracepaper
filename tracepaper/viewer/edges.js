@@ -105,7 +105,8 @@ export class Edges {
                                                       stencilBuffer: true });
     this.numbers = new THREE.ShaderMaterial({ ...numberShader, side: THREE.DoubleSide, clipping: true });
     this.material = new THREE.ShaderMaterial({
-      vertexShader: strip, fragmentShader: plain, depthWrite: false, clipping: true,
+      // Transparent, though drawn opaque: so drawn after see-through faces, which would cover them.
+      vertexShader: strip, fragmentShader: plain, depthWrite: false, clipping: true, transparent: true,
       uniforms: { resolution: { value: new THREE.Vector2(1, 1) }, width: { value: WIDTH },
                   color: { value: new THREE.Vector3(...COLOR.map((c) => c / 255)) } },
     });

@@ -64,8 +64,44 @@ def _layer_tree(parent: ET.Element, above: str = "") -> list:
     return out
 
 
-def _hidden(g: ET.Element) -> bool:
-    return "display:none" in (g.get("style") or "").replace(" ", "") or g.get("display") == "none"
+def _display_none(el: ET.Element) -> bool:
+    return "display:none" in (el.get("style") or "").replace(" ", "") or el.get("display") == "none"
+
+
+def _visibility(el: ET.Element) -> Optional[str]:
+    for item in (el.get("style") or "").split(";"):
+        name, _, value = item.partition(":")
+        if name.strip() == "visibility":
+            return value.strip()
+    return el.get("visibility")
+
+
+def hidden_and_shown(root: ET.Element) -> tuple:
+    """([path], [path]): the nodes whose own drawing is hidden while that of the node around
+    them isn't, and the nodes shown inside one whose own drawing is hidden. The viewer hides
+    nodes with SVG's visibility, which a node inside can set back (SPEC.md §3); a sheet hides
+    them with display="none" (§2.4)."""
+    hidden, shown = [], []
+
+    def walk(parent: ET.Element, above: str, node_hidden: bool, none: bool, visibility: str) -> None:
+        for el in parent:
+            if el.tag.rpartition("}")[2] in NOT_DRAWN:
+                continue
+            gone = none or _display_none(el)
+            seen = _visibility(el) if _visibility(el) in ("visible", "hidden", "collapse") else visibility
+            if _is_node(el):
+                path = f"{above} / {_label(el)}" if above else _label(el)
+                own = gone or seen != "visible"
+                if own and not node_hidden:
+                    hidden.append(path)
+                if not own and node_hidden:
+                    shown.append(path)
+                walk(el, path, own, gone, seen)
+            else:
+                walk(el, above, node_hidden, gone, seen)
+
+    walk(root, "", False, False, "visible")
+    return hidden, shown
 
 
 def _ink_layer(root: ET.Element) -> Optional[ET.Element]:
@@ -160,8 +196,10 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
     if view is not None:
         lines.append("  view: " + ", ".join(f"{k}={v}" for k, v in view.attrib.items()))
     if not model:  # a model's hidden parts are in the view's attributes
-        hidden = [path for path, g in _layer_tree(root) if _hidden(g)]
+        hidden, shown = hidden_and_shown(root)
         lines.append(f"  hidden: {', '.join(hidden) or 'nothing'}")
+        if shown:
+            lines.append(f"  shown inside hidden: {', '.join(shown)}")
 
     ink = strokes(root)
     lines.append(f"\nStrokes: {len(ink)} " + (

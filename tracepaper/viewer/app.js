@@ -8,7 +8,7 @@ import * as Pen from './pen.js';
 import { renderView } from './screen.js';
 import {
   SVG_NS, allNodes, buildTree, colourAt, ensureInkLayer, fontSizeOf as fontSizeIn, growViewBox, inkBounds,
-  inkLayerOf, isHidden, labelOf, parseSvg, pathOf, setHidden,
+  hideByVisibility, inkLayerOf, isHidden, labelOf, parseSvg, pathOf, setHidden,
 } from './sheetdoc.js';
 import { renderTree } from './tree.js';
 
@@ -52,12 +52,10 @@ const toast = toaster(ui.toast);
 
 // ---- Sheet document ---------------------------------------------------------
 
-function shown(el) {
-  for (let n = el; n && n !== ui.host; n = n.parentNode) if (n.nodeType === 1 && isHidden(n)) return false;
-  return true;
-}
+const shown = (el) => !isHidden(el);
 
 function mount(root) {
+  hideByVisibility(root); // so that a node inside a hidden one can be shown
   if (!root.getAttribute('width') || !root.getAttribute('height')) {
     const vb = root.viewBox.baseVal;
     if (vb?.width && vb?.height) {
@@ -160,19 +158,24 @@ function renderLayers() {
   if (!state.root) return;
   renderTree(ui.layers, buildTree(state.root), {
     expanded: state.expanded, topFirst: true,
-    onToggle: (node, hidden) => setLayerVisible(node.key, !hidden),
+    onChange: (changes) => {
+      for (const [node, hidden] of changes) setLayerVisible(node.key, !hidden, false);
+      renderLayers();
+    },
     mark: (node) => (node.el === state.ink ? 'tpv-ink' : ''),
   });
 }
 
-// key is a node's path in the tree (pathOf); a top-level layer's path is its name.
-function setLayerVisible(key, visible) {
+// Show or hide a node with everything inside it. key is its path in the tree (pathOf); a
+// top-level layer's path is its name.
+function setLayerVisible(key, visible, render = true) {
   const g = state.root && allNodes(state.root).find((n) => pathOf(n, state.root) === key);
   if (!g) return;
   setHidden(g, !visible);
+  for (const k of [...state.layerVis.keys()]) if (k.startsWith(`${key} / `)) state.layerVis.delete(k); // they follow it
   state.layerVis.set(key, visible);
-  if (!visible && hover && g.contains(hover)) setHover(null);
-  renderLayers();
+  if (hover && !shown(hover)) setHover(null);
+  if (render) renderLayers();
 }
 
 const renderViews = () => renderViewsMenu(ui.sheet, state.views, state.name);
