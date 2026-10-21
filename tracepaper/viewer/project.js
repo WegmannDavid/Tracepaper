@@ -1,10 +1,10 @@
-// The project page: the views folder's tree, where each view opens in a window of its own.
+// The project page: the build folder's tree of views, where each opens in a window of its own.
 // Folders fold with a click, and this browser remembers which are folded.
 import { $, listViews, viewTree, viewUrl } from './page.js';
 
 let key = '';
 let dir = null;
-let folded = new Set(); // paths of the folders folded, for this views folder
+let folded = new Set(); // paths of the folders folded, for this build folder
 
 const storageKey = () => `tracepaper.folded:${dir}`;
 

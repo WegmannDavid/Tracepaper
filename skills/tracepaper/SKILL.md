@@ -5,13 +5,13 @@ description: Show CAD geometry to the user in the Tracepaper viewer, as 2D sheet
 
 # Tracepaper
 
-Tracepaper is a visual aid between the user and you. The project's build writes **views** of the model into a folder of their own, the **views folder** (for example `build/views/`):
+Tracepaper is a visual aid between the user and you. The project's build writes **views** of the model into its **build folder** (for example `build/`), among its other output:
 
 - **Sheets** (`.svg`): 2D drawings of the current geometry and the constraints worth seeing. The user sketches roughly what they want changed and presses Save. They then tell you what they drew, and you make the change in the real CAD model.
 - **Models** (`.glb`): 3D views of the result, so the user can look at what the build produced without a debugger. They can slice them, and sketch over the view the same way, which saves `<model>.glb.sketch.svg`.
 - **Slicer projects** (`.3mf`): what goes to the 3D printer, as OrcaSlicer or Bambu Studio saves it. The viewer shows the printer's plate and where the pieces sit on it, so the user can check the layout. They open the same file in the slicer to print.
 
-Tracepaper never holds the model. It's a lens on whatever pipeline the project uses, for example build123d, CadQuery, FreeCAD, DXF or plain code. The user opens the views folder in the viewer, which shows it as a tree of subfolders and views; each view opens in its own browser window and updates by itself when the build rewrites its file.
+Tracepaper never holds the model. It's a lens on whatever pipeline the project uses, for example build123d, CadQuery, FreeCAD, DXF or plain code. The user opens the build folder in the viewer, which shows it as a tree of the views and the subfolders holding them; each view opens in its own browser window and updates by itself when the build rewrites its file.
 
 ## Before anything else: read the spec
 
@@ -24,7 +24,7 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
 
 ## Tools
 
-- **`tracepaper view <views folder, or one view>`** starts the viewer, a local web page. Given the views folder, it opens the project page, which shows the folder's tree.
+- **`tracepaper view build`** (the build folder, or one view) starts the viewer, a local web page. Given a folder, it opens the project page, which shows the folder's tree of views.
   - Run it in the background and give the user the URL it prints.
   - If a viewer already runs for the same directory (`pgrep -af "tracepaper view"`), reuse it.
   - The user connects their reMarkable 2 from a sheet's toolbar when they want to draw with it, and disconnects it there or on the tablet. A viewer doesn't hold the tablet otherwise, and connecting in one takes it from any other, so you never need to stop a viewer for the tablet. While connected, the tablet's e-ink screen shows the sheet the pen draws in, in greys.
@@ -35,13 +35,14 @@ The repository (the folder `SPEC.md` links into) also has worked examples:
 - **`tracepaper.model`** writes models: `export(assembly, path, hidden=[...])`, see below.
 - **`rsvg-convert -b white -w 2000 sheet.svg -o sheet.png`** renders a sheet so you can check it before showing it.
 
-## The views folder
+## The build folder
 
-The user sees the views folder as a tree, so its layout is part of what you show them.
+The views go into the project's build folder itself, such as `build/`, next to the build's other output (STEP and STL files, caches), and the viewer shows that folder: `tracepaper view build`. If the project has no build folder yet, make one. The user sees it as a tree, so its layout is part of what you show them.
 
-- Put every view in one folder of its own, such as `build/views/`, not among the sources or other build output (STEP, STL, caches). Every `.svg`, `.glb` and `.3mf` file in it shows up as a view, so put nothing else there.
-- Group the views in subfolders by what they're for, for example the whole assembly and its sections in `window/`, and test pieces in `tests/`. A handful of views can stay at the top. When a flat folder has grown past about ten views, propose subfolders to the user.
-- Never empty the folder on a rebuild (`rm -rf`, `shutil.rmtree`): the user's sketch files wait next to their views until you've handled them. Write each view over its old file, and delete only views the build no longer makes.
+- Only `.svg`, `.glb` and `.3mf` files show up, and only the folders holding them; everything else in the build folder is left out. So every file there with one of those endings must be a view: the build's other SVG, glTF or 3MF files, such as intermediate meshes, go somewhere else.
+- Write each view somewhere the viewer skips first, then rename it into place (`os.replace`), so the viewer never reads half a file: under a name ending in `.tmp`, or in a folder whose name starts with a dot, such as `build/.slicer`, which the viewer never looks into. `tracepaper.sheet` and `tracepaper.model` do this themselves.
+- Group the views in subfolders by what they're for, for example the whole assembly and its sections in `window/`, print plates in `print/`, and test pieces in `tests/`. A handful of views can stay at the top. When a flat folder has grown past about ten views, propose subfolders to the user.
+- Never empty the build folder on a rebuild (`rm -rf build`, `shutil.rmtree`, a `clean` target): the user's sketch files wait next to their views until you've handled them. Write each view over its old file, and delete only views the build no longer makes.
 - Keep a view's name and folder stable, since the user's open window and any sketch file are tied to it. Move or rename views only once their sketch files are handled, and tell the user, because their open windows still show the old file.
 
 ## Making sheets
@@ -64,7 +65,7 @@ The user sees the views folder as a tree, so its layout is part of what you show
 
 ## Making models (3D views)
 
-- At the end of the build, write the assembly the user wants to look at into the views folder with `tracepaper.model.export(assembly, "build/views/window/window.glb", hidden=[...])`. It writes a CadQuery assembly safely: to a temporary file first, then renamed, so the viewer never reads half a file.
+- At the end of the build, write the assembly the user wants to look at into the build folder with `tracepaper.model.export(assembly, "build/window/window.glb", hidden=[...])`. It writes a CadQuery assembly safely: to a temporary file first, then renamed, so the viewer never reads half a file.
 - `hidden` lists what starts hidden when the user opens the model, as paths in the tree (`"Steel / Z profile"`) or plain names (`"Glass"` hides every part called Glass). Set it when the user asks for a default, such as "glass hidden".
 - Write only what they'd look at, typically the coloured assembly, not every intermediate shape. Use separate files for separate things, for example the whole window and one corner joint.
 - Name the assembly's parts and group them into subassemblies, since that becomes the tree the user hides things with. The top assembly itself isn't shown, so its children are the top level, which is all the user sees until they unfold a node. Give the parts colours.
@@ -74,10 +75,10 @@ The user sees the views folder as a tree, so its layout is part of what you show
 
 When the user wants to print pieces, the build lays them out and writes the slicer project; the user checks it in the viewer, then opens it in their slicer and prints from there. Tracepaper never slices or prints, and you don't press print either.
 
-- Write the project with the slicer's command line into the views folder, for example `build/views/print/<name>.3mf`. Export it outside the views folder first and then move it in (`os.replace`), so the viewer never reads half a file.
+- Run the slicer's command line in a dot folder of the build folder, such as `build/.slicer`, which the viewer skips, and move the project it writes into place, for example as `build/print/<name>.3mf` (`os.replace`), so the viewer never reads half a file.
 - With OrcaSlicer: `orca-slicer --load-settings "machine.json;process.json" --load-filaments "filament.json" --arrange 0 --orient 0 --export-3mf <file> <pieces.stl …>`.
   - Its command line doesn't follow a preset's `inherits`, so merge each preset with its parents yourself.
-  - It leaves `result.json` and a log in its working directory: run it in a scratch folder, and check `result.json` for errors.
+  - It leaves `result.json` and a log in its working directory, the dot folder: check `result.json` for errors.
   - `--slice 0` also slices every plate into the file, which shows Orca's warnings in `result.json` and `Metadata/slice_info.config`.
 - The STL files' names become the pieces' names in the viewer's tree (without `.stl`), so name them after the pieces.
 - The viewer shows the pieces in their filament's colour, the part of the plate the printer keeps for itself in orange, and the build volume, hidden at first: check tall pieces against `printable_height` yourself.
@@ -85,7 +86,7 @@ When the user wants to print pieces, the build lays them out and writes the slic
 
 ## When the user says they sketched something
 
-1. Run `tracepaper inspect <views folder>` and look at all three images. It takes the newest sketch file anywhere under the folder. Its list of what was hidden tells you what the user wasn't looking at.
+1. Run `tracepaper inspect build` and look at all three images. It takes the newest sketch file anywhere under the folder. Its list of what was hidden tells you what the user wasn't looking at.
 2. Work out what they want:
    - Strokes are rough: they give shape and position, not exact sizes.
    - Handwriting next to a sketch, like "2", "R5" or "45°", is a value.

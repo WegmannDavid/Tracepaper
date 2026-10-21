@@ -20,7 +20,7 @@ export const listViews = async () => (await fetchOk('/api/views')).json();
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }); // "part 2" before "part 10"
 
 // The views as the tree of folders they're in. A folder is {name, path, folders, views},
-// where path is its names joined with "/" ("" for the views folder itself), and each
+// where path is its names joined with "/" ("" for the build folder itself), and each
 // view gets file, its file name. Folders and views are each in order of their names.
 export function viewTree(views) {
   const folder = (name, path) => ({ name, path, folders: new Map(), views: [] });
@@ -42,7 +42,7 @@ export function viewTree(views) {
   return sorted(root);
 }
 
-// The menu of views in a page's toolbar, with current chosen: the views folder's own
+// The menu of views in a page's toolbar, with current chosen: the build folder's own
 // views, then a group for each folder. It is only rebuilt when the views change, so that
 // it doesn't close while the person has it open.
 export function renderViewsMenu(select, views, current) {

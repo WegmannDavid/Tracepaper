@@ -12,8 +12,8 @@ def main(argv=None) -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     view = commands.add_parser("view", help="open a project's views (sheets and 3D models) in the viewer")
     view.add_argument("path", nargs="?", default=".",
-                      help="the views folder (.svg sheets, .glb models, .3mf slicer projects, in subfolders too), "
-                           "or one view to open directly")
+                      help="the build folder, whose .svg sheets, .glb models and .3mf slicer projects it shows "
+                           "(in subfolders too), or one view to open directly")
     view.add_argument("--port", type=int, default=7310, help="port to serve on (default 7310, or a free one)")
     view.add_argument("--no-browser", action="store_true", help="don't open a browser")
     view.add_argument("--tablet-host", default="remarkable", metavar="HOST",
