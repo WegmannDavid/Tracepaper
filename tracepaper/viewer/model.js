@@ -87,7 +87,7 @@ const ready = new Promise((resolve) => { resolveReady = resolve; });
 
 function render() {
   if (renderer) {
-    edges.pass(scene, state.half * 2);
+    if (slices.on) edges.pass(scene); // for the outline of the cut
     renderer.render(scene, camera);
     slices.outline(renderer, edges);
   }

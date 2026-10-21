@@ -459,7 +459,8 @@ class ViewerInFirefox(unittest.TestCase):
             const names = [];
             t.state.model.traverse((o) => {
               if (o.isMesh && o.visible && o.layers.isEnabled(0)) meshes++;
-              if (o.isMesh && o.layers.isEnabled(2)) { edges++; faces += new Set(o.geometry.attributes.face.array).size; }
+              if (o.isMesh && o.layers.isEnabled(2)) edges++;
+              if (o.isMesh && o.geometry.attributes.face) faces += new Set(o.geometry.attributes.face.array).size;
               if (o.name) names.push(o.name);
             });
             const dir = t.camera.position.clone().sub(t.controls.target).normalize();
@@ -467,7 +468,7 @@ class ViewerInFirefox(unittest.TestCase):
         first = self.m.run(look + "done({ meshes, edges, faces, names, dir: dir.toArray(), loads: t.state.loads });")
         # The faces are drawn merged, one mesh per part and colour, each part with its edges.
         self.assertEqual((first["meshes"], first["edges"]), (2, 2))  # the body and the screw
-        self.assertEqual(first["faces"], 23)  # every face in the file outlined
+        self.assertEqual(first["faces"], 23)  # every face in the file, numbered for the outline of a cut
         self.assertTrue({"bracket", "body", "screw"} <= set(first["names"]))
         for got in first["dir"]:  # isometric: CAD (1, -1, 1) is (1, 1, 1) in the y-up scene
             self.assertAlmostEqual(got, 3 ** -0.5, places=6)
@@ -568,9 +569,9 @@ class ViewerInFirefox(unittest.TestCase):
             done([status.hidden ? null : status.textContent, button.hidden ? null : button.textContent]);
         """)
 
-    def test_edges_under_a_surface_stay_hidden_at_any_zoom(self):
-        # Edges are tested against the face in front, not pushed-back faces: zoomed out,
-        # a push of a pixel's depth would be millimetres, and the part's edges would show.
+    def test_edges_under_a_surface_stay_hidden(self):
+        # Edges are tested against depth, with the faces pushed back a fraction of a pixel's
+        # depth. Zoomed far out, that push grows past the 0.5 mm, and the part's edges show.
         self.open_viewer("veneer.glb")
         got = self.m.run("""
             const t = window.tracepaper3d, THREE = t.THREE, canvas = document.getElementById('tpv-canvas');
@@ -610,7 +611,7 @@ class ViewerInFirefox(unittest.TestCase):
               };
               img.src = url;
             };
-            next([1, 0.2, 0.08]);
+            next([1, 0.2]);
         """)
         for r in got:
             self.assertGreater(r["size"], 8, r)  # the part covers some pixels

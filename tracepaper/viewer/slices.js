@@ -7,10 +7,10 @@
 // a part and a plane, the part's remaining faces are counted along each pixel's ray, back
 // faces up and front faces down; where the count isn't zero, the ray enters the solid at
 // the plane, so the plane is drawn there. Caps also go into the edges' numbering pass
-// (edges.js), each with a number of its own, apart from the faces' ones: edges behind a cap
-// stay hidden, and the outline of the cut is drawn where a cap meets anything else
-// (outline), as in a section view. Edges can't draw it: there the faces lie flat along
-// the line of sight, and theirs would come and go as the view moves.
+// (edges.js), each with a number of its own, apart from the faces' ones, and the outline
+// of the cut is drawn where a cap meets anything else (outline), as in a section view.
+// Edges can't draw it: there the faces lie flat along the line of sight, and theirs would
+// come and go as the view moves.
 import * as THREE from 'three';
 import { NUMBERS } from './edges.js';
 
