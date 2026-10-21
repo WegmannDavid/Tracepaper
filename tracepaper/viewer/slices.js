@@ -6,7 +6,9 @@
 // The cut parts are closed with caps in their colours, drawn with the stencil buffer: for
 // a part and a plane, the part's remaining faces are counted along each pixel's ray, back
 // faces up and front faces down; where the count isn't zero, the ray enters the solid at
-// the plane, so the plane is drawn there. Caps also go into the edges' numbering pass
+// the plane, so the plane is drawn there. That needs closed meshes whose triangles all
+// face out. A part that is transparent all through isn't taken for a solid and gets no
+// caps, like a slicer project's build volume. Caps also go into the edges' numbering pass
 // (edges.js), each with a number of its own, apart from the faces' ones, and the outline
 // of the cut is drawn where a cap meets anything else (outline), as in a section view.
 // Edges can't draw it: there the faces lie flat along the line of sight, and theirs would
@@ -98,6 +100,7 @@ export class Slices {
     this.clipped = [...new Set([...parts.flatMap((p) => p.meshes.map((m) => m.material)), ...materials])];
     const size = box.getSize(new THREE.Vector3()).length() * 1.1, centre = box.getCenter(new THREE.Vector3());
     parts.forEach(({ part, meshes }, k) => {
+      if (meshes.every((m) => m.material.transparent)) return; // not a solid, like a slicer's build volume: no caps
       this.planes.forEach((p, i) => {
         const order = CAPS + 2 * (AXES.length * k + i);
         for (const mesh of meshes) {

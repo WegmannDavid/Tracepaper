@@ -234,9 +234,10 @@ def _place(mesh: ET.Element, scale: float, t: tuple) -> tuple:
 
 
 def _box(x0: float, y0: float, z0: float, x1: float, y1: float, z1: float) -> tuple:
-    """(positions, indices) of a box."""
+    """(positions, indices) of a box, its triangles facing out."""
     corners = [(x, y, z) for z in (z0, z1) for y in (y0, y1) for x in (x0, x1)]  # corner 4z + 2y + x
-    sides = [(0, 1, 3, 2), (4, 5, 7, 6), (0, 1, 5, 4), (2, 3, 7, 6), (0, 2, 6, 4), (1, 3, 7, 5)]
+    # Each side counter-clockwise seen from outside: slice caps count front and back faces.
+    sides = [(0, 2, 3, 1), (4, 5, 7, 6), (0, 1, 5, 4), (2, 6, 7, 3), (0, 4, 6, 2), (1, 3, 7, 5)]
     return (array("f", [v for corner in corners for v in corner]),
             array("I", [k for p, q, r, s in sides for k in (p, q, r, p, r, s)]))
 

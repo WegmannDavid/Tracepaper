@@ -416,6 +416,36 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertTrue(got["right"]["flat"])  # shaded flat, as a slicer shows a mesh
         # Where the slicer put it, 30 mm wide around (180, 120, 15); the scene is y up, so CAD (x, y, z) is (x, z, -y).
         self.assertEqual((got["right"]["min"], got["right"]["max"]), ([165, 0, -135], [195, 30, -105]))
+        # Cut through the middle: the plate's cap is a thin strip, and the left piece, behind
+        # the cut, still shows in its own colour, also with the build volume shown, which is
+        # transparent and no solid, so it isn't capped.
+        pixel = """
+            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+            t.frame(t.LOOKS[$look]);  // renders
+            const p = t.toScene($point).project(t.camera);
+            const x = Math.round((p.x + 1) / 2 * canvas.width), y = Math.round((1 - p.y) / 2 * canvas.height);
+            const img = new Image();
+            img.onload = () => {
+              const c = Object.assign(document.createElement('canvas'), { width: img.width, height: img.height });
+              c.getContext('2d').drawImage(img, 0, 0);
+              done([...c.getContext('2d').getImageData(x, y, 1, 1).data.slice(0, 3)]);
+            };
+            img.src = canvas.toDataURL();
+        """
+        cut = self.m.run("""
+            const row = document.querySelector('.tpv-slice[data-axis="x"]');
+            row.querySelector('input[type="checkbox"]').click();
+            const at = row.querySelector('input[type="number"]');
+            at.value = '128';
+            at.dispatchEvent(new Event('change'));
+        """ + pixel.replace("$look", "'iso'").replace("$point", "[60, 60, 20]"))  # the left piece's top
+        volume = self.m.run("""
+            [...document.querySelectorAll('#tpv-layers .tpv-layer')].find((r) => r.textContent.includes('Build volume'))
+              .querySelector('.tpv-eye').click();
+        """ + pixel.replace("$look", "'right'").replace("$point", "[70, 60, 10]"))  # its side, behind the cut
+        for colour in (cut, volume):
+            r, g, b = colour
+            self.assertGreater(g, max(r, b) + 60, colour)  # green, the first filament's
 
     def test_fit_frames_what_is_shown(self):
         self.open_viewer("single.glb")

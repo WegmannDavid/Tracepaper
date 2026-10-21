@@ -20,7 +20,8 @@ def cube(size: float) -> str:
     """A cube's mesh, size wide and centred on the origin."""
     h = size / 2
     corners = [(x, y, z) for z in (-h, h) for y in (-h, h) for x in (-h, h)]
-    sides = [(0, 1, 3, 2), (4, 5, 7, 6), (0, 1, 5, 4), (2, 3, 7, 6), (0, 2, 6, 4), (1, 3, 7, 5)]
+    # Each side counter-clockwise seen from outside: as a solid's are.
+    sides = [(0, 2, 3, 1), (4, 5, 7, 6), (0, 1, 5, 4), (2, 6, 7, 3), (0, 4, 6, 2), (1, 3, 7, 5)]
     tris = [t for a, b, c, d in sides for t in ((a, b, c), (a, c, d))]
     return ("<mesh><vertices>" + "".join(f'<vertex x="{x}" y="{y}" z="{z}"/>' for x, y, z in corners)
             + "</vertices><triangles>" + "".join(f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in tris)
@@ -111,6 +112,17 @@ class PlateTest(unittest.TestCase):
         self.assertEqual(len(P._faces(bent, P.array("I", [0, 1, 2, 0, 2, 3, 1, 4, 5, 1, 5, 2]))), 1)
         sharp = P.array("f", [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0, 20, 0, 10, 20, 10, 10])
         self.assertEqual(len(P._faces(sharp, P.array("I", [0, 1, 2, 0, 2, 3, 1, 4, 5, 1, 5, 2]))), 2)
+
+    def test_boxes_face_out(self):
+        positions, indices = P._box(1, 2, 3, 11, 22, 33)
+        point = lambda i: positions[3 * i: 3 * i + 3]  # noqa: E731
+        centre = (6, 12, 18)
+        for t in range(0, len(indices), 3):
+            a, b, c = (point(i) for i in indices[t: t + 3])
+            u, v = [b[k] - a[k] for k in range(3)], [c[k] - a[k] for k in range(3)]
+            normal = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+            out = [(a[k] + b[k] + c[k]) / 3 - centre[k] for k in range(3)]
+            self.assertGreater(sum(n * o for n, o in zip(normal, out)), 0, (a, b, c))
 
     def test_several_plates_side_by_side(self):
         gltf = self.convert(write_3mf(self.dir / "p.3mf", [("a", (50, 50, 5), 10, 1)], plates=3))
