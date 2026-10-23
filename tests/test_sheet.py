@@ -28,6 +28,16 @@ RADIAL = [
     dict(kind="diameter", center=[0, 0], r=12, angle=135, offset=4, label="⌀24"),
     dict(kind="diameter", center=[0, 0], r=12, angle=270, offset=-30, label="⌀24"),
 ]
+ANGULAR = [
+    dict(center=[0, 0], p1=[30, 0], p2=[20, 20], offset=15, textAt=0.5, label="45°"),  # inside the legs
+    dict(center=[0, 0], p1=[10, 0], p2=[0, 10], offset=25, textAt=0.3, label="90°"),  # beyond both points
+    dict(center=[0, 0], p1=[10, 0], p2=[0, 10], offset=10.5, textAt=0.5, label="90°"),  # too close for extensions
+    dict(center=[5, 5], p1=[0, 10], p2=[10, 10], offset=6, textAt=0.5, label="270°"),  # the long way round
+    dict(center=[0, 0], p1=[20, 0], p2=[20, 1], offset=10, textAt=0.5, label="2.9°"),  # arrows outside
+    dict(center=[0, 0], p1=[-10, 10], p2=[-10, -10], offset=8, textAt=0.5, label="90°"),  # label upright at 180°
+    dict(center=[3, -2], p1=[13, -2], p2=[3, 8], offset=12, textAt=1.4, label="90°"),  # label beyond a leg
+    dict(center=[0, 0], p1=[10, 0], p2=[10, 10], offset=1, textAt=-0.3, label="45°"),  # arrowheads longer than the arc
+]
 SYMBOL = [
     dict(anchor=[0, 0], offset=[-4, -4], label="⊥"),
     dict(anchor=[5, 30], offset=[3, 0], label="="),
@@ -36,14 +46,16 @@ FMT = [0, -0.0, 60, 2.625, -15.125, 1 / 3, 1e-7, -1e-7, 123456.78915, 0.00005, -
 
 
 def python_geometry(ann: dict, fs: float) -> dict:
-    if "p1" in ann:
+    if ann["kind"] == "linear":
         g = S.linear_geometry(ann["p1"], ann["p2"], ann["offset"], ann["label"], fs, ann["dir"], ann["textAt"])
-    elif "anchor" in ann:
+    elif ann["kind"] == "angular":
+        g = S.angular_geometry(ann["center"], ann["p1"], ann["p2"], ann["offset"], ann["label"], fs, ann["textAt"])
+    elif ann["kind"] == "symbol":
         g = S.symbol_geometry(ann["anchor"], ann["offset"], ann["label"], fs)
     else:
         g = S.radial_geometry(ann["center"], ann["r"], ann["angle"], ann["offset"], ann["label"], fs,
                               ann["kind"] == "diameter")
-    return {"lines": g["lines"], "arrows": g["arrows"], "dots": g["dots"], "texts": g["texts"]}
+    return {"lines": g["lines"], "arcs": g["arcs"], "arrows": g["arrows"], "dots": g["dots"], "texts": g["texts"]}
 
 
 def flatten(x):
@@ -59,7 +71,8 @@ class GeometryMatchesViewer(unittest.TestCase):
     def setUpClass(cls):
         if not shutil.which("gjs"):
             raise unittest.SkipTest("gjs not installed")
-        cases = [dict(a, kind="linear") for a in LINEAR] + RADIAL + [dict(a, kind="symbol") for a in SYMBOL]
+        cases = ([dict(a, kind="linear") for a in LINEAR] + RADIAL + [dict(a, kind="angular") for a in ANGULAR]
+                 + [dict(a, kind="symbol") for a in SYMBOL])
         cls.cases = cases
         script = f"""
 import * as A from '{VIEWER_JS.as_uri()}';
@@ -67,10 +80,14 @@ const cases = {json.dumps(cases)};
 print(JSON.stringify({{
   geometry: cases.map((c) => {{
     const g = A.geometry(c, 3.5);
-    return {{ lines: g.lines, arrows: g.arrows.map((a) => [a.tip, a.dir]), dots: g.dots,
+    return {{ lines: g.lines, arcs: g.arcs.map((a) => [a.center, a.r, a.from, a.to]),
+             arrows: g.arrows.map((a) => [a.tip, a.dir]), dots: g.dots,
              texts: g.texts.map((t) => [t.at, t.angle, t.label]) }};
   }}),
   fmt: {json.dumps(FMT)}.map((v) => A.fmt(v)),
+  // An angle round the back, from 174° to 186°: its label, at 180°, dragged 1 mm down.
+  dragged: A.dragged({{ kind: 'angular', center: [0, 0], p1: [-10, 1], p2: [-10, -1], offset: 10, textAt: 0.5,
+                        label: '11.4°' }}, [0, -1], 3.5),
 }}));
 """
         with tempfile.TemporaryDirectory() as tmp:
@@ -84,7 +101,7 @@ print(JSON.stringify({{
         for case, js in zip(self.cases, self.js["geometry"]):
             with self.subTest(case=case):
                 py = python_geometry(case, 3.5)
-                for key in ("lines", "arrows", "dots", "texts"):
+                for key in ("lines", "arcs", "arrows", "dots", "texts"):
                     a, b = flatten(py[key]), flatten(js[key])
                     self.assertEqual(len(a), len(b), key)
                     for x, y in zip(a, b):
@@ -92,6 +109,11 @@ print(JSON.stringify({{
                             self.assertEqual(x, y)
                         else:
                             self.assertTrue(math.isclose(x, y, abs_tol=1e-9), f"{key}: {x} != {y}")
+
+    def test_dragging_an_angle(self):
+        # The label stays on the angle's arc, which runs on past -180° and so goes on as well.
+        got = self.js["dragged"]
+        self.assertEqual((got["offset"], got["textAt"]), (round(math.hypot(10, 1), 2), 1))
 
     def test_fmt(self):
         self.assertEqual([S.fmt(v) for v in FMT], self.js["fmt"])
@@ -124,6 +146,28 @@ class SheetOutput(unittest.TestCase):
         self.assertEqual(dim.get(f"{{{S.TP_NS}}}offset"), "-8")
         self.assertEqual(dim.find("svg:text", ns).text, "40")
         self.assertEqual(layers[0].find("svg:path", ns).get(f"{{{S.TP_NS}}}source"), "tag:plate")
+
+    def test_angular(self):
+        sheet = S.Sheet("Wedge", margin=0)
+        dims = sheet.layer("Dimensions")
+        tp = lambda g, n: g.get(f"{{{S.TP_NS}}}{n}")  # noqa: E731
+        right = dims.angular("d-right", (0, 0), (30, 0), (0, 30))
+        self.assertEqual([tp(right, n) for n in ("dim", "type", "center", "p1", "p2", "offset", "text-at")],
+                         ["angular", "angle", "0 0", "30 0", "0 30", "30", None])  # the arc through p1
+        self.assertEqual((tp(right, "label"), tp(right, "value")), ("90°", "90"))
+        self.assertEqual(right.find(f"{{{S.SVG_NS}}}path").get("d"), "M30 0 A30 30 0 0 1 0 30")
+        self.assertEqual(right.find(f"{{{S.SVG_NS}}}text").text, "90°")
+        odd = dims.angular("d-odd", (0, 0), (10, 0), (10, 7), offset=5, text_at=0.8)
+        self.assertEqual([tp(odd, n) for n in ("label", "value", "offset", "text-at")], ["35°", "34.992", "5", "0.8"])
+        # Counter-clockwise from p1 to p2, so swapping them measures the rest of the turn,
+        # and the sheet grows to hold the arc where it bulges out past its ends.
+        sheet = S.Sheet("Reflex", margin=0)
+        reflex = sheet.layer("Dimensions").angular("d-reflex", (0, 0), (0, 10), (10, 0), offset=10, text_at=0.05)
+        self.assertEqual(tp(reflex, "label"), "270°")
+        self.assertEqual(reflex.find(f"{{{S.SVG_NS}}}path").get("d"), "M0 10 A10 10 0 1 1 10 0")
+        x0, y0, _, _ = sheet._box()
+        self.assertLessEqual(x0, -10)
+        self.assertLessEqual(y0, -10)
 
     def test_sublayers(self):
         sheet = S.Sheet("Tree", margin=5)

@@ -147,6 +147,17 @@ Let u be the unit measuring direction: (1, 0) for `x`, (0, 1) for `y`, p1→p2 f
 | `tp:angle` | Where the leader meets the circle, in degrees counter-clockwise from +x. Default 45. |
 | `tp:offset` | Distance from that point to the label end of the leader, measured outward from the centre. Negative values run back through the centre, which suits fillets. Default 0. |
 
+**Angular dimension** (`tp:dim="angular"`):
+
+| Attribute | |
+|---|---|
+| `tp:center` | The vertex, `"x y"`. |
+| `tp:p1`, `tp:p2` | The measured points, `"x y"`, one on each leg. The angle runs counter-clockwise from the leg through p1 to the leg through p2, so swapping them measures the rest of the turn. |
+| `tp:offset` | Radius of the dimension arc, round the vertex. Default: the distance to p1. |
+| `tp:text-at` | Label position along the arc: 0 at the p1 leg, 1 at the p2 leg. Default 0.5. Values outside 0–1 put the label beyond the legs. |
+
+The legs are taken to run from the vertex to p1 and p2, as the edges of a corner do. Where a leg doesn't reach the vertex, draw its continuation there as a plain thin line on the same layer.
+
 **Constraint symbol** (any annotation group with `tp:anchor`):
 
 | Attribute | |
@@ -155,7 +166,7 @@ Let u be the unit measuring direction: (1, 0) for `x`, (0, 1) for `y`, p1→p2 f
 | `tp:offset` | Label position relative to the anchor, `"dx dy"`. Default `"0 0"`. A leader is drawn when the label is far from the anchor. |
 | `tp:label` | The symbol, e.g. `⊥`. |
 
-Other annotations (angular dimensions, balloons, notes) MAY be drawn as plain graphics. The viewer shows them but doesn't let the person move them.
+Other annotations (balloons, notes) MAY be drawn as plain graphics. The viewer shows them but doesn't let the person move them.
 
 **Default vocabulary.** `tp:type` is free-form, so an AI can use any type, including a sentence. These defaults keep sheets consistent:
 
@@ -188,6 +199,10 @@ Sizes are multiples of the font size fs (3.5 mm by default).
 | Extension lines | start 0.3 fs from the measured point and end 0.5 fs past the dimension line |
 | Linear arrows | inside the extension lines if the dimension line is at least 2 fs long; otherwise outside and pointing in, with 0.6 fs of line beyond each |
 | Linear label | centred at `text-at`, baseline 0.25 fs above the dimension line, rotated with it and kept readable (−90° < angle ≤ 90°) |
+| Angular arc | round the vertex at radius `offset`, from leg to leg; extended to the label when it is beyond a leg |
+| Angular extension lines | where the arc is further from the vertex than p1 or p2 by more than 0.3 fs: along the leg, from 0.3 fs past the point to 0.5 fs past the arc |
+| Angular arrows | at the arc's ends, inside if the arc is at least 2 fs long, otherwise outside and pointing in, as linear arrows; each one's base on the arc |
+| Angular label | centred at `text-at` along the arc, baseline 0.25 fs from it, along its tangent and kept readable as a linear label |
 | Radial label | on a horizontal shoulder at the end of the leader, on the side away from the circle |
 | Diameter arrows | inside the circle pointing out, or outside pointing in when the diameter is under 2 fs |
 | Symbol | label centred on anchor + offset; a leader from the anchor, with a dot, when the offset is longer than 1.2 fs |

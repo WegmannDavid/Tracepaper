@@ -53,6 +53,13 @@ export function read(g) {
     const dir = ['x', 'y'].includes(get('dir')) ? get('dir') : 'aligned';
     return { kind: 'linear', p1, p2, dir, offset: num(get('offset'), 0), textAt: num(get('text-at'), 0.5), label };
   }
+  if (dim === 'angular') {
+    const center = point(get('center')), p1 = point(get('p1')), p2 = point(get('p2'));
+    if (!center || !p1 || !p2 || !(len(sub(p1, center)) > 0) || !(len(sub(p2, center)) > 0)) return null;
+    const offset = num(get('offset'), len(sub(p1, center)));
+    if (!(offset > 0)) return null;
+    return { kind: 'angular', center, p1, p2, offset, textAt: num(get('text-at'), 0.5), label };
+  }
   if (dim === 'radius' || dim === 'diameter') {
     const center = point(get('center')), r = num(get('r'), NaN);
     if (!center || !(r > 0)) return null;
@@ -64,7 +71,15 @@ export function read(g) {
 }
 
 function empty() {
-  return { lines: [], arrows: [], dots: [], texts: [], box: null, frame: null };
+  return { lines: [], arcs: [], arrows: [], dots: [], texts: [], box: null, frame: null };
+}
+
+// The angle of text along v in degrees, turned half round if need be to read from the left.
+function readable(v) {
+  const ang = Math.atan2(v[1], v[0]) / DEG;
+  if (ang > 90 + EPS) return ang - 180;
+  if (ang <= -90 + EPS) return ang + 180;
+  return ang;
 }
 
 function linear(a0, fs) {
@@ -95,14 +110,63 @@ function linear(a0, fs) {
   const tw = textWidth(label, fs), sT = textAt * L, hw = tw / 2 + K.textGap * fs;
   if (sT < 0 || sT > L) { s0 = Math.min(s0, sT - hw); s1 = Math.max(s1, sT + hw); }
   g.lines.push([add(a, mul(v, s0)), add(a, mul(v, s1))]);
-  let ang = Math.atan2(v[1], v[0]) / DEG;
-  if (ang > 90 + EPS) ang -= 180;
-  else if (ang <= -90 + EPS) ang += 180;
+  const ang = readable(v);
   const up = [-Math.sin(ang * DEG), Math.cos(ang * DEG)];
   const base = add(add(a, mul(v, sT)), mul(up, K.textGap * fs));
   g.texts.push({ at: base, angle: ang, label });
   g.box = { center: add(base, mul(up, K.vCenter * fs)), angle: ang, hw: tw / 2, hh: 0.5 * fs };
   g.frame = { v, n, L };
+  return g;
+}
+
+// Where the legs of an angle at c through p1 and p2 point: the first one's direction, and how
+// far counter-clockwise the second one is from it, both in radians.
+function legs(c, p1, p2) {
+  const t1 = Math.atan2(p1[1] - c[1], p1[0] - c[0]);
+  let sweep = Math.atan2(p2[1] - c[1], p2[0] - c[0]) - t1;
+  if (sweep < 0) sweep += 2 * Math.PI;
+  return [t1, sweep];
+}
+
+// Like linear(), but along an arc of radius offset round the vertex, s being the length along it.
+function angular(a0, fs) {
+  const { center: c, p1, p2, offset: r, textAt, label } = a0;
+  const [t1, sweep] = legs(c, p1, p2);
+  const on = (t) => add(c, [r * Math.cos(t), r * Math.sin(t)]);
+  const g = empty();
+  // The legs run from the vertex to p1 and p2; where the arc is further out, a leg goes on
+  // to it as an extension line.
+  for (const [p, t] of [[p1, t1], [p2, t1 + sweep]]) {
+    const d = len(sub(p, c));
+    if (r > d + K.extGap * fs) {
+      const k = [Math.cos(t), Math.sin(t)];
+      g.lines.push([add(c, mul(k, d + K.extGap * fs)), add(c, mul(k, r + K.extOver * fs))]);
+    }
+  }
+  const L = r * sweep;
+  // An arrowhead from its tip at angle t, its base on the arc at angle t + side * head.
+  const head = 2 * Math.asin(Math.min(1, K.arrowLen * fs / (2 * r)));
+  const arrow = (t, side) => {
+    const tip = on(t);
+    return { tip, dir: unit(sub(tip, on(t + side * head))) ?? [1, 0] };
+  };
+  let s0 = 0, s1 = L;
+  if (L >= K.insideMin * fs) {
+    g.arrows.push(arrow(t1, 1), arrow(t1 + sweep, -1));
+  } else {
+    const t = (K.arrowLen + K.tail) * fs;
+    s0 = -t; s1 = L + t;
+    g.arrows.push(arrow(t1, -1), arrow(t1 + sweep, 1));
+  }
+  const tw = textWidth(label, fs), sT = textAt * L, hw = tw / 2 + K.textGap * fs;
+  if (sT < 0 || sT > L) { s0 = Math.min(s0, sT - hw); s1 = Math.max(s1, sT + hw); }
+  g.arcs.push({ center: c, r, from: (t1 + s0 / r) / DEG, to: (t1 + s1 / r) / DEG });
+  const tT = t1 + sT / r;
+  const ang = readable([-Math.sin(tT), Math.cos(tT)]);
+  const up = [-Math.sin(ang * DEG), Math.cos(ang * DEG)];
+  const base = add(on(tT), mul(up, K.textGap * fs));
+  g.texts.push({ at: base, angle: ang, label });
+  g.box = { center: add(base, mul(up, K.vCenter * fs)), angle: ang, hw: tw / 2, hh: 0.5 * fs };
   return g;
 }
 
@@ -153,6 +217,7 @@ function symbol(a0, fs) {
 export function geometry(ann, fs) {
   if (ann.kind === 'linear') return linear(ann, fs);
   if (ann.kind === 'symbol') return symbol(ann, fs);
+  if (ann.kind === 'angular') return angular(ann, fs);
   return radial(ann, fs);
 }
 
@@ -160,6 +225,16 @@ export function segmentDistance(p, a, b) {
   const ab = sub(b, a), l2 = dot(ab, ab);
   const t = l2 > 0 ? Math.min(1, Math.max(0, dot(sub(p, a), ab) / l2)) : 0;
   return len(sub(p, add(a, mul(ab, t))));
+}
+
+// Distance from p to an arc, {center, r, from, to} with the angles in degrees, from < to.
+function arcDistance(p, { center, r, from, to }) {
+  const w = sub(p, center);
+  let t = Math.atan2(w[1], w[0]) / DEG;
+  t -= 360 * Math.floor((t - from) / 360); // from ≤ t < from + 360
+  if (t <= to) return Math.abs(len(w) - r);
+  const end = (a) => add(center, [r * Math.cos(a * DEG), r * Math.sin(a * DEG)]);
+  return Math.min(len(sub(p, end(from))), len(sub(p, end(to))));
 }
 
 // Distance in mm from p to the annotation's label box or lines (0 inside the label).
@@ -170,6 +245,7 @@ export function distance(ann, fs, p) {
   const lx = d[0] * c - d[1] * s, ly = d[0] * s + d[1] * c;
   let best = Math.hypot(Math.max(Math.abs(lx) - hw, 0), Math.max(Math.abs(ly) - hh, 0));
   for (const [a, b] of g.lines) best = Math.min(best, segmentDistance(p, a, b));
+  for (const arc of g.arcs) best = Math.min(best, arcDistance(p, arc));
   return best;
 }
 
@@ -186,6 +262,18 @@ export function dragged(ann, delta, fs) {
   if (ann.kind === 'symbol') {
     return { ...ann, offset: [round(ann.offset[0] + delta[0], 2), round(ann.offset[1] + delta[1], 2)] };
   }
+  if (ann.kind === 'angular') {
+    // The arc follows the point where the label sits on it: its radius, and the label's
+    // angle, counted from the middle of the angle so it can go round either way.
+    const [t1, sweep] = legs(ann.center, ann.p1, ann.p2);
+    const t = t1 + ann.textAt * sweep;
+    const w = add([ann.offset * Math.cos(t), ann.offset * Math.sin(t)], delta);
+    const rw = len(w);
+    if (rw < 1e-6) return ann;
+    let phi = Math.atan2(w[1], w[0]) - t1;
+    phi -= 2 * Math.PI * Math.ceil((phi - sweep / 2 - Math.PI) / (2 * Math.PI)); // within half a turn of the middle
+    return { ...ann, offset: round(rw, 2), textAt: sweep > 1e-9 ? round(phi / sweep, 3) : ann.textAt };
+  }
   const d = [Math.cos(ann.angle * DEG), Math.sin(ann.angle * DEG)];
   const w = sub(add(add(ann.center, mul(d, ann.r + ann.offset)), delta), ann.center);
   const rw = len(w);
@@ -198,6 +286,12 @@ export function dragged(ann, delta, fs) {
 }
 
 const P = (p) => `${fmt(p[0])} ${fmt(p[1])}`;
+
+// An arc's path, counter-clockwise in model coordinates.
+function arcPath({ center, r, from, to }) {
+  const end = (a) => add(center, [r * Math.cos(a * DEG), r * Math.sin(a * DEG)]);
+  return `M${P(end(from))} A${fmt(r)} ${fmt(r)} 0 ${to - from > 180 ? 1 : 0} 1 ${P(end(to))}`;
+}
 
 function arrowPath({ tip, dir }, fs) {
   const base = sub(tip, mul(dir, K.arrowLen * fs));
@@ -219,8 +313,9 @@ export function render(group, g, fs) {
     return el;
   };
   const kids = [];
-  if (g.lines.length) {
-    kids.push(make('path', { d: g.lines.map(([a, b]) => `M${P(a)} L${P(b)}`).join(' '), fill: 'none',
+  if (g.lines.length || g.arcs.length) {
+    const d = [...g.lines.map(([a, b]) => `M${P(a)} L${P(b)}`), ...g.arcs.map(arcPath)].join(' ');
+    kids.push(make('path', { d, fill: 'none',
                              'vector-effect': 'non-scaling-stroke' })); // its width on screen, as sheet.py writes it
   }
   if (g.arrows.length) {
@@ -238,9 +333,9 @@ export function render(group, g, fs) {
 // Write the annotation's placement attributes and redraw it.
 export function update(group, ann, fs) {
   const set = (name, value) => group.setAttributeNS(TP_NS, `tp:${name}`, value);
-  if (ann.kind === 'linear') { set('offset', fmt(ann.offset)); set('text-at', fmt(ann.textAt)); }
-  else if (ann.kind === 'symbol') set('offset', `${fmt(ann.offset[0])} ${fmt(ann.offset[1])}`);
-  else { set('angle', fmt(ann.angle)); set('offset', fmt(ann.offset)); }
+  set('offset', ann.kind === 'symbol' ? `${fmt(ann.offset[0])} ${fmt(ann.offset[1])}` : fmt(ann.offset));
+  if (ann.kind === 'linear' || ann.kind === 'angular') set('text-at', fmt(ann.textAt));
+  if (ann.kind === 'radius' || ann.kind === 'diameter') set('angle', fmt(ann.angle));
   render(group, geometry(ann, fs), fs);
 }
 

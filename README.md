@@ -4,7 +4,7 @@ A visual aid for working on CAD geometry with an AI.
 
 The AI's build writes **views** of the model into its build folder, such as `build/`, among its other output:
 
-- **Sheets:** plain, layered SVG files showing geometry, dimensions and the constraints worth seeing. In the viewer you toggle layers, drag labels out of the way and sketch roughly what you want changed. Lines stay the same few pixels wide at any zoom. Press Save, then tell the AI what you drew. It finds `<sheet>.sketch.svg` next to the sheet, makes the change in the real CAD pipeline and rebuilds, and the viewer reloads.
+- **Sheets:** plain, layered SVG files showing geometry, dimensions (lengths, radii, diameters and angles) and the constraints worth seeing. In the viewer you toggle layers, drag labels out of the way and sketch roughly what you want changed. Lines stay the same few pixels wide at any zoom. Press Save, then tell the AI what you drew. It finds `<sheet>.sketch.svg` next to the sheet, makes the change in the real CAD pipeline and rebuilds, and the viewer reloads.
 - **Models:** 3D `.glb` files, such as a CadQuery assembly's export. The viewer shows them so you can look at the build's result, with no debugger needed, and you can slice them and sketch over them as on sheets.
 - **Slicer projects:** `.3mf` files as OrcaSlicer or Bambu Studio save them. The viewer shows them in 3D: the printer's plate and where the pieces sit on it, in their filaments' colours, so you can check the layout. To print, open the same file in the slicer.
 

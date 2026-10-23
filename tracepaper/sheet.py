@@ -7,6 +7,7 @@
     outline.path("plate", PathBuilder().move(0, 0).line(60, 0).line(60, 30).line(0, 30).close())
     dims = sheet.layer("Dimensions")
     dims.linear("d-length", (0, 0), (60, 0), "60", dir="x", offset=-10)
+    dims.angular("d-corner", (0, 0), (60, 0), (0, 30), offset=8)  # 90°, counter-clockwise from x
     sheet.save("plate.svg")
 
 Coordinates are model coordinates: millimetres, y up. The annotation drawing mirrors
@@ -133,7 +134,17 @@ def text_width(label: str, fs: float) -> float:
 
 
 def _empty() -> dict:
-    return {"lines": [], "arrows": [], "dots": [], "texts": [], "box": None}
+    return {"lines": [], "arcs": [], "arrows": [], "dots": [], "texts": [], "box": None}
+
+
+def _readable(v) -> float:
+    """The angle of text along v in degrees, turned half round if need be to read from the left."""
+    ang = math.atan2(v[1], v[0]) / DEG
+    if ang > 90 + EPS:
+        return ang - 180
+    if ang <= -90 + EPS:
+        return ang + 180
+    return ang
 
 
 def linear_geometry(p1: Point, p2: Point, offset: float, label: str, fs: float,
@@ -170,13 +181,66 @@ def linear_geometry(p1: Point, p2: Point, offset: float, label: str, fs: float,
     if s_text < 0 or s_text > span:
         s0, s1 = min(s0, s_text - hw), max(s1, s_text + hw)
     g["lines"].append((_add(a, _mul(v, s0)), _add(a, _mul(v, s1))))
-    ang = math.atan2(v[1], v[0]) / DEG
-    if ang > 90 + EPS:
-        ang -= 180
-    elif ang <= -90 + EPS:
-        ang += 180
+    ang = _readable(v)
     up = (-math.sin(ang * DEG), math.cos(ang * DEG))
     base = _add(_add(a, _mul(v, s_text)), _mul(up, K["textGap"] * fs))
+    g["texts"].append((base, ang, label))
+    g["box"] = (_add(base, _mul(up, K["vCenter"] * fs)), tw / 2, 0.5 * fs)
+    return g
+
+
+def legs(center: Point, p1: Point, p2: Point) -> tuple:
+    """Where the legs of an angle at center through p1 and p2 point: the first one's direction,
+    and how far counter-clockwise the second one is from it, both in radians."""
+    t1 = math.atan2(p1[1] - center[1], p1[0] - center[0])
+    sweep = math.atan2(p2[1] - center[1], p2[0] - center[0]) - t1
+    if sweep < 0:
+        sweep += 2 * math.pi
+    return t1, sweep
+
+
+def angular_geometry(center: Point, p1: Point, p2: Point, offset: float, label: str, fs: float,
+                     text_at: float = 0.5) -> dict:
+    """Like linear_geometry, but along an arc of radius offset round the vertex."""
+    c, r = center, offset
+    t1, sweep = legs(c, p1, p2)
+
+    def on(t):
+        return _add(c, (r * math.cos(t), r * math.sin(t)))
+
+    g = _empty()
+    # The legs run from the vertex to p1 and p2; where the arc is further out, a leg goes on
+    # to it as an extension line.
+    for p, t in ((p1, t1), (p2, t1 + sweep)):
+        d = _len(_sub(p, c))
+        if r > d + K["extGap"] * fs:
+            k = (math.cos(t), math.sin(t))
+            g["lines"].append((_add(c, _mul(k, d + K["extGap"] * fs)), _add(c, _mul(k, r + K["extOver"] * fs))))
+    length = r * sweep
+    # An arrowhead from its tip at angle t, its base on the arc at angle t + side * head.
+    head = 2 * math.asin(min(1, K["arrowLen"] * fs / (2 * r)))
+
+    def arrow(t, side):
+        tip = on(t)
+        return tip, _unit(_sub(tip, on(t + side * head))) or (1.0, 0.0)
+
+    s0, s1 = 0.0, length
+    if length >= K["insideMin"] * fs:
+        g["arrows"] += [arrow(t1, 1), arrow(t1 + sweep, -1)]
+    else:
+        t = (K["arrowLen"] + K["tail"]) * fs
+        s0, s1 = -t, length + t
+        g["arrows"] += [arrow(t1, -1), arrow(t1 + sweep, 1)]
+    tw = text_width(label, fs)
+    s_text = text_at * length
+    hw = tw / 2 + K["textGap"] * fs
+    if s_text < 0 or s_text > length:
+        s0, s1 = min(s0, s_text - hw), max(s1, s_text + hw)
+    g["arcs"].append((tuple(c), r, (t1 + s0 / r) / DEG, (t1 + s1 / r) / DEG))
+    t_text = t1 + s_text / r
+    ang = _readable((-math.sin(t_text), math.cos(t_text)))
+    up = (-math.sin(ang * DEG), math.cos(ang * DEG))
+    base = _add(on(t_text), _mul(up, K["textGap"] * fs))
     g["texts"].append((base, ang, label))
     g["box"] = (_add(base, _mul(up, K["vCenter"] * fs)), tw / 2, 0.5 * fs)
     return g
@@ -224,8 +288,19 @@ def symbol_geometry(anchor: Point, offset: Point, label: str, fs: float) -> dict
     return g
 
 
+def _arc_end(c, r, a):
+    return _add(c, (r * math.cos(a * DEG), r * math.sin(a * DEG)))
+
+
+def _arc_points(c, r, a0, a1) -> list:
+    """The arc's ends, and where it is furthest left, right, up or down."""
+    quarters = range(math.ceil(a0 / 90), math.floor(a1 / 90) + 1)
+    return [_arc_end(c, r, a) for a in (a0, a1, *(90 * q for q in quarters))]
+
+
 def _geometry_points(g: dict) -> list:
     pts = [p for line in g["lines"] for p in line] + [tip for tip, _ in g["arrows"]] + g["dots"]
+    pts += [p for arc in g["arcs"] for p in _arc_points(*arc)]
     center, hw, hh = g["box"]
     reach = max(hw, hh)  # the label may be rotated
     pts += [_add(center, (-reach, -reach)), _add(center, (reach, reach))]
@@ -243,10 +318,16 @@ def text_transform(at: Point, angle: float = 0) -> str:
     return f"translate({_pt(at)}){rotate} scale(1,-1)"
 
 
+def _arc_d(c, r, a0, a1) -> str:
+    """An arc's path, counter-clockwise in model coordinates."""
+    return (f"M{_pt(_arc_end(c, r, a0))} A{fmt(r)} {fmt(r)} 0 {int(a1 - a0 > 180)} 1 "
+            f"{_pt(_arc_end(c, r, a1))}")
+
+
 def _render(group: ET.Element, g: dict, fs: float) -> None:
-    if g["lines"]:
-        ET.SubElement(group, _svg("path"),
-                      {"d": " ".join(f"M{_pt(a)} L{_pt(b)}" for a, b in g["lines"]), "fill": "none", **SCREEN_WIDTH})
+    if g["lines"] or g["arcs"]:
+        d = [f"M{_pt(a)} L{_pt(b)}" for a, b in g["lines"]] + [_arc_d(*arc) for arc in g["arcs"]]
+        ET.SubElement(group, _svg("path"), {"d": " ".join(d), "fill": "none", **SCREEN_WIDTH})
     if g["arrows"]:
         ET.SubElement(group, _svg("path"),
                       {"d": " ".join(_arrow_d(t, d, fs) for t, d in g["arrows"]), "stroke": "none"})
@@ -400,6 +481,20 @@ class Layer:
             "dir": None if dir == "aligned" else dir, "offset": fmt(offset),
             "text-at": None if text_at == 0.5 else fmt(text_at), "label": label,
             "refs": _refs(refs), "value": _value(value), "source": source}, g)
+
+    def angular(self, id: str, center: Point, p1: Point, p2: Point, label: Optional[str] = None, *,
+                offset: Optional[float] = None, text_at: float = 0.5, type: str = "angle", refs=None, value=None,
+                source: Optional[str] = None) -> ET.Element:
+        """Angular dimension at the vertex center, counter-clockwise from its leg through p1 to
+        its leg through p2. offset is the arc's radius: by default, it runs through p1."""
+        sweep = legs(center, p1, p2)[1] / DEG
+        offset = _len(_sub(p1, center)) if offset is None else offset
+        label = label or f"{fmt(sweep, 1)}°"
+        g = angular_geometry(center, p1, p2, offset, label, self.sheet.font_size, text_at)
+        return self._annotation(id, {
+            "type": type, "dim": "angular", "center": _pt(center), "p1": _pt(p1), "p2": _pt(p2),
+            "offset": fmt(offset), "text-at": None if text_at == 0.5 else fmt(text_at), "label": label,
+            "refs": _refs(refs), "value": _value(sweep if value is None else value), "source": source}, g)
 
     def radius(self, id: str, center: Point, r: float, label: Optional[str] = None, *, angle: float = 45,
                offset: float = 5, type: str = "radius", refs=None, value=None,

@@ -53,7 +53,7 @@ The views go into the project's build folder itself, such as `build/`, next to t
 3. Follow the spec:
    - model coordinates in mm, y up, each top-level layer flipped with `transform="scale(1,-1)"`, and no transforms on the groups inside;
    - stable, meaningful ids, and `tp:source` pointers back into the model;
-   - dimensions and constraint symbols as annotation groups the user can drag;
+   - dimensions and constraint symbols as annotation groups the user can drag: `linear`, `radius`, `diameter` and `angular` (an angle at a vertex, counter-clockwise from the leg through p1 to the one through p2) dimensions and `symbol`s on a `tracepaper.sheet` layer;
    - line widths and dashes in pixels on screen, not millimetres, since lines stay the same width at any zoom. Leave `stroke-width` out for the default 1 px, use 1.5–2 px for outlines and highlights, and dashes like `6 4`. `tracepaper.sheet` marks every shape with `vector-effect="non-scaling-stroke"`; SVG written by hand needs it on each element with a stroke.
      - A sheet script written before widths were pixels sets them in millimetres: values below 1, such as `0.25`, or dashes like `1.2 0.8`. Those now come out as faint hairlines and tiny dashes, so convert them to pixels (for example 0.25 → 1.5, 0.1 → 1, `1.2 0.8` → `6 4`) and regenerate.
 4. Show what helps the user judge the design. Put the rest on hidden layers or leave it out, and agree on this with them. The user may look at a sheet on the reMarkable's screen, where colours become greys, so don't tell things apart by colour alone: vary line weight or dashes, or label them.

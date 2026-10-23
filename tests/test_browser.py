@@ -210,6 +210,11 @@ class ViewerInFirefox(unittest.TestCase):
         bolt = ET.SubElement(wrapper, f"{SVG}g", {f"{INK}label": "Bolt"})
         ET.SubElement(bolt, f"{SVG}circle", {"id": "bolt", "cx": "20", "cy": "10", "r": "3"})
         ET.ElementTree(root).write(cls.dir / "tree.svg", encoding="unicode")
+        # A wedge, its angle dimensioned at the tip.
+        wedge = Sheet("Wedge")
+        wedge.layer("Outline").polyline("wedge", [(0, 0), (60, 0), (60, 35)], closed=True)
+        wedge.layer("Dimensions").angular("d-tip", (0, 0), (60, 0), (60, 35), offset=30)
+        wedge.save(cls.dir / "wedge.svg")
         # A veneer 1 mm thick, and 0.5 mm under it a part whose edges must stay hidden.
         boxes_glb(cls.dir / "veneer.glb", [("veneer", (0, 0, 0), (100, 100, 1), (0.85, 0.85, 0.85)),
                                            ("under", (40, 40, -1), (60, 60, -0.5), (0.85, 0.85, 0.85))])
@@ -1247,6 +1252,36 @@ class ViewerInFirefox(unittest.TestCase):
         self.open_viewer()
         self.assertEqual(self.m.run("done([tp.state.tool, document.querySelector('[data-tool=move]')"
                                     ".getAttribute('aria-pressed')]);"), ["move", "true"])
+
+    def test_angular_dimension(self):
+        # An angle's arc and label can be grabbed. Dragging the label moves the arc out or in
+        # with it, and the label along the arc, even past a leg; undo puts it back.
+        self.open_viewer("wedge.svg")
+        got = self.m.run("""
+            tp.setTool('move');
+            const g = document.getElementById('d-tip');
+            const at = (r, t) => screen(g.parentNode, r * Math.cos(t), r * Math.sin(t));  // round the tip
+            const sweep = Math.atan2(35, 60);
+            const grabs = (p) => { fire('pointermove', p, 'mouse'); return g.classList.contains('tpv-hover'); };
+            const hover = { arc: grabs(at(30, 0.1 * sweep)), inside: grabs(at(20, 0.1 * sweep)) };
+            const drag = (from, to) => {
+              fire('pointerdown', from, 'mouse'); fire('pointermove', to, 'mouse'); fire('pointerup', to, 'mouse');
+              const a = tp.A.read(g);
+              return { offset: a.offset, textAt: a.textAt, d: g.querySelector('path').getAttribute('d') };
+            };
+            const out = drag(at(30, 0.5 * sweep), at(40, 0.5 * sweep));
+            const round = drag(at(40, 0.5 * sweep), at(40, 1.3 * sweep));
+            const undone = [tp.undo(), tp.undo()].length && tp.A.read(g);
+            done({ hover, out, round, undone: [undone.offset, undone.textAt, g.getAttributeNS(tp.A.TP_NS, 'text-at')] });
+        """)
+        self.assertEqual(got["hover"], {"arc": True, "inside": False})
+        self.assertEqual((got["out"]["offset"], got["out"]["textAt"]), (40, 0.5))
+        self.assertIn(" A40 40 0 0 1 ", got["out"]["d"])
+        self.assertEqual((got["round"]["offset"], got["round"]["textAt"]), (40, 1.3))
+        # The arc goes on past the leg to the label, and the leg reaches out to the arc.
+        end = got["round"]["d"].split(" A40 40 0 0 1 ")[1].split()[:2]
+        self.assertGreater(math.degrees(math.atan2(float(end[1]), float(end[0]))), 1.3 * math.degrees(math.atan2(35, 60)))
+        self.assertEqual(got["undone"], [30, 0.5, None])
 
     def test_sketch_round_trip(self):
         self.open_viewer()
