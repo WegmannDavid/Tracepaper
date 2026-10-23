@@ -1253,11 +1253,45 @@ class ViewerInFirefox(unittest.TestCase):
                 });
             """)
             self.assertEqual({k: got[k] for k in ("label", "ticks", "over", "frame", "kept")},
-                             {"label": "insertion=2.5", "ticks": 13, "over": 3, "frame": "insertion=2.5", "kept": True})
+                             {"label": "insertion=2.5", "ticks": 13, "over": 8, "frame": "insertion=2.5", "kept": True})
             self.assertRegex(got["value"], r"^strain -?\d")
             self.m.run("tp.save().then(() => done());")
             sketch = ET.parse(scenes / "clip.step.sketch.svg").getroot()
             self.assertEqual(sketch.find(f"{SVG}metadata/{TP}view").get("frame"), "insertion=2.5")
+            # A trail of one part: only that, in every other frame.
+            trail = self.m.run("""
+                const sel = document.querySelector('.tpv-frame-against select[aria-label="Trail"]');
+                sel.value = 'centre line'; sel.dispatchEvent(new Event('change'));
+                until(() => document.querySelector('.tpv-trail')?.children.length, () => {
+                  const t = document.querySelector('.tpv-trail');
+                  const shown = [...t.querySelectorAll('g[*|label]')].filter((g) => getComputedStyle(g).visibility === 'visible'
+                    && g.querySelector('path') && !g.querySelector('g[*|label]'));
+                  done([...new Set(shown.map((g) => g.getAttributeNS('http://www.inkscape.org/namespaces/inkscape', 'label')))].sort());
+                });
+            """)
+            self.assertEqual(trail, ["curve", "ends", "handles"])
+            # Measuring on a 2D scene: snapped to a hole's centre and a corner, then an angle.
+            self.open_viewer("scenes/profile.step")
+            got = self.m.run("""
+                tp.setTool('measure');
+                const pick = (x, y) => {
+                  const p = screen(tp.state.ref, x, y);
+                  tp.measure.move(p.x, p.y);
+                  const kind = tp.measure.hover.kind;
+                  tp.measure.pick(p.x, p.y);
+                  return kind;
+                };
+                const kinds = [pick(16.3, 0.2), pick(41.8, 11.9), pick(42.1, -11.8)];
+                const near = screen(tp.state.ref, 0, 12.2);
+                const edge = tp.measure.snap(near.x, near.y);
+                done({ kinds, text: tp.measure.readout(), edge: [edge.kind, +edge.x.toFixed(3), +edge.y.toFixed(3)],
+                       drawn: !!document.querySelector('.tpv-measure text') });
+            """)
+            self.assertEqual(got["kinds"], ["centre", "vertex", "vertex"])
+            self.assertIn("AB 28.636 mm", got["text"])
+            self.assertIn("∠ABC 65.22°", got["text"])
+            self.assertEqual(got["edge"], ["curve", 0, 12])
+            self.assertTrue(got["drawn"])
             # The 3D view of a scene, and the drawing of what it shows.
             base = f"http://127.0.0.1:{self.server.server_address[1]}"
             self.m.call("WebDriver:Navigate", {"url": f"{base}/view/scenes/bracket.step"})

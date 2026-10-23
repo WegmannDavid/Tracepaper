@@ -7,7 +7,8 @@ surfaces, bounded by exact curves. Its parts are
 - solids,
 - faces without a volume: regions, when the whole scene lies in one plane (a 2D scene),
   else surfaces,
-- curves: reference geometry, such as an axis or a path.
+- curves: reference geometry, such as an axis or a path,
+- points: reference geometry too, such as a spline's control points or a contact point.
 
 The server shows a scene in 3D as triangles (glb) and draws exact sections and
 projections of it (cut, project), which drawing.py turns into sheets. Curves come out
@@ -174,6 +175,11 @@ def find_nodes(scene: Scene, entries) -> set:
             raise ValueError(f"no node {entry!r}; the scene's nodes are: {', '.join(n.key for n in nodes)}")
         out |= found
     return out
+
+
+def has_faces(shape: TopoDS_Shape) -> bool:
+    """Whether a part has faces: else it is curves or points, reference geometry."""
+    return TopExp_Explorer(shape, TopAbs_FACE).More()
 
 
 def _items(shape: TopoDS_Shape, kind) -> list:
@@ -360,10 +366,12 @@ def _half_size(scene: Scene) -> float:
 @dataclass
 class Cut:
     """What a plane cuts from one part, in plane coordinates (the plane is z = 0): regions
-    (faces) from a solid, curves (edges) from a surface."""
+    (faces) from a solid, curves (edges) from a surface, and its points that lie in the plane,
+    [(x, y)]."""
     node: Node
     regions: list
     curves: list
+    points: list = field(default_factory=list)
 
 
 def cut(scene: Scene, pl: Plane) -> list:
@@ -383,8 +391,25 @@ def cut(scene: Scene, pl: Plane) -> list:
             section = BRepAlgoAPI_Section(loose, sheet)
             if section.IsDone():
                 curves += _items(_to_plane(section.Shape(), pl), TopAbs_EDGE)
-        if regions or curves:
-            out.append(Cut(part, regions, curves))
+        points = [(x, y) for x, y, z in _points(part.shape, pl) if abs(z) <= PLANAR]
+        if regions or curves or points:
+            out.append(Cut(part, regions, curves, points))
+    return out
+
+
+def _points(shape: TopoDS_Shape, pl: Plane) -> list:
+    """The points of shape, its vertices on no edge, in pl's coordinates: [(x, y, distance
+    from the plane)]."""
+    on_edges = set()
+    for edge in _items(shape, TopAbs_EDGE):
+        on_edges.update(v.__hash__() for v in _items(edge, TopAbs_VERTEX))
+    out = []
+    for v in _items(shape, TopAbs_VERTEX):
+        if v.__hash__() in on_edges:
+            continue
+        p = BRep_Tool.Pnt_s(TopoDS.Vertex_s(v))
+        d = (p.X() - pl.origin[0], p.Y() - pl.origin[1], p.Z() - pl.origin[2])
+        out.append(tuple(sum(a * b for a, b in zip(d, axis)) for axis in (pl.xdir, pl.ydir, pl.normal)))
     return out
 
 
@@ -415,10 +440,12 @@ def _compound(shapes) -> TopoDS_Compound:
 
 @dataclass
 class Flat:
-    """A part of a 2D scene in plane coordinates: its regions (faces) and curves (edges)."""
+    """A part of a 2D scene in plane coordinates: its regions (faces), curves (edges) and
+    points [(x, y)]."""
     node: Node
     regions: list
     curves: list
+    points: list = field(default_factory=list)
 
 
 def flat(scene: Scene, pl: Plane) -> list:
@@ -426,18 +453,21 @@ def flat(scene: Scene, pl: Plane) -> list:
     out = []
     for part in scene.parts():
         moved = _to_plane(part.shape, pl)
-        out.append(Flat(part, _items(moved, TopAbs_FACE), _loose_edges(moved)))
+        out.append(Flat(part, _items(moved, TopAbs_FACE), _loose_edges(moved),
+                        [(x, y) for x, y, _ in _points(part.shape, pl)]))
     return out
 
 
 @dataclass
 class Projection:
     """A part's edges as seen along a plane's normal, in plane coordinates: visible ones
-    (sharp edges and outlines), smooth ones (where faces meet tangentially) and hidden ones."""
+    (sharp edges and outlines), smooth ones (where faces meet tangentially) and hidden ones,
+    and its points [(x, y)], all of them."""
     node: Node
     visible: list
     smooth: list
     hidden: list
+    points: list = field(default_factory=list)
 
 
 SIMPLE_SURFACES = {GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone, GeomAbs_Sphere}
@@ -464,8 +494,9 @@ def project(scene: Scene, pl: Plane) -> list:
     parts = scene.parts()
     shapes = {}
     for part in parts:
-        shapes[part.key] = _for_hidden_lines(part.shape)
-        algo.Add(shapes[part.key])
+        if _items(part.shape, TopAbs_EDGE):  # points only: nothing to hide
+            shapes[part.key] = _for_hidden_lines(part.shape)
+            algo.Add(shapes[part.key])
     algo.Projector(HLRAlgo_Projector(gp_Ax2(gp_Pnt(*pl.origin), gp_Dir(*pl.normal), gp_Dir(*pl.xdir))))
     algo.Update()
     algo.Hide()
@@ -476,12 +507,13 @@ def project(scene: Scene, pl: Plane) -> list:
         return [] if s is None or s.IsNull() else _items(s, TopAbs_EDGE)
 
     for part in parts:
-        s = shapes[part.key]
-        visible = edges(hlr.VCompound(s)) + edges(hlr.OutLineVCompound(s))
-        smooth = edges(hlr.Rg1LineVCompound(s))
-        hidden = edges(hlr.HCompound(s)) + edges(hlr.OutLineHCompound(s))
-        if visible or smooth or hidden:
-            out.append(Projection(part, visible, smooth, hidden))
+        s = shapes.get(part.key)
+        visible = edges(hlr.VCompound(s)) + edges(hlr.OutLineVCompound(s)) if s else []
+        smooth = edges(hlr.Rg1LineVCompound(s)) if s else []
+        hidden = edges(hlr.HCompound(s)) + edges(hlr.OutLineHCompound(s)) if s else []
+        points = [(x, y) for x, y, _ in _points(part.shape, pl)]
+        if visible or smooth or hidden or points:
+            out.append(Projection(part, visible, smooth, hidden, points))
     return out
 
 

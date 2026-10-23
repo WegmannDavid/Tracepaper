@@ -1,5 +1,5 @@
 // Fields on a sheet (SPEC.md §2.11), in the sheet page's side panel: each field's colour map
-// with its range, which the person can change, only where it is over its limit, isolines,
+// with its range, which the person can change, only where it is outside its limits, isolines,
 // the mesh moved by the field's displacement times a scale, and the value under the pointer.
 //
 // The server draws each field as triangles (drawing.py) carrying the values at their corners
@@ -24,11 +24,13 @@ export function fieldColor(t) {
   return `#${a.map((v, k) => Math.round(v + (x - i) * (b[k] - v)).toString(16).padStart(2, '0')).join('')}`;
 }
 
-// The part of a triangle (corners p, values v) where the value is over level: a polygon.
-function overPart(p, v, level) {
+// The part of a triangle (corners p, values v) where the value is over level (under it, if
+// below): a polygon.
+function overPart(p, v, level, below = false) {
   const out = [];
+  const beyond = (x) => (below ? x < level : x > level);
   for (let i = 0; i < 3; i++) {
-    const j = (i + 1) % 3, a = v[i] > level, b = v[j] > level;
+    const j = (i + 1) % 3, a = beyond(v[i]), b = beyond(v[j]);
     if (a) out.push(p[i]);
     if (a !== b) {
       const t = (level - v[i]) / (v[j] - v[i]);
@@ -57,7 +59,7 @@ export class FieldView {
   // container: the panel's element for them; changed(): the sheet was redrawn.
   constructor({ container, head, changed = () => {} }) {
     Object.assign(this, { container, head, changed });
-    this.fields = []; // [{name, unit, min, max, limit, layer, tris}] of the sheet shown
+    this.fields = []; // [{name, unit, from, to, min, max, layer, tris}] of the sheet shown: its range and its limits
     this.settings = new Map(); // name -> {lo, hi, overOnly, iso, scale}: the person's, kept over frames and reloads
     container.hidden = head.hidden = true;
   }
@@ -72,8 +74,9 @@ export class FieldView {
                  u: u.length === 6 ? pairs(u) : null };
       });
       const num = (n) => (layer.hasAttributeNS(TP_NS, n) ? Number(layer.getAttributeNS(TP_NS, n)) : null);
+      const [from, to] = nums(layer.getAttributeNS(TP_NS, 'range'));
       return { name: layer.getAttributeNS(TP_NS, 'field'), unit: layer.getAttributeNS(TP_NS, 'unit') ?? '',
-               min: num('min') ?? 0, max: num('max') ?? 1, limit: num('limit'), layer, tris,
+               from: from ?? 0, to: to ?? 1, min: num('min'), max: num('max'), layer, tris,
                moves: tris.some((t) => t.u) };
     });
     for (const f of this.fields) {
@@ -87,7 +90,7 @@ export class FieldView {
 
   // Redraw a field as its settings say.
   apply(f) {
-    const s = this.settings.get(f.name), lo = s.lo ?? f.min, hi = s.hi ?? f.max, span = hi - lo || 1;
+    const s = this.settings.get(f.name), lo = s.lo ?? f.from, hi = s.hi ?? f.to, span = hi - lo || 1;
     f.layer.querySelectorAll('.tpv-field-extra').forEach((e) => e.remove());
     const over = [], iso = [];
     const levels = Array.from({ length: ISOLINES }, (_, k) => lo + (k + 0.5) * span / ISOLINES);
@@ -98,9 +101,12 @@ export class FieldView {
       t.el.setAttribute('fill', color);
       t.el.setAttribute('stroke', color);
       t.el.setAttribute('visibility', s.overOnly ? 'hidden' : 'inherit');
-      if (s.overOnly && f.limit !== null) {
-        const part = overPart(t.pts, t.v, f.limit);
-        if (part.length >= 3) over.push(pathOf(part));
+      if (s.overOnly) {
+        for (const [limit, below] of [[f.max, false], [f.min, true]]) {
+          if (limit === null) continue;
+          const part = overPart(t.pts, t.v, limit, below);
+          if (part.length >= 3) over.push(pathOf(part));
+        }
       }
       if (s.iso) for (const level of levels) { const seg = crossing(t.pts, t.v, level); if (seg) iso.push(`M${seg.map(([x, y]) => `${fmt(x, 4)} ${fmt(y, 4)}`).join(' L')}`); }
     }
@@ -118,19 +124,20 @@ export class FieldView {
   render() {
     this.container.hidden = this.head.hidden = !this.on;
     const parts = this.fields.map((f) => {
-      const s = this.settings.get(f.name), lo = s.lo ?? f.min, hi = s.hi ?? f.max;
+      const s = this.settings.get(f.name), lo = s.lo ?? f.from, hi = s.hi ?? f.to;
       const box = document.createElement('div');
       box.className = 'tpv-field';
       box.dataset.field = f.name;
       const stops = VIRIDIS.map((c, i) => `<stop offset="${i / (VIRIDIS.length - 1)}" stop-color="${c}"/>`).join('');
-      const tick = f.limit !== null && hi > lo && f.limit >= lo && f.limit <= hi
-        ? `<line x1="${(f.limit - lo) / (hi - lo) * 100}" x2="${(f.limit - lo) / (hi - lo) * 100}" y1="-2" y2="12" stroke="${OVER}" stroke-width="2" vector-effect="non-scaling-stroke"/>` : '';
+      const tick = [f.min, f.max].filter((l) => l !== null && hi > lo && l >= lo && l <= hi).map((l) => (l - lo) / (hi - lo) * 100)
+        .map((x) => `<line x1="${x}" x2="${x}" y1="-2" y2="12" stroke="${OVER}" stroke-width="2" vector-effect="non-scaling-stroke"/>`).join('');
+      const limits = [f.min !== null && `≥ ${fmt(f.min, 3)}`, f.max !== null && `≤ ${fmt(f.max, 3)}`].filter(Boolean).join(', ');
       box.innerHTML = `<div class="tpv-frame-head"><span class="tpv-frame-name">${f.name}</span>`
-        + `<span class="tpv-frame-value">${f.unit}${f.limit !== null ? ` · limit ${fmt(f.limit, 3)}` : ''}</span></div>`
+        + `<span class="tpv-frame-value">${f.unit}${limits ? ` · ${limits}` : ''}</span></div>`
         + `<svg class="tpv-legend" viewBox="0 -2 100 14" preserveAspectRatio="none"><defs><linearGradient id="tpv-g-${box.dataset.field.replace(/\W/g, '')}">${stops}</linearGradient></defs>`
         + `<rect width="100" height="10" fill="url(#tpv-g-${box.dataset.field.replace(/\W/g, '')})"/>${tick}</svg>`
         + '<div class="tpv-field-range"><input type="number" step="any" data-end="lo" aria-label="Lowest value"><input type="number" step="any" data-end="hi" aria-label="Highest value"></div>'
-        + (f.limit !== null ? '<label class="tpv-slice-option"><input type="checkbox" data-opt="overOnly"> Only over the limit</label>' : '')
+        + (limits ? '<label class="tpv-slice-option"><input type="checkbox" data-opt="overOnly"> Only outside its limits</label>' : '')
         + '<label class="tpv-slice-option"><input type="checkbox" data-opt="iso"> Isolines</label>'
         + (f.moves ? '<div class="tpv-field-scale"><span>Deformation ×</span><input type="range" min="0" max="10" step="0.5" aria-label="Deformation scale"><span class="tpv-frame-value"></span></div>' : '');
       const [loIn, hiIn] = box.querySelectorAll('[data-end]');

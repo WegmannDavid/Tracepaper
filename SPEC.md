@@ -32,7 +32,8 @@ A scene is a STEP file (ISO 10303-21, AP203, AP214 or AP242, `.step` or `.stp`) 
 - **What parts are:** a part's shape can hold
   - **solids**, which sections cut into regions;
   - **faces without a volume**: the regions of a 2D scene (§2.2), and otherwise surfaces, which sections cut into lines;
-  - **curves**: reference geometry, such as an axis or a path, drawn thin and dashed.
+  - **curves**: reference geometry, such as an axis, a path or an older design's outline, drawn thin and dashed;
+  - **points** (vertices on no edge): reference geometry too, such as a spline's control points or a contact point, drawn as dots. A part of points only, beside the curve they belong to, keeps them apart: its ends in one part and its handles in another, say.
 - **No looks.** Colours, layers and styles in the file are ignored: the viewer chooses them (§2.5).
 - With CadQuery: `assembly.export("build/part.step")`, parts named with `name=`. With build123d: `export_step(assembly, "build/part.step")`, parts named with `label`.
 
@@ -70,7 +71,8 @@ Next to `<name>.step`, `<name>.tp.json` MAY say what the STEP file can't. Every 
 | `title`, `source`, `pipeline`, `rev`, `regenerate` | Free text, as in SPEC-v0.md §2.3: shown to the person, where the model lives, what made it, which version, and how the AI rebuilds this scene (the viewer never runs it). |
 | `hidden` | Nodes that start hidden when a window opens: paths (`"Frame / door"`) or plain names (`"screw"` hides every node of that name). |
 | `annotations` | A 2D scene's annotations (§2.6), in its plane's coordinates. |
-| `views` | Named views (§2.4), each with its own `annotations`. |
+| `notes` | Text for the person: a key to the letters in the dimensions, what changed since the last version. One text with line breaks, or a list of lines. Every drawing of the scene shows it, under the drawing. |
+| `views` | Named views (§2.4), each with its own `annotations` and `notes`. |
 | `axes`, `quantities`, `frames` | The scene's frames (§2.10). |
 | `fields` | Fields on the scene (§2.11). |
 
@@ -97,6 +99,7 @@ A named view is a plane:
 | `origin`, `normal`, `xdir` | Three numbers each. A point of the drawing (x, y) is the model point origin + x·xdir + y·(normal × xdir), with `normal` pointing towards the viewer and `xdir` to the right. `origin` defaults to [0, 0, 0], `xdir` to CAD x (or y, if the normal is along x). |
 | `title` | Shown to the person. |
 | `annotations` | Annotations on the drawing (§2.6), in its coordinates. |
+| `notes` | Notes for this drawing, after the scene's. |
 
 ### 2.5 How views are drawn (informative)
 
@@ -107,7 +110,9 @@ The viewer draws every scene the same way; a scene can't change how.
 - **Sections** draw what the plane cuts from each solid as regions, tinted in the part's colour, hatched at an angle and spacing of their own so that parts side by side stay apart in greys, and outlined. Surfaces cut become lines.
 - **2D scenes** draw their regions tinted and outlined.
 - **Projections** draw each part's visible edges, its smooth edges (where faces meet tangentially) lighter, and its hidden edges dashed, on a layer of their own, *Hidden lines*, hidden at first.
-- **Curves** are thin and dashed.
+- **Curves** are thin and dashed, in their part's colour, so that one part's curves (a centre line) stay apart from another's (an older outline). **Points** are dots a few pixels across at any zoom, in their part's colour, named in a tooltip.
+- **Fields** (§2.11) go under the parts, which are then only outlined, so that the outlines, curves and points show over them.
+- **Notes** are a block of text under the drawing, on the *Notes* layer.
 - **The tree** of a drawing is the scene's, leaving out parts the view doesn't show, with the *Dimensions*, *Constraints*, *Fields* and *Hidden lines* layers beside it.
 - **Text and arrowheads** are sized to the drawing: 3.5 mm, or more for drawings over about 200 mm across.
 
@@ -192,7 +197,7 @@ As SPEC-v0.md §2.7: arrowheads, extension lines, labels and leaders, in multipl
 
 ### 2.8 The 3D view
 
-The viewer shows a scene in 3D as the server tessellates it (to within 0.05 mm and 0.3 rad): each part in its colour (§2.5), with the edges between its faces. The person can turn, pan and zoom it, slice it, see through it, and open the exact drawing of what it shows (§5). Curves and fields aren't shown in 3D yet.
+The viewer shows a scene in 3D as the server tessellates it (to within 0.05 mm and 0.3 rad): each part in its colour (§2.5), with the edges between its faces. The person can turn, pan and zoom it, slice it, see through it, and open the exact drawing of what it shows (§5). Curves, points and fields aren't shown in 3D yet.
 
 ### 2.9 Slicer projects
 
@@ -213,11 +218,14 @@ A scene MAY come in **frames**: the whole scene at several values of one or more
 ```json
 {
   "axes": [{"name": "insertion", "unit": "mm"}],
-  "quantities": [{"name": "force", "unit": "N"}, {"name": "strain", "unit": "%", "limit": 3}],
+  "quantities": [{"name": "force", "unit": "N"}, {"name": "strain", "unit": "%", "max": 3},
+                 {"name": "pull-out force", "unit": "N", "min": 15}],
   "frames": [
-    {"at": {"insertion": 0}, "step": ".clip/insertion=0.step", "values": {"force": 0, "strain": 0}},
-    {"at": {"insertion": 0.5}, "step": ".clip/insertion=0.5.step", "values": {"force": 1.2, "strain": 0.4},
-     "fields": {"strain": ".clip/insertion=0.5.vtu"}}
+    {"at": {"insertion": 0}, "step": ".clip/insertion=0.step", "values": {"force": 0, "strain": 0, "pull-out force": 0}},
+    {"at": {"insertion": 0.5}, "step": ".clip/insertion=0.5.step", "values": {"force": 1.2, "strain": 0.4, "pull-out force": 0},
+     "fields": {"strain": ".clip/insertion=0.5.vtu"},
+     "annotations": [{"id": "d-depth", "dim": "linear", "p1": [9, 24], "p2": [9, 23.5], "dir": "y", "offset": -3}],
+     "notes": "s = 0.5 mm: not touching yet"}
   ]
 }
 ```
@@ -225,12 +233,12 @@ A scene MAY come in **frames**: the whole scene at several values of one or more
 | Key | Meaning |
 |---|---|
 | `axes` | The scene's parameters: `name` and `unit`. |
-| `quantities` | Values worked out for each frame: `name`, `unit`, and `limit`, the most it may be, if it has one. |
-| `frames` | The frames, the first shown first. `at` gives a number for each axis; `step` is the frame's STEP file, relative to the scene's folder and inside it; `values` the frame's quantities; `fields` each field's `.vtu` file for this frame (§2.11). |
+| `quantities` | Values worked out for each frame: `name`, `unit`, and `min` and `max`, the least and the most it may be, where it has limits. (`limit`, as the first draft called `max`, is read as `max`.) |
+| `frames` | The frames, the first shown first. `at` gives a number for each axis; `step` is the frame's STEP file, relative to the scene's folder and inside it; `values` the frame's quantities; `fields` each field's `.vtu` file for this frame (§2.11). A frame MAY also give `annotations`, `notes` and `views` as the top level does (§2.3): they hold for that frame in place of the top level's, a view in place of the one of the same name. So a dimension can follow a part that moves or bends, and a section can move. |
 
 - The frames' STEP files SHOULD be in a dot folder, such as `.clip/`, so the viewer doesn't list them as views of their own. The scene's own `<name>.step` is what other programs see, and SHOULD be the first frame.
 - With two axes, the frames form a grid, and the person moves along each axis with its own slider.
-- The viewer (informative) shows a slider for each axis, with steps and Play; each frame's values, and a plot of each quantity along the first axis with the frame shown marked and its limit dashed; frames where a quantity is over its limit are marked on the slider and in red. *Trail* shows every frame along the first axis faintly behind the one shown: what the parts sweep through. Ink stays as it is from frame to frame, and so do moved labels, carried by their ids.
+- The viewer (informative) shows a slider for each axis, with steps and Play; each frame's values, and a plot of each quantity against the first axis (or another axis, or another quantity, such as force against deflection) with the frame shown marked and its limits dashed; frames where a quantity is outside its limits are marked on the slider and in red. *Trail* shows every frame along the first axis faintly behind the one shown, of everything or of one part: what it sweeps through. Ink stays as it is from frame to frame, and so do moved labels, carried by their ids.
 - Every view of the scene has the frames: its 3D view and its drawings.
 
 ### 2.11 Fields
@@ -239,21 +247,21 @@ A scene MAY carry **fields**: values at the nodes of a mesh, such as the strain 
 
 ```json
 {
-  "fields": [{"name": "strain", "unit": "%", "limit": 3, "file": "clip.vtu", "value": "strain", "displacement": "u"}]
+  "fields": [{"name": "strain", "unit": "%", "max": 3, "file": "clip.vtu", "value": "strain", "displacement": "u"}]
 }
 ```
 
 | Key | Meaning |
 |---|---|
 | `name` | The field's name, shown to the person. |
-| `unit`, `limit` | Its unit, and the most it may be, if it has a limit. |
+| `unit`, `min`, `max` | Its unit, and the least and the most it may be, where it has limits. |
 | `file` | Its `.vtu` file, relative to the scene's folder and inside it. A frame can give one of its own (§2.10). |
-| `value` | The name of the point data to show. Default: `name`. A vector shows as its length. |
+| `value` | The name of the point data to show, or of the cell data: one value for each element, the same all across it. Default: `name`. A vector shows as its length. |
 | `displacement` | The name of a vector point data that moves the mesh's nodes from where the file has them, or none. |
 
 - **The file** is a VTK XML unstructured grid (`.vtu`), as meshio, FEniCS, ParaView and most FEM tools write it: ASCII, binary or appended, compressed with zlib or not. Its cells are triangles, quadrilaterals or tetrahedra (quadratic ones by their corners), in the scene's coordinates.
 - **On a drawing:** the mesh's triangles that lie in the drawing's plane, and where the plane cuts tetrahedra, the cut, which is exact for a field linear across them.
-- **The viewer (informative)** draws each field on its own layer under *Fields*, in a colour map that gets lighter from its lowest value to its highest (viridis, which reads in greys too), the same range over all frames. The person can change the range, show only where the field is over its limit, add isolines, scale the displacement (0 shows the mesh where the file has it, 1 moved as far as the field says, more to exaggerate), and read the value under the pointer. Fields aren't shown in 3D yet.
+- **The viewer (informative)** draws each field on its own layer under *Fields*, in a colour map that gets lighter from its lowest value to its highest (viridis, which reads in greys too), the same range over all frames. The person can change the range, show only where the field is outside its limits, add isolines, scale the displacement (0 shows the mesh where the file has it, 1 moved as far as the field says, more to exaggerate), and read the value under the pointer. Fields aren't shown in 3D yet.
 
 ## 3. Sketch files
 
@@ -315,6 +323,7 @@ If the result isn't right, the person sketches again or says so, and the loop re
 - shows scenes in 3D, orthographic or in perspective: rotate, pan, zoom, standard directions, slices along the axes, or just the sections there, and a transparent view. *Drawing* opens the exact drawing of what the 3D view shows, in a window of its own: the section through the slice plane that is on, or the scene from the standard direction it looks from;
 - shows each view's tree in a panel beside it, where the person can hide and show nodes in that window, as in the OCP viewer: a node's eye shows or hides it with everything inside it, also a node inside a hidden one; `Ctrl`+click on a name shows only that node, `Alt`+click hides it. The person's choices last while the window is open, including when the files are rewritten, and aren't stored;
 - lets the person drag annotations' labels, and provides a pen with a few colours, on drawings and over 3D views, where the view only pans and zooms while there is ink;
+- measures on drawings: the person picks points, which snap to vertices (the ends of lines, arcs and curves), the centres of circles and arcs, points and the points annotations measure from, or else to the nearest point on a line or curve, and reads the distance between two, with Δx and Δy, and the angle at the middle one of three. The measurement is drawn over the drawing, not saved;
 - steps through a scene's frames (§2.10) and shows its fields (§2.11), in the panel;
 - can take ink from a drawing tablet, such as a reMarkable 2, which the person connects and disconnects in a view's window; connecting takes the tablet from any other viewer that has it. The tablet covers the current view of the window the person used last with the mouse, fitted at one scale for both axes. A tablet with a screen shows a drawing, lined up with the pen; over a 3D view it shows only the frame of where the pen draws;
 - writes the sketch file on Save (§3), and clears the ink once the AI has deleted that file;

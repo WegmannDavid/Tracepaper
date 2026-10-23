@@ -15,11 +15,15 @@ something the viewer has to get right when it shows, slices or projects them:
   touching, a pin inside its knuckles, and the same screw placed four times; the
   door's side turned round the pin from 0 to 90° in its frames.
 - profile.step: a 2D scene: regions in the plane z = 0, with holes and arcs,
-  one region touching another, one inside another's hole, an ellipse.
+  one region touching another, one inside another's hole, an ellipse; with notes, and
+  a stress field with one value for each element.
 - clip.step, with frames in .clip/: a 2D snap clip pushed into its groove, its arm
   bent as far as the groove's bump pushes its hook, at each insertion depth from 0 to
-  6 mm; clip.tp.json gives the axis and each frame's deflection, force and strain,
-  and the strain in the arm as a field, a .vtu file for each frame.
+  6 mm; clip.tp.json gives the axis and each frame's deflection, force, strain (with a
+  maximum) and pull-out force (with a minimum), the strain in the arm as a field, a .vtu
+  file for each frame, a key as notes, and each frame's own dimensions and status. The
+  arm's centre line is a Bézier curve, with its ends and handles as points, and the
+  point where the hook touches the bump is a point too.
 - grid.step: 64 parts, all one shape placed 64 times.
 
 Coordinates are millimetres, z up. Nothing here sets a colour.
@@ -166,6 +170,36 @@ def hinge(opening: float = 0) -> cq.Assembly:
     return a
 
 
+def profile_meta() -> dict:
+    return {
+        "title": "Profile",
+        "source": "tests/geometry/make.py",
+        "regenerate": "python3 tests/geometry/make.py profile",
+        "notes": "A channel, a gasket against it, a pin in its hole, and an insert.\nThe gasket's stress is one value for each element.",
+        "annotations": [
+            {"id": "d-width", "dim": "linear", "p1": [-30, 12], "p2": [30, 12], "dir": "x", "offset": 6},
+            {"id": "d-hole", "dim": "diameter", "center": [16, 0], "r": 4, "angle": 60, "offset": 6},
+            {"id": "d-corner", "dim": "radius", "center": [-27, -9], "r": 3, "angle": 225, "offset": 4},
+            {"id": "d-slot", "dim": "angular", "center": [-12, 2], "p1": [0, 2], "p2": [0, 6.3677], "offset": 10},
+        ],
+        "fields": [{"name": "stress", "unit": "MPa", "file": "profile.stress.vtu", "max": 6}],
+    }
+
+
+def profile_field() -> str:
+    """The gasket's stress, MPa, as a grid of quadrilaterals with one value each, highest where
+    it is pressed against the channel."""
+    nx, ny, x0, x1, y0, y1 = 6, 12, 30.0, 42.0, -12.0, 12.0
+    points = [(x0 + (x1 - x0) * i / nx, y0 + (y1 - y0) * j / ny, 0.0) for j in range(ny + 1) for i in range(nx + 1)]
+    cells, stress = [], []
+    for j in range(ny):
+        for i in range(nx):
+            a = j * (nx + 1) + i
+            cells.append((a, a + 1, a + nx + 2, a + nx + 1))
+            stress.append(round(8 * (1 - (i + 0.5) / nx) * (1 - abs(j + 0.5 - ny / 2) / ny), 3))
+    return vtu(points, cells, [9] * len(cells), cell_data={"stress": stress})
+
+
 def profile() -> cq.Assembly:
     """Regions in the plane z = 0."""
     channel = (cq.Sketch().rect(60, 24).vertices().fillet(3).reset()
@@ -211,6 +245,42 @@ def bending(depth: float) -> dict:
             "strain": round(100 * 3 * ARM_T * d / (2 * ARM ** 2), 4)}
 
 
+def vtu(points, cells, types, point_data=None, cell_data=None) -> str:
+    """A .vtu file, ASCII: points [(x, y, z)], cells [(node, ...)] of VTK types, and point and
+    cell data {name: values}, a value a number or a vector (x, y, z)."""
+    nums = lambda vs: " ".join(f"{v:.6g}" for v in vs)  # noqa: E731
+
+    def arrays(data):
+        out = []
+        for name, values in (data or {}).items():
+            vector = isinstance(values[0], tuple)
+            flat = [c for v in values for c in v] if vector else values
+            out.append(f'<DataArray type="Float64" Name="{name}"{" NumberOfComponents=\"3\"" if vector else ""} '
+                       f'format="ascii">{nums(flat)}</DataArray>')
+        return "".join(out)
+
+    offsets, n = [], 0
+    for c in cells:
+        n += len(c)
+        offsets.append(n)
+    return f'''<?xml version="1.0"?>
+<VTKFile type="UnstructuredGrid" version="1.0" byte_order="LittleEndian" header_type="UInt32">
+  <UnstructuredGrid>
+    <Piece NumberOfPoints="{len(points)}" NumberOfCells="{len(cells)}">
+      <Points><DataArray type="Float64" NumberOfComponents="3" format="ascii">{nums(c for p in points for c in p)}</DataArray></Points>
+      <Cells>
+        <DataArray type="Int32" Name="connectivity" format="ascii">{nums(i for c in cells for i in c)}</DataArray>
+        <DataArray type="Int32" Name="offsets" format="ascii">{nums(offsets)}</DataArray>
+        <DataArray type="UInt8" Name="types" format="ascii">{nums(types)}</DataArray>
+      </Cells>
+      <PointData>{arrays(point_data)}</PointData>
+      <CellData>{arrays(cell_data)}</CellData>
+    </Piece>
+  </UnstructuredGrid>
+</VTKFile>
+'''
+
+
 def clip_field(depth: float) -> str:
     """The strain in the clip's arm at an insertion depth, as a .vtu file: a mesh of the arm
     unbent, triangles in the drawing's plane, the bending strain at each node (%, tension
@@ -233,25 +303,48 @@ def clip_field(depth: float) -> str:
             a, b = i * (across + 1) + j, i * (across + 1) + j + 1
             c, e = a + across + 1, b + across + 1
             cells += [(a, b, e), (a, e, c)]
-    nums = lambda vs: " ".join(f"{v:.6g}" for v in vs)  # noqa: E731
-    return f'''<?xml version="1.0"?>
-<VTKFile type="UnstructuredGrid" version="1.0" byte_order="LittleEndian" header_type="UInt32">
-  <UnstructuredGrid>
-    <Piece NumberOfPoints="{len(points)}" NumberOfCells="{len(cells)}">
-      <Points><DataArray type="Float64" NumberOfComponents="3" format="ascii">{nums(c for p in points for c in p)}</DataArray></Points>
-      <Cells>
-        <DataArray type="Int32" Name="connectivity" format="ascii">{nums(i for c in cells for i in c)}</DataArray>
-        <DataArray type="Int32" Name="offsets" format="ascii">{nums(3 * (k + 1) for k in range(len(cells)))}</DataArray>
-        <DataArray type="UInt8" Name="types" format="ascii">{nums(5 for _ in cells)}</DataArray>
-      </Cells>
-      <PointData Scalars="strain" Vectors="u">
-        <DataArray type="Float64" Name="strain" format="ascii">{nums(strain)}</DataArray>
-        <DataArray type="Float64" Name="u" NumberOfComponents="3" format="ascii">{nums(c for v in u for c in v)}</DataArray>
-      </PointData>
-    </Piece>
-  </UnstructuredGrid>
-</VTKFile>
-'''
+    return vtu(points, cells, [5] * len(cells), {"strain": strain, "u": u})
+
+
+PULL_MIN = 15.0  # N: the least the clip must hold once it has snapped in
+
+
+def pull_out(depth: float) -> float:
+    """The force it takes to pull the clip out (N): once snapped in, to push the hook over the
+    bump's steep side; before, nothing holds it."""
+    snapped = 24 - depth - ARM + 1 <= BUMP[-1][1]  # the hook's point under the bump
+    inertia = WIDTH_Z * ARM_T ** 3 / 12
+    over = BUMP[1][0] - (-ARM_T / 2 - HOOK)  # how far the hook must move aside to pass
+    return round(2.5 * 3 * E * inertia * over / ARM ** 3, 2) if snapped else 0.0
+
+
+def clip_annotations(depth: float) -> list:
+    """The clip's dimensions at an insertion depth: the bump's height, always; how deep the clip
+    is in and how far its arm is bent, where there is anything to measure."""
+    d = bending(depth)["deflection"]
+    tip = 24 - depth - ARM
+    out = [{"id": "d-bump", "dim": "linear", "p1": [WALL, 2.5], "p2": [BUMP[1][0], 2.5], "dir": "x", "offset": -4,
+            "text-at": -1.5, "label": "1.6", "value": 1.6, "source": "BUMP"}]
+    if depth > 0:
+        out.append({"id": "d-depth", "dim": "linear", "p1": [9, 24], "p2": [9, 24 - depth], "dir": "y", "offset": -3,
+                    "label": f"s = {depth:g}", "value": depth})
+    if d > 0.01:
+        out.append({"id": "d-deflection", "dim": "linear", "p1": [ARM_T / 2, tip], "p2": [ARM_T / 2 + d, tip],
+                    "dir": "x", "offset": -7, "label": f"δ = {d:.2f}", "value": d, "source": "deflection"})
+    return out
+
+
+KEY = ["Key",
+       f"a  arm length, {ARM:g} mm (was 18 mm)",
+       f"b  arm thickness, {ARM_T:g} mm (was 2.2 mm)",
+       "s  insertion depth",
+       "δ  how far the hook is pushed aside"]
+
+
+def clip_status(depth: float) -> str:
+    if pull_out(depth):
+        return f"s = {depth:g} mm: snapped in"
+    return f"s = {depth:g} mm: " + ("riding the bump" if bending(depth)["deflection"] else "not touching yet")
 
 
 def clip_meta() -> dict:
@@ -260,11 +353,16 @@ def clip_meta() -> dict:
         "source": "tests/geometry/make.py",
         "regenerate": "python3 tests/geometry/make.py clip",
         "axes": [{"name": "insertion", "unit": "mm"}],
+        "notes": KEY,
+        "annotations": clip_annotations(0),
         "quantities": [{"name": "deflection", "unit": "mm"}, {"name": "force", "unit": "N"},
-                       {"name": "strain", "unit": "%", "limit": 1.0}],
-        "fields": [{"name": "strain", "unit": "%", "limit": 1.0, "displacement": "u"}],
-        "frames": [{"at": {"insertion": d}, "step": f".clip/insertion={d:g}.step", "values": bending(d),
-                    "fields": {"strain": f".clip/insertion={d:g}.vtu"}} for d in DEPTHS],
+                       {"name": "strain", "unit": "%", "max": 1.0},
+                       {"name": "pull-out force", "unit": "N", "min": PULL_MIN}],
+        "fields": [{"name": "strain", "unit": "%", "max": 1.0, "displacement": "u"}],
+        "frames": [{"at": {"insertion": d}, "step": f".clip/insertion={d:g}.step",
+                    "values": {**bending(d), "pull-out force": pull_out(d)},
+                    "fields": {"strain": f".clip/insertion={d:g}.vtu"},
+                    "annotations": clip_annotations(d), "notes": [*KEY, "", clip_status(d)]} for d in DEPTHS],
     }
 
 
@@ -287,12 +385,23 @@ def clip_at(depth: float) -> cq.Assembly:
     arm = (cq.Workplane("XY").moveTo(*right[0]).spline(right[1:], includeCurrent=True)
            .lineTo(*left[-1]).lineTo(tip_x - ARM_T / 2 - HOOK, tip + 1).lineTo(above_hook[0] - ARM_T / 2, tip + 1)
            .spline(left[-2::-1], includeCurrent=True).close())
-    foot = cq.Workplane("XY").center(0, root + 4).rect(10, 8)
+    foot = cq.Workplane("XY").center(4, root + 4).rect(10, 8)  # off the wall's side
     clip = cq.Face.makeFromWires(arm.val()).fuse(cq.Face.makeFromWires(foot.val())).clean()
     wall = cq.Workplane("XY").polyline([(-12, -12), (WALL, -12), *BUMP[::-1], (WALL, 30), (-12, 30)]).close()
     a = cq.Assembly(name="clip detail")
     a.add(clip, name="clip")
     a.add(cq.Face.makeFromWires(wall.val()), name="wall")
+    # The arm's centre line, a cantilever's bending line: a cubic, so exactly a Bézier curve, as
+    # a curve, its ends and its handles as points; and where the hook touches the bump.
+    poles = [cq.Vector(0, root, 0), cq.Vector(0, root - ARM / 3, 0), cq.Vector(d / 2, root - 2 * ARM / 3, 0),
+             cq.Vector(d, root - ARM, 0)]
+    line = cq.Assembly(name="centre line")
+    line.add(cq.Edge.makeBezier(poles), name="curve")
+    line.add(cq.Compound.makeCompound([cq.Vertex.makeVertex(*poles[k].toTuple()) for k in (0, 3)]), name="ends")
+    line.add(cq.Compound.makeCompound([cq.Vertex.makeVertex(*poles[k].toTuple()) for k in (1, 2)]), name="handles")
+    a.add(line)
+    if d > 0 and BUMP[-1][1] < hook[1] < BUMP[0][1]:
+        a.add(cq.Vertex.makeVertex(hook[0] + d, hook[1], 0), name="contact C")
     return a
 
 
@@ -314,6 +423,10 @@ if __name__ == "__main__":
                        ("hinge", hinge), ("profile", profile), ("grid", grid)]:
         if not only or name in only:
             save(make(), f"{name}.step")
+    if not only or "profile" in only:
+        (HERE / "profile.stress.vtu").write_text(profile_field())
+        (HERE / "profile.tp.json").write_text(json.dumps(profile_meta(), indent=2) + "\n")
+        print("profile.tp.json")
     if not only or "hinge" in only:
         for a in OPENING:
             save(hinge(a), f".hinge/opening={a}.step")

@@ -89,7 +89,47 @@ def named_views(meta: dict) -> list:
             raise ValueError(f"view {name}: normal and xdir must be non-zero and not parallel")
         out.append({"name": name, "title": v.get("title") or name, "kind": kind,
                     "origin": _vector(v.get("origin", (0, 0, 0)), f"view {name}: origin"),
-                    "normal": normal, "xdir": xdir, "annotations": v.get("annotations") or []})
+                    "normal": normal, "xdir": xdir, "annotations": v.get("annotations") or [],
+                    "notes": notes(v.get("notes"), f"view {name}: notes")})
+    return out
+
+
+def notes(given, what: str = "notes") -> list:
+    """Notes as lines of text: given as one text, with line breaks, or a list of lines."""
+    if given is None:
+        return []
+    if isinstance(given, str):
+        return given.split("\n")
+    if isinstance(given, list) and all(isinstance(line, str) for line in given):
+        return list(given)
+    raise ValueError(f"{what} must be a text or a list of lines")
+
+
+def limits(entry: dict, what: str) -> tuple:
+    """(min, max) of a quantity or field, each a number or None: the least and the most it may
+    be. limit, as the first draft of version 1 called max, is read as max."""
+    lo, hi = entry.get("min"), entry.get("max", entry.get("limit"))
+    for v in (lo, hi):
+        if v is not None and not isinstance(v, (int, float)):
+            raise ValueError(f"{what}: min and max must be numbers")
+    return lo, hi
+
+
+# What a frame can give for itself, in place of the top level's (frame_meta).
+FRAME_KEYS = ("annotations", "views", "notes")
+
+
+def frame_meta(meta: dict, frame: Optional[dict]) -> dict:
+    """The scene's .tp.json as it holds for a frame: the frame's own annotations, notes and
+    views in place of the top level's, a view by its name, the others as they are."""
+    own = (frame or {}).get("meta") or {}
+    if not own:
+        return meta
+    out = {**meta, **{k: v for k, v in own.items() if k != "views"}}
+    if "views" in own:
+        mine = {v.get("name"): v for v in own["views"] if isinstance(v, dict)}
+        top = [mine.pop(v.get("name"), v) if isinstance(v, dict) else v for v in meta.get("views") or []]
+        out["views"] = top + list(mine.values())
     return out
 
 
@@ -133,10 +173,11 @@ def frames(scene: Path, meta: dict) -> dict:
     """The scene's frames, from its .tp.json: {axes, quantities, frames}, or {} if it has none.
 
     axes: [{name, unit}], the scene's parameters, such as an insertion depth;
-    quantities: [{name, unit, limit}], values worked out for each frame, such as a force,
-    with the most each may be, if it has a limit;
-    frames: [{at: {axis: value}, step: Path, values: {quantity: number}}], each a STEP file
-    of the whole scene at those values of the axes, the first shown first.
+    quantities: [{name, unit, min, max}], values worked out for each frame, such as a force,
+    with the least and the most each may be, where it has limits;
+    frames: [{at: {axis: value}, step: Path, values: {quantity: number}, fields: {field: file},
+    meta: what it gives in place of the top level's (frame_meta)}], each a STEP file of the
+    whole scene at those values of the axes, the first shown first.
     Raises ValueError for a malformed one."""
     given = meta.get("frames")
     if not given:
@@ -150,7 +191,7 @@ def frames(scene: Path, meta: dict) -> dict:
     quantities = meta.get("quantities") or []
     if not isinstance(quantities, list) or not all(isinstance(q, dict) and isinstance(q.get("name"), str)
                                                    for q in quantities):
-        raise ValueError("quantities must be a list of {\"name\": ..., \"unit\": ..., \"limit\": ...}")
+        raise ValueError("quantities must be a list of {\"name\": ..., \"unit\": ..., \"min\": ..., \"max\": ...}")
     out = []
     for i, f in enumerate(given):
         if not isinstance(f, dict) or not isinstance(f.get("at"), dict) or not isinstance(f.get("step"), str):
@@ -166,10 +207,15 @@ def frames(scene: Path, meta: dict) -> dict:
         own = f.get("fields") or {}
         if not isinstance(own, dict) or not all(isinstance(v, str) for v in own.values()):
             raise ValueError(f"frames[{i}]: fields must map a field's name to its .vtu file")
+        given_meta = {k: f[k] for k in FRAME_KEYS if k in f}
+        if not isinstance(given_meta.get("annotations", []), list) or not isinstance(given_meta.get("views", []), list):
+            raise ValueError(f"frames[{i}]: annotations and views must be lists, as at the top level")
+        notes(given_meta.get("notes"), f"frames[{i}]: notes")
         out.append({"at": {k: float(v) for k, v in f["at"].items()}, "step": step, "values": values,
-                    "fields": own})
+                    "fields": own, "meta": given_meta})
     return {"axes": [{"name": a["name"], "unit": a.get("unit", "")} for a in axes],
-            "quantities": [{"name": q["name"], "unit": q.get("unit", ""), "limit": q.get("limit")}
+            "quantities": [dict(zip(("name", "unit", "min", "max"),
+                                    (q["name"], q.get("unit", ""), *limits(q, f"quantity {q['name']}"))))
                            for q in quantities],
             "frames": out}
 
@@ -180,11 +226,11 @@ def frame_label(at: dict) -> str:
 
 
 def fields(scene: Path, meta: dict, frame: dict = None) -> list:
-    """The fields to draw on the scene's sheets, from its .tp.json: [{name, unit, limit, path,
-    value, displacement}], path the .vtu file (the frame's own, if it gives one), value the
-    name of its point data to show (the field's name by default), displacement that of a
-    vector field to move the mesh's nodes by, or None. Fields without a file are left out.
-    Raises ValueError for a malformed one."""
+    """The fields to draw on the scene's sheets, from its .tp.json: [{name, unit, min, max,
+    path, value, displacement}], path the .vtu file (the frame's own, if it gives one), value
+    the name of its point or cell data to show (the field's name by default), displacement
+    that of a vector field to move the mesh's nodes by, or None. Fields without a file are
+    left out. Raises ValueError for a malformed one."""
     given = meta.get("fields") or []
     if not isinstance(given, list):
         raise ValueError("fields must be a list")
@@ -199,7 +245,8 @@ def fields(scene: Path, meta: dict, frame: dict = None) -> list:
         path = (scene.parent / file).resolve()
         if not path.is_relative_to(scene.parent.resolve()) or path.suffix.lower() != ".vtu":
             raise ValueError(f"field {f['name']}: its file must be a .vtu file in the scene's folder or below it")
-        out.append({"name": f["name"], "unit": f.get("unit", ""), "limit": f.get("limit"), "path": path,
+        lo, hi = limits(f, f"field {f['name']}")
+        out.append({"name": f["name"], "unit": f.get("unit", ""), "min": lo, "max": hi, "path": path,
                     "value": f.get("value", f["name"]), "displacement": f.get("displacement")})
     return out
 

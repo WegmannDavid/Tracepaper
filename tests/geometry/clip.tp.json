@@ -8,6 +8,33 @@
       "unit": "mm"
     }
   ],
+  "notes": [
+    "Key",
+    "a  arm length, 20 mm (was 18 mm)",
+    "b  arm thickness, 2 mm (was 2.2 mm)",
+    "s  insertion depth",
+    "\u03b4  how far the hook is pushed aside"
+  ],
+  "annotations": [
+    {
+      "id": "d-bump",
+      "dim": "linear",
+      "p1": [
+        -2.8000000000000003,
+        2.5
+      ],
+      "p2": [
+        -1.2000000000000002,
+        2.5
+      ],
+      "dir": "x",
+      "offset": -4,
+      "text-at": -1.5,
+      "label": "1.6",
+      "value": 1.6,
+      "source": "BUMP"
+    }
+  ],
   "quantities": [
     {
       "name": "deflection",
@@ -20,14 +47,19 @@
     {
       "name": "strain",
       "unit": "%",
-      "limit": 1.0
+      "max": 1.0
+    },
+    {
+      "name": "pull-out force",
+      "unit": "N",
+      "min": 15.0
     }
   ],
   "fields": [
     {
       "name": "strain",
       "unit": "%",
-      "limit": 1.0,
+      "max": 1.0,
       "displacement": "u"
     }
   ],
@@ -40,11 +72,41 @@
       "values": {
         "deflection": 0.0,
         "force": 0.0,
-        "strain": 0.0
+        "strain": 0.0,
+        "pull-out force": 0.0
       },
       "fields": {
         "strain": ".clip/insertion=0.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 0 mm: not touching yet"
+      ]
     },
     {
       "at": {
@@ -54,11 +116,57 @@
       "values": {
         "deflection": 0.0,
         "force": 0.0,
-        "strain": 0.0
+        "strain": 0.0,
+        "pull-out force": 0.0
       },
       "fields": {
         "strain": ".clip/insertion=0.5.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            23.5
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 0.5",
+          "value": 0.5
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 0.5 mm: not touching yet"
+      ]
     },
     {
       "at": {
@@ -68,11 +176,57 @@
       "values": {
         "deflection": 0.0,
         "force": 0.0,
-        "strain": 0.0
+        "strain": 0.0,
+        "pull-out force": 0.0
       },
       "fields": {
         "strain": ".clip/insertion=1.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            23.0
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 1",
+          "value": 1.0
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 1 mm: not touching yet"
+      ]
     },
     {
       "at": {
@@ -82,11 +236,74 @@
       "values": {
         "deflection": 0.3333,
         "force": 1.667,
-        "strain": 0.25
+        "strain": 0.25,
+        "pull-out force": 0.0
       },
       "fields": {
         "strain": ".clip/insertion=1.5.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            22.5
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 1.5",
+          "value": 1.5
+        },
+        {
+          "id": "d-deflection",
+          "dim": "linear",
+          "p1": [
+            1.0,
+            2.5
+          ],
+          "p2": [
+            1.3333,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -7,
+          "label": "\u03b4 = 0.33",
+          "value": 0.3333,
+          "source": "deflection"
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 1.5 mm: riding the bump"
+      ]
     },
     {
       "at": {
@@ -96,11 +313,74 @@
       "values": {
         "deflection": 0.8667,
         "force": 4.333,
-        "strain": 0.65
+        "strain": 0.65,
+        "pull-out force": 0.0
       },
       "fields": {
         "strain": ".clip/insertion=2.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            22.0
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 2",
+          "value": 2.0
+        },
+        {
+          "id": "d-deflection",
+          "dim": "linear",
+          "p1": [
+            1.0,
+            2.0
+          ],
+          "p2": [
+            1.8667,
+            2.0
+          ],
+          "dir": "x",
+          "offset": -7,
+          "label": "\u03b4 = 0.87",
+          "value": 0.8667,
+          "source": "deflection"
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 2 mm: riding the bump"
+      ]
     },
     {
       "at": {
@@ -110,11 +390,74 @@
       "values": {
         "deflection": 1.4,
         "force": 7.0,
-        "strain": 1.05
+        "strain": 1.05,
+        "pull-out force": 0.0
       },
       "fields": {
         "strain": ".clip/insertion=2.5.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            21.5
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 2.5",
+          "value": 2.5
+        },
+        {
+          "id": "d-deflection",
+          "dim": "linear",
+          "p1": [
+            1.0,
+            1.5
+          ],
+          "p2": [
+            2.4,
+            1.5
+          ],
+          "dir": "x",
+          "offset": -7,
+          "label": "\u03b4 = 1.40",
+          "value": 1.4,
+          "source": "deflection"
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 2.5 mm: riding the bump"
+      ]
     },
     {
       "at": {
@@ -124,11 +467,74 @@
       "values": {
         "deflection": 1.4,
         "force": 7.0,
-        "strain": 1.05
+        "strain": 1.05,
+        "pull-out force": 0.0
       },
       "fields": {
         "strain": ".clip/insertion=3.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            21.0
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 3",
+          "value": 3.0
+        },
+        {
+          "id": "d-deflection",
+          "dim": "linear",
+          "p1": [
+            1.0,
+            1.0
+          ],
+          "p2": [
+            2.4,
+            1.0
+          ],
+          "dir": "x",
+          "offset": -7,
+          "label": "\u03b4 = 1.40",
+          "value": 1.4,
+          "source": "deflection"
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 3 mm: riding the bump"
+      ]
     },
     {
       "at": {
@@ -138,11 +544,74 @@
       "values": {
         "deflection": 1.4,
         "force": 7.0,
-        "strain": 1.05
+        "strain": 1.05,
+        "pull-out force": 0.0
       },
       "fields": {
         "strain": ".clip/insertion=3.5.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            20.5
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 3.5",
+          "value": 3.5
+        },
+        {
+          "id": "d-deflection",
+          "dim": "linear",
+          "p1": [
+            1.0,
+            0.5
+          ],
+          "p2": [
+            2.4,
+            0.5
+          ],
+          "dir": "x",
+          "offset": -7,
+          "label": "\u03b4 = 1.40",
+          "value": 1.4,
+          "source": "deflection"
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 3.5 mm: riding the bump"
+      ]
     },
     {
       "at": {
@@ -152,11 +621,57 @@
       "values": {
         "deflection": 0.0,
         "force": 0.0,
-        "strain": 0.0
+        "strain": 0.0,
+        "pull-out force": 17.5
       },
       "fields": {
         "strain": ".clip/insertion=4.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            20.0
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 4",
+          "value": 4.0
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 4 mm: snapped in"
+      ]
     },
     {
       "at": {
@@ -166,11 +681,57 @@
       "values": {
         "deflection": 0.0,
         "force": 0.0,
-        "strain": 0.0
+        "strain": 0.0,
+        "pull-out force": 17.5
       },
       "fields": {
         "strain": ".clip/insertion=4.5.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            19.5
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 4.5",
+          "value": 4.5
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 4.5 mm: snapped in"
+      ]
     },
     {
       "at": {
@@ -180,11 +741,57 @@
       "values": {
         "deflection": 0.0,
         "force": 0.0,
-        "strain": 0.0
+        "strain": 0.0,
+        "pull-out force": 17.5
       },
       "fields": {
         "strain": ".clip/insertion=5.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            19.0
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 5",
+          "value": 5.0
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 5 mm: snapped in"
+      ]
     },
     {
       "at": {
@@ -194,11 +801,57 @@
       "values": {
         "deflection": 0.0,
         "force": 0.0,
-        "strain": 0.0
+        "strain": 0.0,
+        "pull-out force": 17.5
       },
       "fields": {
         "strain": ".clip/insertion=5.5.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            18.5
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 5.5",
+          "value": 5.5
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 5.5 mm: snapped in"
+      ]
     },
     {
       "at": {
@@ -208,11 +861,57 @@
       "values": {
         "deflection": 0.0,
         "force": 0.0,
-        "strain": 0.0
+        "strain": 0.0,
+        "pull-out force": 17.5
       },
       "fields": {
         "strain": ".clip/insertion=6.vtu"
-      }
+      },
+      "annotations": [
+        {
+          "id": "d-bump",
+          "dim": "linear",
+          "p1": [
+            -2.8000000000000003,
+            2.5
+          ],
+          "p2": [
+            -1.2000000000000002,
+            2.5
+          ],
+          "dir": "x",
+          "offset": -4,
+          "text-at": -1.5,
+          "label": "1.6",
+          "value": 1.6,
+          "source": "BUMP"
+        },
+        {
+          "id": "d-depth",
+          "dim": "linear",
+          "p1": [
+            9,
+            24
+          ],
+          "p2": [
+            9,
+            18.0
+          ],
+          "dir": "y",
+          "offset": -3,
+          "label": "s = 6",
+          "value": 6.0
+        }
+      ],
+      "notes": [
+        "Key",
+        "a  arm length, 20 mm (was 18 mm)",
+        "b  arm thickness, 2 mm (was 2.2 mm)",
+        "s  insertion depth",
+        "\u03b4  how far the hook is pushed aside",
+        "",
+        "s = 6 mm: snapped in"
+      ]
     }
   ]
 }

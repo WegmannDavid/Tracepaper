@@ -1,7 +1,8 @@
 // A scene's frames (SPEC.md §2.10), in the side panel of either page: a slider for each axis,
-// steps and Play, the frame's values, and a plot of each value along the first axis with the
-// frame shown marked, and its limit. Frames where a value is over its limit are marked on the
-// slider and in red. The page loads the frame chosen (onFrame) and keeps everything else.
+// steps and Play, the frame's values, and a plot of each value against the first axis (or
+// another, or another value) with the frame shown marked, and its limits. Frames where a value
+// is outside its limits are marked on the slider and in red. The page loads the frame chosen
+// (onFrame) and keeps everything else.
 
 const NS = 'http://www.w3.org/2000/svg';
 const PLAY_MS = 150; // per frame
@@ -22,14 +23,16 @@ const svg = (tag, attrs) => {
 
 export class FramePanel {
   // container: the panel's element for them; onFrame(index): show that frame;
-  // onTrail(on): show every frame faint, or stop (omitted: no Trail option).
-  constructor({ container, onFrame, onTrail = null }) {
-    Object.assign(this, { container, onFrame, onTrail });
+  // onTrail(trail): show every frame faint, of one node (its key) or all ('') or none
+  // (null), omitted: no Trail option; nodes(): the keys of the parts that can be trailed.
+  constructor({ container, onFrame, onTrail = null, nodes = () => [] }) {
+    Object.assign(this, { container, onFrame, onTrail, nodes });
     this.info = null; // {axes, quantities, frames}
     this.at = {}; // axis -> index into this.values[axis]
     this.values = {}; // axis -> its values, in order
     this.playing = null;
-    this.trail = false;
+    this.trail = null;
+    this.against = null; // what the plots are against: an axis's or a quantity's name, null for the first axis
     container.hidden = true;
   }
 
@@ -64,9 +67,13 @@ export class FramePanel {
     return f ? this.info.axes.map(({ name }) => `${name}=${num(f.at[name])}`).join(' ') : null;
   }
 
-  // Whether a frame has a value over its limit.
+  // Whether a value is outside a quantity's limits; whether a frame has one that is.
+  outside(q, v) {
+    return v !== undefined && ((q.max != null && v > q.max) || (q.min != null && v < q.min));
+  }
+
   over(frame) {
-    return this.info.quantities.some((q) => q.limit != null && frame.values[q.name] > q.limit);
+    return this.info.quantities.some((q) => this.outside(q, frame.values[q.name]));
   }
 
   // Move along an axis (the first by default) by step frames; wrap: from the end to the start.
@@ -144,11 +151,24 @@ export class FramePanel {
     }
     this.ui.missing = el('p', 'tpv-frame-missing', 'No frame here');
     parts.push(this.ui.missing);
+    // What the plots are against: an axis, or another quantity (force against deflection).
+    const choices = [...axes.map((a) => a.name), ...quantities.map((q) => q.name)];
+    if (quantities.length && (axes.length > 1 || quantities.length > 1)) { // more than the one axis to choose
+      const label = el('label', 'tpv-frame-against', 'Plot against ');
+      const select = el('select');
+      select.setAttribute('aria-label', 'Plot against');
+      select.append(...choices.map((c) => new Option(c, c)));
+      select.value = this.against ?? axes[0].name;
+      select.addEventListener('change', () => { this.against = select.value === axes[0].name ? null : select.value; this.update(); });
+      label.append(select);
+      parts.push(label);
+    }
     for (const q of quantities) {
       const box = el('div', 'tpv-frame-quantity');
       const head = el('div', 'tpv-frame-head');
       const value = el('span', 'tpv-frame-value');
-      if (q.limit != null) value.title = `Limit ${num(q.limit, q.unit)}`;
+      const limits = [q.min != null && `at least ${num(q.min, q.unit)}`, q.max != null && `at most ${num(q.max, q.unit)}`];
+      if (limits.some(Boolean)) value.title = limits.filter(Boolean).join(', ');
       head.append(el('span', 'tpv-frame-name', q.name), value);
       const chart = this.plot(q);
       box.append(head, chart);
@@ -156,11 +176,16 @@ export class FramePanel {
       this.ui.quantities[q.name] = { value, chart };
     }
     if (this.onTrail) {
-      const label = el('label', 'tpv-slice-option');
-      label.title = 'Show every frame along the first axis faintly behind this one';
-      label.innerHTML = '<input type="checkbox"> Trail';
-      this.ui.trail = label.querySelector('input');
-      this.ui.trail.addEventListener('change', () => { this.trail = this.ui.trail.checked; this.onTrail(this.trail); });
+      const label = el('label', 'tpv-frame-against', 'Trail ');
+      label.title = 'Show every frame along the first axis faintly behind this one: of everything, or of one part';
+      this.ui.trail = el('select');
+      this.ui.trail.setAttribute('aria-label', 'Trail');
+      this.ui.trail.addEventListener('change', () => {
+        const v = this.ui.trail.value;
+        this.trail = v === 'off' ? null : v === 'all' ? '' : v;
+        this.onTrail(this.trail);
+      });
+      label.append(this.ui.trail);
       parts.push(label);
     }
     this.container.replaceChildren(...parts);
@@ -190,43 +215,56 @@ export class FramePanel {
     for (const q of quantities) {
       const v = frame?.values[q.name], ui = this.ui.quantities[q.name];
       ui.value.textContent = v === undefined ? '–' : num(v, q.unit);
-      ui.value.classList.toggle('over', q.limit != null && v > q.limit);
+      ui.value.classList.toggle('over', this.outside(q, v));
       const chart = this.plot(q);
       ui.chart.replaceWith(chart);
       ui.chart = chart;
     }
-    if (this.ui.trail) this.ui.trail.checked = this.trail;
+    if (this.ui.trail) { // the parts, as the page's tree has them now
+      const keys = this.nodes(), sel = this.ui.trail;
+      const want = ['off', 'all', ...keys].join('\n');
+      if (sel.dataset.options !== want) {
+        sel.dataset.options = want;
+        sel.replaceChildren(new Option('off', 'off'), new Option('everything', 'all'), ...keys.map((k) => new Option(k, k)));
+      }
+      sel.value = this.trail === null ? 'off' : this.trail === '' ? 'all' : this.trail;
+    }
   }
 
-  // A quantity along the first axis, at the other axes' values: its line, the frame shown,
-  // its limit dashed, and the points over it in red.
+  // A quantity against what the plots are against (the first axis by default), the other
+  // axes where they are: its line, through the frames in order, the frame shown, its limits
+  // dashed, and the points outside them in red.
   plot(q) {
-    const axis = this.info.axes[0].name, { w, h, pad } = PLOT;
-    const others = this.info.axes.slice(1);
+    const { w, h, pad } = PLOT, first = this.info.axes[0].name;
+    const against = this.against ?? first;
+    const isAxis = this.info.axes.some((a) => a.name === against);
+    const x = (f) => (isAxis ? f.at[against] : f.values[against]);
+    const others = this.info.axes.filter((a) => a.name !== (isAxis ? against : first));
     const pts = this.info.frames
-      .filter((f) => q.name in f.values && others.every((a) => f.at[a.name] === this.values[a.name][this.at[a.name]]))
-      .map((f) => [f.at[axis], f.values[q.name], f])
-      .sort((a, b) => a[0] - b[0]);
+      .filter((f) => q.name in f.values && x(f) !== undefined
+        && others.every((a) => f.at[a.name] === this.values[a.name][this.at[a.name]]))
+      .sort((a, b) => (isAxis ? x(a) - x(b) : a.at[first] - b.at[first]))
+      .map((f) => [x(f), f.values[q.name], f]);
     const chart = svg('svg', { class: 'tpv-frame-plot', viewBox: `0 0 ${w} ${h}`, role: 'img',
-                               'aria-label': `${q.name} along ${axis}` });
+                               'aria-label': `${q.name} against ${against}` });
     if (!pts.length) return chart;
     const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
-    if (q.limit != null) ys.push(q.limit);
+    for (const limit of [q.min, q.max]) if (limit != null) ys.push(limit);
     const [x0, x1] = [Math.min(...xs), Math.max(...xs)], [y0, y1] = [Math.min(0, ...ys), Math.max(...ys)];
-    const X = (x) => pad + (x1 > x0 ? (x - x0) / (x1 - x0) : 0.5) * (w - 2 * pad);
-    const Y = (y) => h - pad - (y1 > y0 ? (y - y0) / (y1 - y0) : 0.5) * (h - 2 * pad);
+    const X = (v) => pad + (x1 > x0 ? (v - x0) / (x1 - x0) : 0.5) * (w - 2 * pad);
+    const Y = (v) => h - pad - (y1 > y0 ? (v - y0) / (y1 - y0) : 0.5) * (h - 2 * pad);
     chart.append(svg('line', { class: 'tpv-plot-axis', x1: pad, x2: w - pad, y1: Y(Math.max(y0, 0)), y2: Y(Math.max(y0, 0)) }));
-    if (q.limit != null) {
-      chart.append(svg('line', { class: 'tpv-plot-limit', x1: pad, x2: w - pad, y1: Y(q.limit), y2: Y(q.limit) }));
+    for (const limit of [q.min, q.max]) {
+      if (limit != null) chart.append(svg('line', { class: 'tpv-plot-limit', x1: pad, x2: w - pad, y1: Y(limit), y2: Y(limit) }));
     }
-    chart.append(svg('polyline', { class: 'tpv-plot-line', points: pts.map(([x, y]) => `${X(x)},${Y(y)}`).join(' ') }));
-    for (const [x, y] of pts) {
-      if (q.limit != null && y > q.limit) chart.append(svg('circle', { class: 'tpv-plot-over', cx: X(x), cy: Y(y), r: 2.5 }));
+    chart.append(svg('polyline', { class: 'tpv-plot-line', points: pts.map(([a, b]) => `${X(a)},${Y(b)}`).join(' ') }));
+    for (const [a, b] of pts) {
+      if (this.outside(q, b)) chart.append(svg('circle', { class: 'tpv-plot-over', cx: X(a), cy: Y(b), r: 2.5 }));
     }
     const shown = this.frame;
-    if (shown && axis in shown.at) {
-      chart.append(svg('line', { class: 'tpv-plot-cursor', x1: X(shown.at[axis]), x2: X(shown.at[axis]), y1: pad / 2, y2: h - pad / 2 }));
-      if (q.name in shown.values) chart.append(svg('circle', { class: 'tpv-plot-dot', cx: X(shown.at[axis]), cy: Y(shown.values[q.name]), r: 3 }));
+    if (shown && x(shown) !== undefined) {
+      chart.append(svg('line', { class: 'tpv-plot-cursor', x1: X(x(shown)), x2: X(x(shown)), y1: pad / 2, y2: h - pad / 2 }));
+      if (q.name in shown.values) chart.append(svg('circle', { class: 'tpv-plot-dot', cx: X(x(shown)), cy: Y(shown.values[q.name]), r: 3 }));
     }
     return chart;
   }

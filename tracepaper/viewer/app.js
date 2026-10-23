@@ -5,6 +5,7 @@ import * as A from './annotations.js';
 import { INK_COLORS, Ink, PenInput, coalesced, pxPerUnit, swatch, toLocal } from './ink.js';
 import { FieldView } from './fieldview.js';
 import { FramePanel } from './frames.js';
+import { Measure } from './measure.js';
 import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import * as Pen from './pen.js';
 import { renderView } from './screen.js';
@@ -61,6 +62,7 @@ const shown = (el) => !isHidden(el);
 
 function mount(root) {
   hideByVisibility(root); // so that a node inside a hidden one can be shown
+  measure.stale();
   if (!root.getAttribute('width') || !root.getAttribute('height')) {
     const vb = root.viewBox.baseVal;
     if (vb?.width && vb?.height) {
@@ -103,9 +105,22 @@ function placeAs(g, snap) {
 
 const fieldView = new FieldView({ container: ui.fields, head: ui.fieldsHead });
 
-const frames = new FramePanel({
-  container: ui.frames, onFrame: () => showFrame(), onTrail: () => drawTrail(),
+// Measuring (measure.js): its readout follows the pointer's coordinates.
+const measure = new Measure({
+  stage: ui.stage, host: ui.host, ref: () => state.ref, root: () => state.root,
+  fontSize: () => fontSizeIn(state.root, state.root), changed: (text) => { state.measured = text; },
 });
+
+const frames = new FramePanel({
+  container: ui.frames, onFrame: () => showFrame(), onTrail: () => drawTrail(), nodes: () => partKeys(),
+});
+
+// The tree's nodes that are parts of the scene, or groups of them: not the annotations, the
+// fields, the hidden lines or the ink.
+const partKeys = () => (state.root ? allNodes(state.root).filter((g) => {
+  for (let n = g; n && n !== state.root; n = n.parentNode) if (n.getAttributeNS?.(A.TP_NS, 'role')) return false;
+  return g !== state.ink;
+}).map((g) => pathOf(g, state.root)) : []);
 
 // The drawing of a frame of the view: fetched once for each version of the view.
 async function frameText(name, k) {
@@ -148,11 +163,12 @@ async function showFrame() {
 }
 
 // Every frame along the first axis, the others where they are, faint behind this one: what
-// the parts sweep through. Only the parts; it follows what the tree hides. It is drawn under
-// the sheet, in a drawing of its own, so it is never saved.
+// the parts sweep through, or one of them (frames.trail, its key). Only the parts; it follows
+// what the tree hides. It is drawn under the sheet, in a drawing of its own, so it is never saved.
 async function drawTrail() {
   ui.host.querySelector('.tpv-trail')?.remove();
-  if (!frames.trail || !frames.on || !state.root) return;
+  if (frames.trail === null || !frames.on || !state.root) return;
+  const only = frames.trail;
   const name = state.name, here = frames.index;
   const others = frames.info.axes.slice(1), now = frames.frame;
   const trail = document.createElementNS(SVG_NS, 'svg');
@@ -162,7 +178,7 @@ async function drawTrail() {
     if (k === here || !others.every((a) => f.at[a.name] === now?.at[a.name])) continue;
     let root;
     try { root = parseSvg(await frameText(name, k)); } catch { continue; }
-    if (state.name !== name || !frames.trail) return;
+    if (state.name !== name || frames.trail !== only) return;
     for (const layer of [...root.children]) {
       const role = layer.getAttributeNS(A.TP_NS, 'role');
       if (layer.localName !== 'g' || role || labelOf(layer) === 'Sketch') layer.remove();
@@ -172,9 +188,14 @@ async function drawTrail() {
       const visible = state.layerVis.get(pathOf(g, root));
       if (visible !== undefined) setHidden(g, !visible);
     }
+    if (only) { // that node alone, as Ctrl+click in the tree shows it
+      const node = allNodes(root).find((g) => pathOf(g, root) === only);
+      for (const layer of [...root.children]) if (layer.localName === 'g') setHidden(layer, true);
+      if (node) setHidden(node, false);
+    }
     trail.append(...[...root.children].filter((c) => c.localName === 'g'));
   }
-  if (state.name === name && frames.trail) {
+  if (state.name === name && frames.trail === only) {
     ui.host.querySelector('.tpv-trail')?.remove();
     ui.host.insertBefore(trail, state.root);
   }
@@ -298,6 +319,7 @@ function setLayerVisible(key, visible, render = true) {
   setHidden(g, !visible);
   for (const k of [...state.layerVis.keys()]) if (k.startsWith(`${key} / `)) state.layerVis.delete(k); // they follow it
   state.layerVis.set(key, visible);
+  measure.stale(); // what is hidden doesn't snap
   if (hover && !shown(hover)) setHover(null);
   if (render) renderLayers();
 }
@@ -383,7 +405,7 @@ function updateCursor() {
   const t = gesture?.type;
   ui.stage.style.cursor = t === 'pan' || t === 'pinch' || t === 'drag' ? 'grabbing'
     : spaceHeld ? 'grab'
-    : state.tool === 'pen' || state.tool === 'pick' ? 'crosshair'
+    : state.tool === 'pen' || state.tool === 'pick' || state.tool === 'measure' ? 'crosshair'
     : hover ? 'grab' : 'default';
 }
 
@@ -469,8 +491,14 @@ function onPointerDown(e) {
     gesture = { type: 'erase', id: e.pointerId, removed: [] };
     ink.eraseAt(e.clientX, e.clientY, gesture.removed);
   } else if (e.button === 1 || (e.button === 0 && spaceHeld)) gesture = startPan(e);
+  else if (e.button === 2 && state.tool === 'measure') { measure.clear(); return; }
   else if (e.button !== 0) return;
-  else if (state.tool === 'pick') {
+  else if (state.tool === 'measure') {
+    measure.pick(e.clientX, e.clientY);
+    ui.coords.textContent = state.measured;
+    e.preventDefault();
+    return;
+  } else if (state.tool === 'pick') {
     pickColor(e.clientX, e.clientY);
     e.preventDefault();
     return;
@@ -495,6 +523,10 @@ function onPointerMove(e) {
     if (e.pointerType === 'touch' || spaceHeld) return;
     if (state.tool === 'move') setHover(hitTest(e.clientX, e.clientY)?.el ?? null);
     else if (state.tool === 'pick') previewPick(e.clientX, e.clientY);
+    else if (state.tool === 'measure') {
+      measure.move(e.clientX, e.clientY);
+      if (state.measured) ui.coords.textContent += `   ${state.measured}`;
+    }
     return;
   }
   if (gesture.type === 'pinch') { movePinch(); return; }
@@ -536,6 +568,7 @@ function setTool(tool) {
   for (const b of document.querySelectorAll('[data-tool]')) b.setAttribute('aria-pressed', String(b.dataset.tool === tool));
   if (tool !== 'move') setHover(null);
   if (tool !== 'pick') showPickBox(null);
+  if (tool !== 'measure') measure.clear();
   updateCursor();
 }
 
@@ -797,6 +830,8 @@ window.addEventListener('keydown', (e) => {
   else if (key === 'v' || key === 'm') setTool('move');
   else if (key === 'i') setTool('pick');
   else if (key === 'escape' && state.tool === 'pick') setTool(state.prevTool);
+  else if (key === 'escape' && state.tool === 'measure') measure.clear();
+  else if (key === 'r') setTool('measure');
   else if (key === 'f') fit();
   else if (['1', '2', '3', '4'].includes(e.key)) setColor(Number(e.key) - 1);
   else if (e.key === '5') usePicked();
@@ -827,4 +862,4 @@ tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper = { state, ready, A, Pen, pen, tablet, CLIENT, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit,
-  renderScreen, frames, fieldView };
+  renderScreen, frames, fieldView, measure };

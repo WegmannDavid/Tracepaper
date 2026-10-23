@@ -144,8 +144,12 @@ class DrawingTest(unittest.TestCase):
                        ranges={"strain": (-2, 2)})
         root = ET.fromstring(sheet.tostring())
         layer = root.find(f".//{SVG}g[@{TP}field='strain']")
-        self.assertEqual((layer.get(f"{TP}min"), layer.get(f"{TP}max"), layer.get(f"{TP}limit"), layer.get(f"{TP}unit")),
-                         ("-2", "2", "1", "%"))
+        self.assertEqual((layer.get(f"{TP}range"), layer.get(f"{TP}min"), layer.get(f"{TP}max"), layer.get(f"{TP}unit")),
+                         ("-2 2", None, "1", "%"))
+        # Under the parts, which are only outlined over it.
+        names = [g.get(f"{INK}label") for g in root.findall(f"{SVG}g")]
+        self.assertLess(names.index("Fields"), names.index("clip"))
+        self.assertEqual(root.find(f".//{SVG}path[@id='clip-1']").get("fill"), None)
         tris = layer.findall(f"{SVG}path")
         self.assertEqual(len(tris), 480)
         # Each corner moved by its displacement, from where it was before.
@@ -155,6 +159,35 @@ class DrawingTest(unittest.TestCase):
         u = [float(v) for v in t.get(f"{TP}u").split()]
         for k in range(6):
             self.assertAlmostEqual(d[k], p[k] + u[k], places=3)
+
+
+    def test_points_notes_and_a_frame_s_own_annotations(self):
+        scene = GEOMETRY / "clip.step"
+        meta = V.read_meta(scene)
+        frames = V.frames(scene, meta)["frames"]
+
+        def drawn(k):
+            own = V.frame_meta(meta, frames[k])
+            return ET.fromstring(D.draw(S.read_step(frames[k]["step"]), None, own, "clip.step").tostring())
+
+        root = drawn(5)  # riding the bump
+        dims = {g.get("id") for g in root.findall(f".//{SVG}g[@{TP}dim]")}
+        self.assertEqual(dims, {"d-bump", "d-depth", "d-deflection"})
+        self.assertEqual(root.find(f".//{SVG}g[@id='d-depth']").get(f"{TP}label"), "s = 2.5")
+        notes = [t.text for t in root.findall(f".//{SVG}g[@{INK}label='Notes']/{SVG}text")]
+        self.assertEqual((notes[0], notes[-1]), ("Key", "s = 2.5 mm: riding the bump"))
+        # Points: dots a few pixels across, named in a tooltip; a curve dashed in its part's colour.
+        contact = root.find(f".//{SVG}path[@id='contact-c-points']")
+        self.assertEqual((contact.get("stroke-width"), contact.get("stroke-linecap"), contact.find(f"{SVG}title").text),
+                         ("7", "round", "contact C"))
+        handles = root.find(f".//{SVG}path[@id='centre-line-handles-points']")
+        self.assertEqual(len(re.findall("M", handles.get("d"))), 2)
+        curve = root.find(f".//{SVG}path[@id='centre-line-curve-curves']")
+        self.assertEqual(curve.get("stroke-dasharray"), "6 4")
+        self.assertIn(" C", curve.get("d"))  # the Bézier curve, as it is
+        root = drawn(0)  # not touching yet: no contact, nothing bent, not in
+        self.assertEqual({g.get("id") for g in root.findall(f".//{SVG}g[@{TP}dim]")}, {"d-bump"})
+        self.assertIsNone(root.find(f".//{SVG}path[@id='contact-c-points']"))
 
 
 class ViewsTest(unittest.TestCase):
@@ -182,7 +215,9 @@ class ViewsTest(unittest.TestCase):
         self.assertEqual(f["axes"], [{"name": "insertion", "unit": "mm"}])
         self.assertEqual(len(f["frames"]), 13)
         self.assertEqual(f["frames"][3]["step"], (GEOMETRY / ".clip" / "insertion=1.5.step").resolve())
-        self.assertEqual(f["quantities"][2], {"name": "strain", "unit": "%", "limit": 1.0})
+        self.assertEqual(f["quantities"][2], {"name": "strain", "unit": "%", "min": None, "max": 1.0})
+        self.assertEqual(f["quantities"][3], {"name": "pull-out force", "unit": "N", "min": 15.0, "max": None})
+        self.assertEqual(V.limits({"limit": 3}, "q"), (None, 3))  # as the first draft said max
         self.assertEqual(V.frames(scene, {}), {})
         bad = {"axes": [{"name": "a"}], "frames": [{"at": {"b": 1}, "step": "x.step"}]}
         with self.assertRaisesRegex(ValueError, "for each axis"):
@@ -190,6 +225,21 @@ class ViewsTest(unittest.TestCase):
         outside = {"axes": [{"name": "a"}], "frames": [{"at": {"a": 1}, "step": "../x.step"}]}
         with self.assertRaisesRegex(ValueError, "in the scene's folder"):
             V.frames(scene, outside)
+
+    def test_a_frame_gives_its_own(self):
+        meta = {"annotations": [{"id": "a"}], "notes": "key", "title": "T",
+                "views": [{"name": "s", "normal": [0, 0, 1], "annotations": [{"id": "b"}]},
+                          {"name": "t", "normal": [1, 0, 0]}]}
+        frame = {"meta": {"annotations": [{"id": "c"}], "views": [{"name": "s", "normal": [0, 1, 0]}]}}
+        own = V.frame_meta(meta, frame)
+        self.assertEqual((own["annotations"], own["notes"], own["title"]), ([{"id": "c"}], "key", "T"))
+        self.assertEqual([v["name"] for v in own["views"]], ["s", "t"])
+        self.assertEqual(V.view_spec(own, "s")["normal"], (0.0, 1.0, 0.0))  # the frame's, whole
+        self.assertEqual(V.view_spec(own, "s")["annotations"], [])
+        self.assertIs(V.frame_meta(meta, {"meta": {}}), meta)
+        self.assertEqual(V.notes("a\nb"), ["a", "b"])
+        with self.assertRaisesRegex(ValueError, "notes must be"):
+            V.notes(3)
 
     def test_fields(self):
         scene = GEOMETRY / "clip.step"

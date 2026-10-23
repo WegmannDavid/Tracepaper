@@ -7,12 +7,16 @@ A scene holds geometry only; how it looks is decided here, the same for every sc
 - A section draws what the plane cuts from each solid as regions, tinted in the part's
   colour and hatched, at an angle and spacing of its own so that parts side by side
   stay apart in greys, and outlined. Surfaces cut become lines in the part's colour.
+- Fields go under the parts, which are then only outlined, so that the outlines, curves
+  and points show over them.
 - A 2D scene draws its regions tinted and outlined.
 - A projection draws each part's visible edges, its smooth ones (where faces meet
   tangentially) lighter, and its hidden edges dashed, on a layer of their own,
   "Hidden lines", hidden at first.
-- Curves are reference geometry: thin and dashed.
-- Annotations go on the Dimensions and Constraints layers.
+- Curves are reference geometry: thin and dashed, in the part's colour. Points are too: dots
+  a few pixels across at any zoom, in the part's colour, named in a tooltip.
+- Annotations go on the Dimensions and Constraints layers, and the scene's and the view's
+  notes in a block under the drawing, on the Notes layer.
 
 The tree of the sheet is the scene's: a layer for each top node, a sublayer for each
 node below, leaving out parts the view doesn't show. Text and arrowheads are sized to
@@ -28,6 +32,7 @@ from typing import Optional
 from . import fields as F
 from . import scene as S
 from .sheet import SCREEN_WIDTH, TP_NS, Sheet, fmt
+from . import views as V
 from .views import view_spec
 
 PALETTE = ["#7aa6d6", "#e0a060", "#8cc07a", "#d98a8a", "#ab90d4", "#d4bd5c", "#6fbfb9", "#c995b5",
@@ -38,6 +43,7 @@ PART_STYLE = {"stroke": INK, "stroke-width": "1.5", "fill": "none", "stroke-line
 SMOOTH = {"stroke": "#7b8490", "stroke-width": "1"}
 CURVE = {"stroke": "#475569", "stroke-width": "1", "stroke-dasharray": "6 4", "fill": "none"}
 HIDDEN = {"stroke": "#6b7280", "stroke-width": "1", "stroke-dasharray": "5 3", "fill": "none"}
+DOT_PX = 7  # a point's dot, across, on screen
 TINT = 0.55  # of white mixed into a part's colour for its regions
 # Fields' colour map: viridis, which gets lighter from start to end, so it reads in greys too.
 VIRIDIS = ["#440154", "#472d7b", "#3b528b", "#2c728e", "#21918c", "#28ae80", "#5ec962", "#addc30", "#fde725"]
@@ -85,9 +91,11 @@ def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(),
     if spec is None:
         pl = scene.flat()
         kind, annotations, title = "2D", meta.get("annotations") or [], None
+        notes = V.notes(meta.get("notes"))
     else:
         pl = S.plane(spec["origin"], spec["normal"], spec["xdir"])
         kind, annotations, title = spec["kind"], spec.get("annotations") or [], spec["title"]
+        notes = V.notes(meta.get("notes")) + spec.get("notes", [])
     if spec is None:
         items = S.flat(scene, pl)
     elif kind == "section":
@@ -108,6 +116,10 @@ def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(),
     if box:
         sheet._grow([(box[0], box[1]), (box[2], box[3])])
 
+    # Fields on this view, worked out first: where there are any, they go under the parts, whose
+    # regions are then only outlined, so that the outlines, curves and points show over them.
+    shown_fields = [(f, F.triangles_on(F.read_vtu(f["path"]), pl, f["value"], f.get("displacement"))) for f in fields]
+    shown_fields = [(f, tris) for f, tris in shown_fields if tris]
     palette = colors(scene)
     hatch = fs * 0.6
     order = {p.key: i for i, p in enumerate(scene.parts())}
@@ -139,14 +151,19 @@ def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(),
             fill = sheet.hatch(45 if k % 2 == 0 else -45, hatch * (1 if k // 2 % 2 == 0 else 1.6))
             for i, face in enumerate(it.regions, 1):
                 d = S.region_d(face)
-                if isinstance(it, S.Cut):
+                if shown_fields:  # the field shows what's inside
+                    layer.path(f"{slug}-{'cut-' if isinstance(it, S.Cut) else ''}{i}", d, source=key)
+                elif isinstance(it, S.Cut):
                     layer.path(f"{slug}-tint-{i}", d, stroke="none", fill=_tint(color), fill_rule="evenodd")
                     layer.path(f"{slug}-cut-{i}", d, fill=fill, fill_rule="evenodd", source=key)
                 else:
                     layer.path(f"{slug}-{i}", d, fill=_tint(color), fill_rule="evenodd", source=key)
-            if it.curves:
-                style = {"stroke": color} if isinstance(it, S.Cut) else CURVE
+            if it.curves:  # a surface cut, in the part's colour; a 2D scene's curves, dashed too
+                style = {"stroke": color} if isinstance(it, S.Cut) else {**CURVE, "stroke": color}
                 layer.path(f"{slug}-curves", S.curves_d(it.curves), source=key, **_kw(style))
+        elif not S.has_faces(it.node.shape):  # a projection of curves: reference geometry
+            if it.visible or it.hidden:
+                layer.path(f"{slug}-curves", S.curves_d(it.visible + it.hidden), source=key, **_kw({**CURVE, "stroke": color}))
         else:  # a projection
             if it.visible:
                 layer.path(f"{slug}-edges", S.curves_d(it.visible), source=key)
@@ -154,6 +171,11 @@ def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(),
                 layer.path(f"{slug}-smooth", S.curves_d(it.smooth), source=key, **_kw(SMOOTH))
             if it.hidden:
                 hidden_layer(it.node).path(f"{slug}-hidden", S.curves_d(it.hidden), source=key)
+        if it.points:  # dots: a line of no length, drawn with round ends
+            dots = layer.path(f"{slug}-points", " ".join(f"M{fmt(x)} {fmt(y)} L{fmt(x)} {fmt(y)}" for x, y in it.points),
+                              source=key, stroke=color, stroke_width=str(DOT_PX), stroke_linecap="round", fill="none")
+            ET.SubElement(dots, "{http://www.w3.org/2000/svg}title").text = it.node.name
+            sheet._grow(it.points)
 
     def add(node, parent):
         if not shown(node):
@@ -171,29 +193,45 @@ def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(),
     if hidden_root.get(""):  # drawn last would cover the parts: keep it under them
         sheet.layers.remove(hidden_root[""])
         sheet.layers.insert(0, hidden_root[""])
-    _fields(sheet, fields, pl, ranges or {})
+    _fields(sheet, shown_fields, ranges or {})
     if not items:
-        notes = _role(sheet.layer("Notes"), "annotations")
-        notes.text("nothing-here", (0, 0), "The plane misses the scene.")
+        notes = ["The plane misses the scene."] + notes
     _annotate(sheet, annotations)
+    _notes(sheet, notes)
     return sheet
 
 
-def _fields(sheet: Sheet, fields, pl, ranges: dict) -> None:
-    """Each field on a layer of its own under Fields: its triangles in the sheet's plane, each
-    coloured by the mean of its corners' values and carrying them (tp:v), to be recoloured,
-    cut at a level or traced along isolines by the page, and where the field moves the mesh,
-    each corner's displacement (tp:u) and place before it (tp:p), drawn moved by it."""
+def _notes(sheet: Sheet, lines: list) -> None:
+    """Notes as a block of text under the drawing, its lines as given."""
+    if not lines:
+        return
+    layer = _role(sheet.layer("Notes"), "annotations")
+    fs = sheet.font_size
+    x0, y0 = (sheet._lo if sheet._lo[0] <= sheet._hi[0] else (0, 0))
+    for i, line in enumerate(lines, 1):
+        if line.strip():
+            layer.text(f"note-{i}", (x0, y0 - 1.5 * fs - 1.4 * fs * i), line)
+
+
+def _fields(sheet: Sheet, fields, ranges: dict) -> None:
+    """Each field on a layer of its own under Fields, under the parts: fields as [(field, its
+    triangles in the sheet's plane)], each triangle coloured by the mean of its corners' values
+    and carrying them (tp:v), to be recoloured, cut at a level or traced along isolines by the
+    page, and where the field moves the mesh, each corner's displacement (tp:u) and place
+    before it (tp:p), drawn moved by it."""
     if not fields:
         return
     layer = _role(sheet.layer("Fields", style={"stroke": "none", "fill": "none"}), "fields")
-    for f in fields:
-        tris = F.triangles_on(F.read_vtu(f["path"]), pl, f["value"], f.get("displacement"))
+    sheet.layers.remove(layer)  # under the parts, over the hidden lines
+    under = 1 if sheet.layers and sheet.layers[0].element.get(f"{{{TP_NS}}}role") == "hidden-lines" else 0
+    sheet.layers.insert(under, layer)
+    for f, tris in fields:
         values = [v for _, vals, _ in tris for v in vals]
         lo, hi = ranges.get(f["name"]) or ((min(values), max(values)) if values else (0, 1))
         sub = layer.sublayer(f["name"])
-        for k, v in (("field", f["name"]), ("unit", f.get("unit") or None), ("min", fmt(lo)), ("max", fmt(hi)),
-                     ("limit", None if f.get("limit") is None else fmt(float(f["limit"])))):
+        for k, v in (("field", f["name"]), ("unit", f.get("unit") or None), ("range", f"{fmt(lo)} {fmt(hi)}"),
+                     ("min", None if f.get("min") is None else fmt(float(f["min"]))),
+                     ("max", None if f.get("max") is None else fmt(float(f["max"])))):
             if v is not None:
                 sub.element.set(f"{{{TP_NS}}}{k}", v)
         span = (hi - lo) or 1

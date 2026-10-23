@@ -29,6 +29,7 @@ def render(target: str, frame: Optional[int] = None, out: Optional[Path] = None)
             raise ValueError(f"{path.name} has {len(framed)} frames; there is no frame {frame}")
         entry = framed[frame] if frame is not None else None
         scene = S.read_step(entry["step"] if entry else path)
+        meta = scenes.frame_meta(meta, entry)  # with the frame's own annotations
         if view is None and scene.flat() is None:
             view = "iso"
         spec = scenes.view_spec(meta, view) if view is not None else None

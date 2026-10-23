@@ -218,13 +218,13 @@ class Scenes:
                 colors = {k: D.rgb(c) for k, c in D.colors(sc).items()}
                 data = S.glb(sc, colors, hidden)
             else:
-                spec = None
+                spec, own = None, scenes.frame_meta(meta, entry)  # with the frame's own annotations
                 if view.view is not None:
-                    spec = scenes.view_spec(meta, view.view)
+                    spec = scenes.view_spec(own, view.view)
                     if spec is None:
                         raise ValueError(f"{view.path.name} has no view {view.view!r}")
                 fields = scenes.fields(view.path, meta, entry)
-                sheet = D.draw(sc, spec, meta, view.name, hidden=hidden, fields=fields,
+                sheet = D.draw(sc, spec, own, view.name, hidden=hidden, fields=fields,
                                ranges=self._ranges(view, meta, framed))
                 if at is not None:
                     sheet.view["frame"] = scenes.frame_label(at)
@@ -248,8 +248,7 @@ class Scenes:
                     mesh = F.read_vtu(f["path"])
                 except ValueError:
                     continue
-                values = mesh.data.get(f["value"]) or []
-                values = [sum(c * c for c in v) ** 0.5 if isinstance(v, tuple) else v for v in values]
+                values = F.values_of(mesh, f["value"])
                 if values:
                     lo, hi = out.get(f["name"], (min(values), max(values)))
                     out[f["name"]] = (min(lo, *values), max(hi, *values))

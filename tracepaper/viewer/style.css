@@ -380,3 +380,12 @@ main.tpv-project { display: block; overflow: auto; }
 .tpv-field-range input[data-end="hi"] { text-align: right; }
 .tpv-field-scale { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .tpv-field-scale input { flex: 1; min-width: 0; }
+.tpv-frame-against { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.tpv-frame-against select { flex: 1; min-width: 0; font: inherit; }
+
+/* Measuring (measure.js): where the pointer snaps, and what is measured. */
+.tpv-snap { fill: none; stroke: #0f766e; stroke-width: 1.5; pointer-events: none; }
+.tpv-measure { pointer-events: none; }
+.tpv-measure-line { fill: none; stroke: #0f766e; stroke-width: 1.5; stroke-dasharray: 5 3; }
+.tpv-measure-dot { stroke: #0f766e; stroke-width: 6; stroke-linecap: round; }
+.tpv-measure text { fill: #0f766e; stroke: #fff; stroke-width: 3; paint-order: stroke; font-weight: 600; }

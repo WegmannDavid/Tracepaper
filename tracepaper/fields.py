@@ -2,7 +2,7 @@
 
 A field is what a FEM solver or any other calculation gives: a scalar (a strain) or a
 vector (a displacement) at each node of a mesh of triangles or tetrahedra, linear across
-each element. read_vtu reads one; triangles_on gives the triangles a sheet draws, with
+each element, or one value for each element, the same all across it. read_vtu reads one; triangles_on gives the triangles a sheet draws, with
 the values at their corners, in the sheet's coordinates: the mesh's own triangles where
 they lie in the sheet's plane, and where a plane cuts tetrahedra, the cut, exact for a
 field linear across them. Standard library only.
@@ -27,12 +27,16 @@ IN_PLANE = 1e-6  # mm: how close a triangle's corners must be to a plane to lie 
 
 @dataclass
 class Mesh:
-    """A .vtu file's points ([(x, y, z)]), its triangles and tetrahedra (corner indices), and
-    its point data by name (a list of floats, or of tuples for vectors)."""
+    """A .vtu file's points ([(x, y, z)]), its triangles and tetrahedra (corner indices), its
+    point data by name (a list of floats, or of tuples for vectors), and its cell data by name,
+    as cells, the index of the cell each triangle and tetrahedron is of."""
     points: list
     triangles: list
     tetrahedra: list
     data: dict
+    cell_data: dict = None
+    triangle_cells: list = None
+    tetrahedron_cells: list = None
 
 
 def _decode(el: ET.Element, appended: bytes, header: str, compressed: bool) -> list:
@@ -97,8 +101,8 @@ def read_vtu(path) -> Mesh:
     conn = _decode(array("Cells", "connectivity"), appended, header, compressed)
     offsets = _decode(array("Cells", "offsets"), appended, header, compressed)
     types = _decode(array("Cells", "types"), appended, header, compressed)
-    triangles, tetrahedra, start = [], [], 0
-    for end, kind in zip(offsets, types):
+    triangles, tetrahedra, tri_cells, tet_cells, start = [], [], [], [], 0
+    for cell, (end, kind) in enumerate(zip(offsets, types)):
         nodes = conn[start:end]
         start = end
         corners = CORNERS.get(kind)
@@ -107,16 +111,34 @@ def read_vtu(path) -> Mesh:
         nodes = nodes[:corners]
         if kind in (TRIANGLE, QUADRATIC_TRIANGLE):
             triangles.append(tuple(nodes))
+            tri_cells.append(cell)
         elif kind == QUAD:
             triangles += [(nodes[0], nodes[1], nodes[2]), (nodes[0], nodes[2], nodes[3])]
+            tri_cells += [cell, cell]
         else:
             tetrahedra.append(tuple(nodes))
-    data = {}
-    for el in piece.findall("PointData/DataArray"):
-        values = _decode(el, appended, header, compressed)
-        n = int(el.get("NumberOfComponents", "1"))
-        data[el.get("Name")] = values if n == 1 else [tuple(values[i:i + n]) for i in range(0, len(values), n)]
-    return Mesh(points, triangles, tetrahedra, data)
+            tet_cells.append(cell)
+
+    def arrays(where: str) -> dict:
+        out = {}
+        for el in piece.findall(f"{where}/DataArray"):
+            values = _decode(el, appended, header, compressed)
+            n = int(el.get("NumberOfComponents", "1"))
+            out[el.get("Name")] = values if n == 1 else [tuple(values[i:i + n]) for i in range(0, len(values), n)]
+        return out
+
+    return Mesh(points, triangles, tetrahedra, arrays("PointData"), arrays("CellData"), tri_cells, tet_cells)
+
+
+def _magnitudes(values: list) -> list:
+    return [sum(c * c for c in v) ** 0.5 for v in values] if values and isinstance(values[0], tuple) else values
+
+
+def values_of(mesh: Mesh, value: str) -> list:
+    """All the values of a field's point or cell data, vectors as their lengths."""
+    if value in mesh.data:
+        return _magnitudes(mesh.data[value])
+    return _magnitudes((mesh.cell_data or {}).get(value) or [])
 
 
 def _sub(a, b):
@@ -132,11 +154,12 @@ def triangles_on(mesh: Mesh, pl, value: str, vector: str = None) -> list:
     corners, (a, b, c) values, (u, v) displacements or None)] in the plane's coordinates,
     displacements from the vector field of that name, in the plane too. The mesh's
     triangles lying in the plane, and the cut through its tetrahedra."""
-    if value not in mesh.data:
-        raise ValueError(f"the field file has no point data {value!r}; it has: {', '.join(mesh.data) or 'none'}")
-    vals = mesh.data[value]
-    if vals and isinstance(vals[0], tuple):  # a vector: its length
-        vals = [sum(c * c for c in v) ** 0.5 for v in vals]
+    cells = (mesh.cell_data or {}).get(value) if value not in mesh.data else None
+    if value not in mesh.data and cells is None:
+        names = [*mesh.data, *(mesh.cell_data or {})]
+        raise ValueError(f"the field file has no point or cell data {value!r}; it has: {', '.join(names) or 'none'}")
+    vals = _magnitudes(mesh.data[value]) if cells is None else None  # a vector: its length
+    cells = _magnitudes(cells) if cells is not None else None
     disp = mesh.data.get(vector) if vector else None
     if vector and disp is None:
         raise ValueError(f"the field file has no point data {vector!r}")
@@ -151,18 +174,19 @@ def triangles_on(mesh: Mesh, pl, value: str, vector: str = None) -> list:
         return (_dot(v, x), _dot(v, y)) if v is not None else None
 
     out = []
-    for tri in mesh.triangles:
+    for k, tri in enumerate(mesh.triangles):
         if all(abs(dist[i]) <= IN_PLANE for i in tri):
-            out.append((tuple(flat(mesh.points[i]) for i in tri), tuple(vals[i] for i in tri),
+            v = tuple(vals[i] for i in tri) if cells is None else (cells[mesh.triangle_cells[k]],) * 3
+            out.append((tuple(flat(mesh.points[i]) for i in tri), v,
                         tuple(along(disp[i]) for i in tri) if disp else None))
-    for tet in mesh.tetrahedra:
+    for k, tet in enumerate(mesh.tetrahedra):
         cut = []
         for a, b in ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)):
             i, j = tet[a], tet[b]
             if (dist[i] < 0) != (dist[j] < 0):
                 t = dist[i] / (dist[i] - dist[j])
                 p = tuple(pi + t * (pj - pi) for pi, pj in zip(mesh.points[i], mesh.points[j]))
-                v = vals[i] + t * (vals[j] - vals[i])
+                v = vals[i] + t * (vals[j] - vals[i]) if cells is None else cells[mesh.tetrahedron_cells[k]]
                 u = tuple(di + t * (dj - di) for di, dj in zip(disp[i], disp[j])) if disp else None
                 cut.append((flat(p), v, along(u)))
         if len(cut) == 4:  # a quadrilateral: its corners in order round it, then two triangles
