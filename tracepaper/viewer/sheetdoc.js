@@ -1,4 +1,4 @@
-// A sheet as an SVG document (SPEC.md §2): its tree of named groups and which are hidden,
+// A sheet as an SVG document (SPEC-v0.md §2): its tree of named groups and which are hidden,
 // its ink layer, sizes, and the colours things on it are drawn in.
 import { fmt } from './annotations.js';
 import { flatten } from './tree.js';
@@ -12,7 +12,7 @@ export const isLayer = (n) => n.namespaceURI === SVG_NS && n.localName === 'g' &
 export const layersOf = (parent) => [...parent.children].filter(isLayer); // its top-level layers
 export const labelOf = (g) => g.getAttributeNS(INK_NS, 'label') || g.id || 'Layer';
 
-// The nodes of the tree (SPEC.md §2.4): groups with a name. Top-level ones are layers.
+// The nodes of the tree (SPEC-v0.md §2.4): groups with a name. Top-level ones are layers.
 export const isNode = (n) => isLayer(n) || (n.namespaceURI === SVG_NS && n.localName === 'g' && n.hasAttributeNS(INK_NS, 'label'));
 const NOT_DRAWN = new Set(['defs', 'metadata', 'pattern', 'clipPath', 'mask', 'marker', 'symbol', 'style', 'script']);
 
@@ -72,7 +72,7 @@ export function setHidden(g, hidden) {
   if (isHidden(g) !== hidden) g.setAttribute('visibility', hidden ? 'hidden' : 'visible');
 }
 
-// Nodes that start hidden (display="none", SPEC.md §2.4) hidden by visibility instead, which
+// Nodes that start hidden (display="none", SPEC-v0.md §2.4) hidden by visibility instead, which
 // the nodes inside them can override.
 export function hideByVisibility(root) {
   for (const g of allNodes(root)) {

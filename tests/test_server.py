@@ -1,5 +1,6 @@
 import http.client
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -144,3 +145,90 @@ class ServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+GEOMETRY = Path(__file__).resolve().parent / "geometry"
+try:
+    import OCP  # noqa: F401
+    HAVE_OCP = True
+except ImportError:
+    HAVE_OCP = False
+
+
+class SceneServerTest(unittest.TestCase):
+    """Scenes (STEP files) and the views of them: copies of tests/geometry's."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        for name in ("bracket.step", "bracket.tp.json", "profile.step", "clip.step", "clip.tp.json"):
+            (self.dir / name).write_bytes((GEOMETRY / name).read_bytes())
+        (self.dir / ".clip").mkdir()
+        for f in (GEOMETRY / ".clip").iterdir():
+            (self.dir / ".clip" / f.name).write_bytes(f.read_bytes())
+        self.server = make_server(self.dir, 0)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.tmp.cleanup()
+
+    request = ServerTest.request
+    put_sketch = ServerTest.put_sketch
+
+    def listing(self):
+        return [(v["name"], v["kind"]) for v in json.loads(self.request("GET", "/api/views")[1])["views"]]
+
+    def test_listing(self):
+        # A 3D scene, its named views as sheets; a 2D scene as a sheet; frames' files not at all.
+        self.assertEqual(self.listing(), [("bracket.step", "model"), ("bracket.step#section-a", "sheet"),
+                                          ("bracket.step#top", "sheet"), ("clip.step", "sheet"),
+                                          ("profile.step", "sheet")])
+        self.assertEqual(view_of_sketch("bracket.step#x=20.sketch.svg"), "bracket.step#x=20")
+        self.assertEqual(view_of_sketch("bracket.step.sketch.svg"), "bracket.step")
+
+    def test_views_change_with_their_json(self):
+        before = {v["name"]: v["mtime"] for v in json.loads(self.request("GET", "/api/views")[1])["views"]}
+        meta = self.dir / "bracket.tp.json"
+        meta.write_text(meta.read_text())
+        os.utime(meta, ns=(int(before["bracket.step"]) + 10 ** 9,) * 2)
+        after = {v["name"]: v["mtime"] for v in json.loads(self.request("GET", "/api/views")[1])["views"]}
+        self.assertNotEqual(before["bracket.step#section-a"], after["bracket.step#section-a"])
+        self.assertEqual(before["profile.step"], after["profile.step"])
+
+    @unittest.skipUnless(HAVE_OCP, "needs OCP")
+    def test_files(self):
+        status, data = self.request("GET", "/api/file/bracket.step")
+        self.assertEqual((status, data[:4]), (200, b"glTF"))
+        for name in ("bracket.step%23section-a", "bracket.step%23x%3D20", "bracket.step%23front", "profile.step"):
+            with self.subTest(name=name):
+                status, data = self.request("GET", f"/api/file/{name}")
+                self.assertEqual(status, 200)
+                self.assertIn(b"urn:tracepaper:0", data)
+        self.assertEqual(self.request("GET", "/view/bracket.step%23x%3D20")[0], 200)  # drawn on the fly
+        self.assertEqual(self.request("GET", "/api/file/bracket.step%23sideways")[0], 404)
+        self.assertEqual(self.request("GET", "/api/file/profile.step%23..%2F..%2Fetc")[0], 404)
+
+    @unittest.skipUnless(HAVE_OCP, "needs OCP")
+    def test_frames(self):
+        status, data = self.request("GET", "/api/frames/clip.step")
+        info = json.loads(data)
+        self.assertEqual((status, len(info["frames"])), (200, 13))
+        self.assertEqual(info["frames"][5]["at"], {"insertion": 2.5})
+        self.assertNotIn("step", info["frames"][5])  # where the files are is the server's business
+        status, data = self.request("GET", "/api/file/clip.step?frame=5")
+        self.assertEqual(status, 200)
+        self.assertIn(b'frame="insertion=2.5"', data)
+        self.assertIn(b'tp:field="strain"', data)
+        self.assertEqual(self.request("GET", "/api/file/clip.step?frame=13")[0], 422)
+        self.assertEqual(json.loads(self.request("GET", "/api/frames/bracket.step")[1]), {})
+
+    def test_sketch_of_a_view_drawn_on_the_fly(self):
+        sheet = SHEET
+        self.assertEqual(self.put_sketch("bracket.step%23x%3D20", sheet)[0], 200)
+        self.assertEqual((self.dir / "bracket.step#x=20.sketch.svg").read_text(), sheet)
+        # Now listed, so the project page says a sketch waits there.
+        self.assertIn(("bracket.step#x=20", "sheet"), self.listing())
+        self.assertEqual(self.put_sketch("bracket.step%23nowhere", sheet)[0], 404)

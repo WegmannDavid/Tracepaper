@@ -24,6 +24,8 @@
     <button id="tpv-edges" aria-pressed="true" title="Show the edges (E)">Edges</button>
     <button id="tpv-transparent" aria-pressed="false" title="See through every face (T)">Transparent</button>
     <button id="tpv-perspective" aria-pressed="false">Perspective</button>
+    <button id="tpv-drawing" hidden
+            title="The exact drawing of this view, in a window of its own: the section through the slice plane that is on, or the scene from this standard direction (D)">Drawing</button>
   </div>
   <div class="tpv-group">
     <button id="tpv-sketch" aria-pressed="false"
@@ -59,6 +61,8 @@
     <ul id="tpv-layers"></ul>
     <h2 class="tpv-section">Slice</h2>
     <div id="tpv-slices"></div>
+    <h2 class="tpv-section" id="tpv-frames-head" hidden>Frames</h2>
+    <div id="tpv-frames" class="tpv-frames"></div>
   </aside>
 </main>
 <script type="module" src="/viewer/model.js"></script>

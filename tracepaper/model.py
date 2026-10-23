@@ -1,4 +1,4 @@
-"""Write Tracepaper models (SPEC.md §2.8): 3D views as .glb files.
+"""Write Tracepaper models (SPEC-v0.md §2.8): 3D views as .glb files.
 
     import tracepaper.model
     tracepaper.model.export(assembly, "views/window.glb", hidden=["Glass", "Steel / Z profile"])

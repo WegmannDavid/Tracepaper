@@ -243,7 +243,7 @@ def _box(x0: float, y0: float, z0: float, x1: float, y1: float, z1: float) -> tu
 
 
 def _faces(positions: array, indices: array) -> list:
-    """The mesh split into faces, [(positions, indices)], as a CAD model is (SPEC.md §2.8):
+    """The mesh split into faces, [(positions, indices)], as a CAD model is (SPEC-v0.md §2.8):
     triangles that meet at a fold sharper than the 3D view's EDGE_ANGLE are on different
     faces. The 3D view draws the edges between faces, and those of a face where it is in
     front, so a mesh as one face would show its hidden edges through itself."""

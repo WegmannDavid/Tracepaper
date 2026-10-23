@@ -9,6 +9,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { TP_NS, fmt } from './annotations.js';
 import { CadControls } from './controls.js';
 import { Edges } from './edges.js';
+import { FramePanel } from './frames.js';
 import { INK_COLORS, Ink, PenInput, coalesced, swatch } from './ink.js';
 import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import { ScreenFeed, Tablet } from './pen.js';
@@ -35,7 +36,8 @@ const ui = {
   penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), fit: $('tpv-fit'), tree: $('tpv-layers'),
   bar: $('tpv-bar'), ink: $('tpv-ink'), inkLayer: $('tp-sketch'), sketch: $('tpv-sketch'), swatches: $('tpv-swatches'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), save: $('tpv-save'), hint: $('tpv-hint'),
-  transparent: $('tpv-transparent'), perspective: $('tpv-perspective'),
+  transparent: $('tpv-transparent'), perspective: $('tpv-perspective'), drawing: $('tpv-drawing'),
+  frames: $('tpv-frames'), framesHead: $('tpv-frames-head'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
 const toast = toaster(ui.toast);
@@ -232,7 +234,7 @@ function prepare(gltf) {
   return prepared;
 }
 
-// The tree of the model's named glTF nodes (SPEC.md §2.8). Faces and unnamed nodes don't
+// The tree of the model's named glTF nodes (SPEC-v0.md §2.8). Faces and unnamed nodes don't
 // count; a single top node (the assembly itself) is left out, so its parts are the top level.
 function buildTree(gltf) {
   const json = gltf.parser.json.nodes ?? [];
@@ -414,10 +416,64 @@ function dispose(root) {
   });
 }
 
-async function load(mtime) {
-  const r = await fetch(`/api/file/${encodeURIComponent(viewName)}`, { cache: 'no-store' });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-  const gltf = await new GLTFLoader().parseAsync(await r.arrayBuffer(), '');
+// ---- A scene's frames (SPEC.md §2.10): each one's model, fetched once for each version of
+// the scene, all of them after the first, so that stepping through them is quick.
+
+const frames = new FramePanel({ container: ui.frames, onFrame: () => showFrame() });
+const frameData = { for: null, buffers: new Map(), wanted: false, busy: false };
+
+function frameBuffer(k) {
+  if (!frameData.buffers.has(k)) {
+    const data = fetchOk(`/api/file/${encodeURIComponent(viewName)}?frame=${k}`).then((r) => r.arrayBuffer());
+    frameData.buffers.set(k, data);
+    data.catch(() => frameData.buffers.delete(k));
+  }
+  return frameData.buffers.get(k);
+}
+
+async function loadFrames(mtime) {
+  if (frameData.for === mtime) return;
+  Object.assign(frameData, { for: mtime, buffers: new Map() });
+  let info = {};
+  if (isScene) {
+    try { info = await (await fetchOk(`/api/frames/${encodeURIComponent(viewName)}`)).json(); } catch (err) { toast(err.message, true); }
+  }
+  frames.set(info);
+  ui.framesHead.hidden = !frames.on;
+  if (!frames.on) return;
+  (async () => {
+    for (let k = 0; k < info.frames.length && frameData.for === mtime; k++) {
+      try { await frameBuffer(k); } catch { /* fetched again when shown */ }
+    }
+  })();
+}
+
+async function showFrame() {
+  if (frameData.busy) { frameData.wanted = true; return; }
+  frameData.busy = true;
+  try {
+    do {
+      frameData.wanted = false;
+      if (frames.index >= 0) await load(state.mtime, { quiet: true });
+    } while (frameData.wanted);
+  } catch (err) {
+    setStatus(`Could not load ${viewName}: ${err.message}`, true);
+  } finally {
+    frameData.busy = false;
+  }
+}
+
+// quiet: another frame, which says nothing.
+async function load(mtime, { quiet = false } = {}) {
+  await loadFrames(mtime);
+  let data;
+  if (frames.on) data = await frameBuffer(Math.max(0, frames.index));
+  else {
+    const r = await fetch(`/api/file/${encodeURIComponent(viewName)}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    data = await r.arrayBuffer();
+  }
+  const gltf = await new GLTFLoader().parseAsync(data.slice(0), '');
   const parts = prepare(gltf);
   const box = new THREE.Box3();
   gltf.scene.updateMatrixWorld(true);
@@ -440,7 +496,7 @@ async function load(mtime) {
   ui.empty.hidden = true;
   if (first) frame(LOOKS.iso);
   else render();
-  setStatus(`Updated ${new Date().toLocaleTimeString()}`);
+  if (!quiet) setStatus(`Updated ${new Date().toLocaleTimeString()}`);
   if (first) resolveReady();
 }
 
@@ -590,7 +646,9 @@ function setColor(i) {
 
 function beginStroke(clientX, clientY) {
   if (state.perspective) setPerspective(false); // the tablet's pen, which draws whatever the mouse does
-  return ink.begin(clientX, clientY, state.color);
+  const s = ink.begin(clientX, clientY, state.color);
+  if (frames.label) s.path.setAttributeNS(TP_NS, 'tp:frame', frames.label); // the frame it was drawn on
+  return s;
 }
 
 function undo() {
@@ -680,7 +738,7 @@ function sketchDocument() {
     title: `${name}, ${lookName(back)}`, kind: 'model view',
     origin: vector(back.clone().multiplyScalar(inkPlanePoint(back).dot(back))), normal: vector(back), xdir: vector(right),
     area: [a.x0, a.y0, a.x1, a.y1].map((v) => fmt(v)).join(' '), hidden: hidden.length ? hidden.join('; ') : null,
-    shown: shown.length ? shown.join('; ') : null, slices: describeSlices(),
+    shown: shown.length ? shown.join('; ') : null, slices: describeSlices(), frame: frames.label,
     transparent: state.transparent ? 'true' : null,
   });
   const layer = (id, label) => add(svg, 'g', { id, 'inkscape:groupmode': 'layer', 'inkscape:label': label, transform: 'scale(1,-1)' });
@@ -747,6 +805,37 @@ async function reopenSketch() {
   updateStatus();
 }
 
+// ---- Exact drawings of a scene (SPEC.md §5)
+// A scene (.step) is drawn exactly by the server, as a sheet in a window of its own: the
+// section through the one slice plane that is on, or the scene seen from the standard
+// direction the view looks from, with its hidden lines.
+
+const isScene = /\.(step|stp)$/i.test(viewName);
+const DIRECTIONS = { front: [0, -1, 0], back: [0, 1, 0], right: [1, 0, 0], left: [-1, 0, 0], top: [0, 0, 1],
+                     bottom: [0, 0, -1], iso: [1, -1, 1] };
+
+// The scene's view that draws what this one shows ("x=12.5", "front"), or null if none does.
+function drawingView() {
+  const on = slices.planes.filter((p) => p.on);
+  if (on.length === 1) return `${on[0].axis}=${fmt(on[0].at, 3)}`;
+  if (on.length) return null;
+  const back = fromScene(viewAxes().back);
+  return Object.keys(DIRECTIONS).find((k) => {
+    const d = DIRECTIONS[k], n = Math.hypot(...d);
+    return d.every((c, i) => Math.abs(c / n - back[i]) < 1e-4);
+  }) ?? null;
+}
+
+function openDrawing() {
+  const view = drawingView();
+  if (!view) {
+    toast('Slice with one plane, or look from a standard direction (0, 1, 3, 7), for a drawing');
+    return;
+  }
+  const name = `${viewName}#${view}`;
+  window.open(viewUrl(name), `tracepaper:${name}`, 'popup,width=1280,height=860');
+}
+
 // ---- Tablet pen
 // The toolbar's button connects the reMarkable (tracepaper/pen.py) and lets it go. Its pen
 // draws and erases over the view (ink.js's PenInput). The tablet's screen shows no
@@ -788,6 +877,8 @@ ui.fit.addEventListener('click', () => frame(null));
 ui.edges.addEventListener('click', () => showEdges(!edges?.shown));
 ui.transparent.addEventListener('click', () => setTransparent(!state.transparent));
 ui.perspective.addEventListener('click', () => setPerspective(!state.perspective));
+ui.drawing.hidden = !isScene;
+ui.drawing.addEventListener('click', openDrawing);
 buildSliceControls();
 INK_COLORS.forEach((_, i) => {
   const b = swatch(i, false); // the number keys look from the standard directions here
@@ -822,12 +913,14 @@ window.addEventListener('keydown', (e) => {
   if (mod && key === 's') { e.preventDefault(); save(); return; }
   if (mod && key === 'z') { e.preventDefault(); undo(); return; }
   if (mod || e.altKey) return;
+  if (frames.key(e)) return;
   const look = { 0: 'iso', 7: 'top', 1: 'front', 3: 'right' }[e.key];
   if (look) frame(LOOKS[look]);
   else if (key === 'f') frame(null);
   else if (key === 'e') showEdges(!edges?.shown);
   else if (key === 't') setTransparent(!state.transparent);
   else if (key === 'o' && !state.drawing && ink.empty) setPerspective(!state.perspective);
+  else if (key === 'd' && isScene) openDrawing();
   else if (key === 'p') setDrawing(!state.drawing);
   else if (key === 'escape') setDrawing(false);
 });
@@ -844,4 +937,5 @@ tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten,
-  showEdges, setTransparent, setPerspective, viewCamera, slices, ink, pen, save, undo, setDrawing, viewArea };
+  showEdges, setTransparent, setPerspective, viewCamera, slices, ink, pen, save, undo, setDrawing, viewArea,
+  drawingView, frames };

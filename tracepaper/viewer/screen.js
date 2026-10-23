@@ -14,7 +14,7 @@ export async function renderView({ sheet, cam, stage, size, pixels, font }) {
   sheet.setAttribute('overflow', 'visible');
   const svg = `<svg xmlns="${SVG_NS}" width="${a.width * k}" height="${a.height * k}" `
     + `viewBox="0 0 ${stage.width} ${stage.height}" font-family="${font.replaceAll('"', "'")}">`
-    + '<style>* { vector-effect: non-scaling-stroke; }</style>' // as in the window: lines in pixels (SPEC.md §2.1)
+    + '<style>* { vector-effect: non-scaling-stroke; }</style>' // as in the window: lines in pixels (SPEC-v0.md §2.1)
     + `<g transform="translate(${cam.x} ${cam.y}) scale(${cam.s})">${new XMLSerializer().serializeToString(sheet)}</g></svg>`;
   const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
   try {

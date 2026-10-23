@@ -1,0 +1,28 @@
+{
+  "title": "Bracket",
+  "source": "tests/geometry/make.py",
+  "pipeline": "CadQuery",
+  "regenerate": "python3 tests/geometry/make.py bracket",
+  "views": [
+    {
+      "name": "section-a",
+      "title": "section A-A",
+      "kind": "section",
+      "origin": [0, 15, 0],
+      "normal": [0, -1, 0],
+      "xdir": [1, 0, 0],
+      "annotations": [
+        {"id": "d-length", "dim": "linear", "p1": [0, 0], "p2": [60, 0], "dir": "x", "offset": -16, "value": 60, "source": "LENGTH"},
+        {"id": "d-hole-x", "dim": "linear", "p1": [0, 0], "p2": [40, 0], "dir": "x", "offset": -9, "value": 40, "source": "HOLE_X"},
+        {"id": "d-height", "dim": "linear", "p1": [0, 0], "p2": [0, 40], "dir": "y", "offset": 9, "value": 40, "source": "HEIGHT"},
+        {"id": "d-base-t", "dim": "linear", "p1": [60, 0], "p2": [60, 5], "dir": "y", "offset": -7, "value": 5, "source": "T"},
+        {"id": "d-hole", "dim": "linear", "p1": [37, 5], "p2": [43, 5], "dir": "x", "offset": 5, "label": "⌀6", "type": "diameter", "value": 6, "source": "HOLE_D"},
+        {"id": "d-fillet", "dim": "radius", "center": [8, 8], "r": 3, "angle": 225, "offset": -13, "source": "FILLET"},
+        {"id": "d-flange-len", "dim": "linear", "p1": [0, 40], "p2": [37, 40], "dir": "x", "offset": 7, "value": "HOLE_X - HOLE_D / 2", "source": "FLANGE_END"},
+        {"id": "d-corner", "dim": "angular", "center": [5, 5], "p1": [60, 5], "p2": [5, 35], "offset": 14},
+        {"id": "c-square", "anchor": [0, 0], "label": "⊥", "offset": [-4, -4], "type": "perpendicular"}
+      ]
+    },
+    {"name": "top", "title": "from above", "kind": "projection", "normal": [0, 0, 1], "xdir": [1, 0, 0]}
+  ]
+}

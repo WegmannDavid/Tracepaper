@@ -4,27 +4,33 @@ A visual aid for working on CAD geometry with an AI.
 
 The AI's build writes **views** of the model into its build folder, such as `build/`, among its other output:
 
-- **Sheets:** plain, layered SVG files showing geometry, dimensions (lengths, radii, diameters and angles) and the constraints worth seeing. In the viewer you toggle layers, drag labels out of the way and sketch roughly what you want changed. Lines stay the same few pixels wide at any zoom. Press Save, then tell the AI what you drew. It finds `<sheet>.sketch.svg` next to the sheet, makes the change in the real CAD pipeline and rebuilds, and the viewer reloads.
-- **Models:** 3D `.glb` files, such as a CadQuery assembly's export. The viewer shows them so you can look at the build's result, with no debugger needed, and you can slice them and sketch over them as on sheets.
+- **Scenes:** the model's geometry, exact, as STEP files: solids, regions and curves in a tree of named parts, and nothing about how they look. Beside each, a small `.tp.json` holds what STEP can't: dimensions (lengths, radii, diameters and angles), named sections and projections, frames and fields. The viewer shows a scene in 3D, and draws exact 2D drawings of it: sections through any plane, cut with OpenCascade, and projections with hidden lines. Circles stay circles and arcs come out as true arcs. A scene of regions in one plane is a 2D scene, shown as a drawing.
+  - **Frames:** a scene can come at several values of one or more axes, an insertion depth or an opening angle, each a STEP file of its own: step through them, play them, and see per-frame values plotted along the axis, with their limits.
+  - **Fields:** FEM results as `.vtu` files: a colour map with a legend, only what's over a limit, isolines, the deformation scaled up, and the value under the pointer.
+  - On any of these, you hide parts, drag labels out of the way and sketch roughly what you want changed. Press Save, then tell the AI what you drew. It finds the sketch file next to the scene, makes the change in the real CAD pipeline and rebuilds, and the viewer reloads.
 - **Slicer projects:** `.3mf` files as OrcaSlicer or Bambu Studio save them. The viewer shows them in 3D: the printer's plate and where the pieces sit on it, in their filaments' colours, so you can check the layout. To print, open the same file in the slicer.
+- **Older views:** 2D sheets the AI drew itself as layered SVG files, and 3D models as `.glb` files ([SPEC-v0.md](SPEC-v0.md)), are still shown.
 
-Tracepaper doesn't care which CAD tool or constraint solver is behind a sheet. The format is described in [SPEC.md](SPEC.md).
+Tracepaper doesn't care which CAD tool or constraint solver is behind a scene. The format is described in [SPEC.md](SPEC.md).
 
 ## Viewer
 
-Needs Python 3.9 or newer and a browser; there are no other dependencies.
+Needs Python 3.9 or newer and a browser, and for scenes OpenCascade's Python binding, OCP, which CadQuery and build123d install (or `pip install cadquery-ocp`).
 
 ```sh
-python3 -m tracepaper view examples     # from this directory
+python3 -m tracepaper view tests/geometry     # the test scenes, from this directory
 ```
 
-- **The project page** shows the build folder as a tree: its sheets, models and slicer projects, and the subfolders holding them. Click a folder to fold it; the browser remembers which are folded. A folded folder says when a sketch inside it waits for the AI. Each view opens in a window of its own, so you can put several side by side, and a view's window has a menu of all views, grouped by folder.
-- **The build folder** holds the views among the build's other output: every `.svg`, `.glb` and `.3mf` in it shows up, and nothing else, nor folders whose names start with a dot. The build arranges the views in subfolders as it likes, writes each view over its old file, and deletes views it no longer makes, but never empties the folder wholesale: your saved sketches wait next to their views until the AI has handled them.
-- **Updates:** a window updates by itself when its file changes. A 3D view keeps the camera where you left it.
+- **The project page** shows the build folder as a tree: its scenes and their named views, slicer projects and older views, and the subfolders holding them. Click a folder to fold it; the browser remembers which are folded. A folded folder says when a sketch inside it waits for the AI. Each view opens in a window of its own, so you can put several side by side, and a view's window has a menu of all views, grouped by folder.
+- **The build folder** holds the views among the build's other output: every `.step`, `.3mf`, `.svg` and `.glb` in it shows up, and nothing else, nor folders whose names start with a dot. The build arranges the views in subfolders as it likes, writes each view over its old file, and deletes views it no longer makes, but never empties the folder wholesale: your saved sketches wait next to their views until the AI has handled them.
+- **Updates:** a window updates by itself when its files change. A 3D view keeps the camera where you left it.
+- **Drawings:** a scene's named views open from the project page, and **Drawing** (`D`) in its 3D view opens the exact drawing of what you're looking at: the section through the one slice plane that's on, or the scene from the standard direction you look from, with its hidden lines on a layer of their own. Parts keep the same colours as in 3D; cut faces are hatched, each part at its own angle and spacing.
+- **Frames:** below the tree, a slider for each axis, with ◀ ⏵ ▶ (the arrow keys step too), the frame's values, frames over a limit marked red, and a plot of each value along the first axis. *Trail* shows every frame faintly behind the one shown. Your ink stays as you step through them, and so do moved labels.
+- **Fields:** below that, each field's colour map, whose ends you can type in, *Only over the limit*, *Isolines*, and *Deformation ×* where the field moves the mesh. Pointing at the field shows its value there.
 - **3D views:** the mouse works as in the OCP CAD viewer. Drag to rotate: near the middle it tips the model over, near the edge it turns it about the line of sight; with `Ctrl` only up/down counts, with `Alt` only sideways. Right-drag or `Shift`-drag to pan, scroll or middle-drag to zoom. Iso, Top, Front and Right (keys `0`, `7`, `1`, `3`) look from the standard directions, Fit (`F`) frames what's shown, Edges (`E`) switches the edges off and on, Transparent (`T`) makes every face half see-through, as in the OCP viewer, to see what's inside, and Perspective (`O`) draws the model as a camera would see it instead of orthographic, from the same direction and at the same size where it turns. Sketching switches back to orthographic. **Slice**, below the tree, cuts the model with planes along X, Y and Z, as the OCP viewer does: switch a plane on, drag its slider or type where it goes in mm, and `⇄` keeps the other side. Cut parts are closed in their own colours. *Section only* leaves just those cut faces, seen straight on when one plane is on, and *Cut a corner* takes away only what lies beyond all the planes.
-- **Sketching over a 3D view:** press **Sketch** (`P`) and draw with the mouse, or with the reMarkable's pen. You draw on the plane you're looking at, so while there's ink the view only pans and zooms; turning it first asks to wipe the ink. Save writes `<model>.glb.sketch.svg`, a picture of the view with your ink over it, placed in the model. In *Section only*, looking straight at the section, the ink is on the section's plane.
+- **Sketching over a 3D view:** press **Sketch** (`P`) and draw with the mouse, or with the reMarkable's pen. You draw on the plane you're looking at, so while there's ink the view only pans and zooms; turning it first asks to wipe the ink. Save writes `<name>.step.sketch.svg`, a picture of the view with your ink over it, placed in the model. In *Section only*, looking straight at the section, the ink is on the section's plane. For exact coordinates under your ink, sketch on a drawing instead.
 - **Slicer projects** open in the 3D view, where the tree has the plate, each piece by name, and the printer's build volume, hidden at first: show it to check that tall pieces fit. The orange corner of the plate is the part the printer keeps for itself.
-- **The tree panel:** both kinds of view show their named parts, a sheet's named groups and a model's assembly tree, in the same panel. It starts folded, showing only the top level; `▸` unfolds a node. Hiding works as in the OCP viewer, in that window only:
+- **The tree panel:** every view shows its named parts in the same panel: a scene's assembly tree, in 3D and in its drawings, an older sheet's named groups. It starts folded, showing only the top level; `▸` unfolds a node. Hiding works as in the OCP viewer, in that window only:
   - A node's eye hides or shows it with everything inside it. Inside a hidden node, a node can be shown again on its own; half an eye means only part of what's inside shows.
   - `Ctrl`+click on a name shows only that node; once more shows everything again. `Alt`+click hides it.
   - A part drawn in one colour has a dot of it before its name. What starts hidden comes from the file.
@@ -88,18 +94,24 @@ pip install --user --no-build-isolation -e .                          # `tracepa
 ln -s "$PWD/skills/tracepaper" ~/.claude/skills/tracepaper            # the Claude Code skill
 ```
 
-- **The skill** (`skills/tracepaper/SKILL.md`) teaches Claude in any project how to make sheets, run the viewer and act on your sketches. Its `SPEC.md` is a link to the spec here, and the skill tells Claude to read it fresh each session.
+- **The skill** (`skills/tracepaper/SKILL.md`) teaches Claude in any project how to write scenes, run the viewer and act on your sketches. Its `SPEC.md` is a link to the spec here, and the skill tells Claude to read it fresh each session.
 - **Updates** reach other projects as soon as the files change here:
   - spec and skill edits;
   - viewer changes, after a page reload;
   - server or tablet connection changes, after restarting that `tracepaper view`.
 - **New skills** are only noticed by new Claude sessions. Once a session knows the skill, it reads the current files each time it uses it.
 
-`tracepaper inspect [path]` is the AI's side of the loop. It reports on the newest sketch file under `path` (strokes, picked colours, moved labels) and renders a whole-sheet image plus close-ups of the ink.
+`tracepaper render scene.step#view` and `tracepaper inspect [path]` are the AI's side of the loop. `render` draws a view as the viewer does, as SVG and PNG, so the AI can look at it first, and says what's wrong in its `.tp.json`. `inspect` reports on the newest sketch file under `path` (strokes, picked colours, moved labels, frames) and renders the whole view plus close-ups of the ink.
 
-## Writing sheets
+## Writing scenes
 
-Anything that writes SVG following [SPEC.md](SPEC.md) works. For Python there's a small helper, `tracepaper.sheet`, which supports layers, sublayers and named parts for the viewer's tree. Two examples use it:
+Any CAD program's STEP export works: CadQuery's `assembly.export("build/part.step")`, build123d's `export_step`, FreeCAD's. Name the parts, since the names are the tree you hide things with, and leave the colours out. `tracepaper.views.save_scene(assembly, path, meta)` writes a CadQuery assembly and its `.tp.json` without the viewer ever reading half a file.
+
+[`tests/geometry/make.py`](tests/geometry/make.py) writes the test scenes, with CadQuery: one solid on each kind of surface; a bracket with a named section and its dimensions; freeform surfaces and a curve; a hinge three levels deep whose frames open its door; a 2D profile with dimensions; a snap clip pushed into its groove, with its force and strain per frame, a limit, and the strain in its arm as a field; and 64 copies of one part.
+
+## Writing older sheets
+
+Anything that writes SVG following [SPEC-v0.md](SPEC-v0.md) works. For Python there's a small helper, `tracepaper.sheet`, which supports layers, sublayers and named parts for the viewer's tree; the viewer's drawings are made with it too. Two examples use it:
 
 - [`examples/bracket/make_sheets.py`](examples/bracket/make_sheets.py) draws a section and a top view of a bracket.
 - [`examples/cabinet/make_views.py`](examples/cabinet/make_views.py) writes a cabinet as a model and a section with nested groups that have the same names in both.
@@ -114,4 +126,4 @@ Models are written by the CAD code itself. For CadQuery, use `tracepaper.model.e
 python3 -m unittest discover tests
 ```
 
-`test_sheet.py` checks that the Python writer and the viewer draw annotations identically; this needs `gjs`. `test_browser.py` runs the viewer in headless Firefox. Each is skipped if its tool is missing.
+`test_sheet.py` checks that the Python writer and the viewer draw annotations identically; this needs `gjs`. `test_scene.py` checks sections, projections and drawings on the scenes in `tests/geometry`; this needs OCP. `test_browser.py` runs the viewer in headless Firefox. Each is skipped if its tool is missing.

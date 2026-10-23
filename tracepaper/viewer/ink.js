@@ -8,7 +8,7 @@ import { NUMBER, SVG_NS } from './sheetdoc.js';
 
 export const INK_COLORS = [['Red', '#e11d48'], ['Blue', '#2563eb'], ['Green', '#16a34a'], ['Black', '#1f2937']];
 export const ERASER_PX = 10; // radius of the pen's eraser end, on screen
-const INK_WIDTH_PX = 2.2; // stroke width on screen, at any zoom (SPEC.md §2.1)
+const INK_WIDTH_PX = 2.2; // stroke width on screen, at any zoom (SPEC-v0.md §2.1)
 const MIN_STEP_PX = 0.8; // pointer samples closer than this to the last one are dropped
 
 // A toolbar button for ink colour i of INK_COLORS; key: whether key i + 1 picks it.

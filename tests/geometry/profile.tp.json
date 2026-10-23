@@ -1,0 +1,11 @@
+{
+  "title": "Profile",
+  "source": "tests/geometry/make.py",
+  "regenerate": "python3 tests/geometry/make.py profile",
+  "annotations": [
+    {"id": "d-width", "dim": "linear", "p1": [-30, 12], "p2": [30, 12], "dir": "x", "offset": 6},
+    {"id": "d-hole", "dim": "diameter", "center": [16, 0], "r": 4, "angle": 60, "offset": 6},
+    {"id": "d-corner", "dim": "radius", "center": [-27, -9], "r": 3, "angle": 225, "offset": 4},
+    {"id": "d-slot", "dim": "angular", "center": [-12, 2], "p1": [0, 2], "p2": [0, 6.3677], "offset": 10}
+  ]
+}

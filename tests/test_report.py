@@ -9,6 +9,7 @@ from tracepaper.report import find_sketch, hidden_and_shown, inspect
 from tracepaper.sheet import INKSCAPE_NS, SVG_NS, TP_NS
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "bracket" / "section-A.svg"
+GEOMETRY = Path(__file__).resolve().parent / "geometry"
 
 
 def make_sketch(directory: Path) -> Path:
@@ -27,6 +28,30 @@ def make_sketch(directory: Path) -> Path:
     ET.SubElement(ink, f"{{{SVG_NS}}}path", {"d": "M10 45 L30 45", "stroke": "#475569", "fill": "none",
                                              f"{{{TP_NS}}}color-from": "d-length"})
     path = directory / "section-A.sketch.svg"
+    ET.ElementTree(root).write(path, encoding="unicode")
+    return path
+
+
+def scene_sketch(directory: Path) -> Path:
+    """A sketch on the bracket scene's section A-A, at a frame, with one label moved."""
+    for name in ("bracket.step", "bracket.tp.json"):
+        shutil.copy(GEOMETRY / name, directory / name)
+    svg, tp, ink = f"{{{SVG_NS}}}", f"{{{TP_NS}}}", f"{{{INKSCAPE_NS}}}"
+    root = ET.Element(f"{svg}svg", {"width": "100mm", "height": "80mm", "viewBox": "-20 -60 100 80",
+                                    f"{tp}sketch-of": "bracket.step#section-a"})
+    ET.SubElement(ET.SubElement(root, f"{svg}metadata"), f"{tp}view",
+                  {"kind": "section", "scene": "bracket.step", "view": "section-a", "frame": "insertion=2.5"})
+    dims = ET.SubElement(root, f"{svg}g", {f"{ink}groupmode": "layer", f"{ink}label": "Dimensions",
+                                           "transform": "scale(1,-1)"})
+    # Moved; as given, written out; and given with a default left out.
+    ET.SubElement(dims, f"{svg}g", {"id": "d-length", f"{tp}dim": "linear", f"{tp}offset": "-22", f"{tp}text-at": "0.667"})
+    ET.SubElement(dims, f"{svg}g", {"id": "d-height", f"{tp}dim": "linear", f"{tp}offset": "9", f"{tp}text-at": "0.5"})
+    ET.SubElement(dims, f"{svg}g", {"id": "d-fillet", f"{tp}dim": "radius", f"{tp}angle": "225", f"{tp}offset": "-13"})
+    ET.SubElement(dims, f"{svg}g", {"id": "c-square", f"{tp}anchor": "0 0", f"{tp}offset": "-4 -4"})
+    sketch = ET.SubElement(root, f"{svg}g", {"id": "tp-sketch", f"{ink}groupmode": "layer", f"{ink}label": "Sketch",
+                                             "transform": "scale(1,-1)"})
+    ET.SubElement(sketch, f"{svg}path", {"d": "M20 20 L30 26", "stroke": "#e11d48", f"{tp}frame": "insertion=2.5"})
+    path = directory / "bracket.step#section-a.sketch.svg"
     ET.ElementTree(root).write(path, encoding="unicode")
     return path
 
@@ -51,6 +76,16 @@ class ReportTest(unittest.TestCase):
             for name in ("section-A-full.png", "section-A-closeup.png", "section-A-ink.png"):
                 self.assertTrue((out / name).stat().st_size > 1000, name)
             self.assertEqual(sorted(p.suffix for p in out.iterdir()), [".png"] * 3)  # no leftovers
+
+    def test_sketch_on_a_scene(self):
+        scene_sketch(self.dir)
+        report = inspect(self.dir, self.dir / "images")
+        self.assertIn("  of bracket.step#section-a\n", report)
+        self.assertNotIn("(missing)", report)
+        self.assertIn("view=section-a, frame=insertion=2.5", report)
+        self.assertIn("drawn at insertion=2.5", report)
+        # Against the annotations its .tp.json gives the view.
+        self.assertIn("Moved labels: 2\n  d-length  offset: -16 -> -22\n  d-length  text-at: 0.5 -> 0.667", report)
 
     def test_nodes_shown_inside_hidden_ones(self):
         # As the viewer saves them: a hidden layer (visibility, not display), one of its

@@ -17,6 +17,7 @@ import time
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import quote
 
 from tracepaper import plate
 from tracepaper.model import mark_hidden, write_glb
@@ -30,6 +31,12 @@ except ImportError:
     from tests.test_plate import write_3mf
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "bracket"
+GEOMETRY = Path(__file__).resolve().parent / "geometry"
+try:
+    import OCP  # noqa: F401
+    HAVE_OCP = True
+except ImportError:
+    HAVE_OCP = False
 SVG = "{http://www.w3.org/2000/svg}"
 INK = "{http://www.inkscape.org/namespaces/inkscape}"
 TP = "{urn:tracepaper:0}"
@@ -282,7 +289,7 @@ class ViewerInFirefox(unittest.TestCase):
                                                           "if (t) t.state.dirty = false;",
                                                 "args": []})
         base = f"http://127.0.0.1:{self.server.server_address[1]}"
-        self.m.call("WebDriver:Navigate", {"url": f"{base}/view/{view}" if view else self.server.url})
+        self.m.call("WebDriver:Navigate", {"url": f"{base}/view/{quote(view)}" if view else self.server.url})
         if view and view.endswith((".glb", ".3mf")):
             self.assertTrue(self.m.run("until(() => !!window.tracepaper3d?.state.model, done);"))
         else:
@@ -1222,6 +1229,67 @@ class ViewerInFirefox(unittest.TestCase):
         finally:
             shutil.rmtree(parts)
             self.m.run("try { localStorage.clear(); } catch {} done();")
+
+    @unittest.skipUnless(HAVE_OCP, "needs OCP")
+    def test_scenes(self):
+        scenes = self.dir / "scenes"
+        shutil.copytree(GEOMETRY, scenes, ignore=shutil.ignore_patterns("*.py", "*.sketch.svg"))
+        try:
+            # A 2D scene with frames and a field: step through them, draw, and save.
+            self.open_viewer("scenes/clip.step")
+            got = self.m.run("""
+                until(() => tp.frames.on && tp.fieldView.on && tp.state.frameTexts.size === 13, () => {
+                  const slider = document.querySelector('.tpv-frame-axis input[type="range"]');
+                  for (let i = 0; i < 5; i++) tp.frames.step(1);
+                  until(() => tp.state.root.querySelector('metadata').innerHTML.includes('insertion=2.5'), () => {
+                    stroke([[-5, 10], [-8, 12]]);
+                    const t = tp.fieldView.fields[0].tris[0].el.getBoundingClientRect();
+                    done({ label: tp.frames.label, ticks: document.querySelectorAll('.tpv-frame-ticks line').length,
+                           kept: slider.isConnected && slider.value === '5', // dragging it goes on
+                           over: document.querySelectorAll('.tpv-frame-ticks line.over').length,
+                           frame: tp.state.ink.lastElementChild.getAttributeNS('urn:tracepaper:0', 'frame'),
+                           value: tp.fieldView.valueAt(t.x + t.width / 2, t.y + t.height / 2) });
+                  });
+                });
+            """)
+            self.assertEqual({k: got[k] for k in ("label", "ticks", "over", "frame", "kept")},
+                             {"label": "insertion=2.5", "ticks": 13, "over": 3, "frame": "insertion=2.5", "kept": True})
+            self.assertRegex(got["value"], r"^strain -?\d")
+            self.m.run("tp.save().then(() => done());")
+            sketch = ET.parse(scenes / "clip.step.sketch.svg").getroot()
+            self.assertEqual(sketch.find(f"{SVG}metadata/{TP}view").get("frame"), "insertion=2.5")
+            # The 3D view of a scene, and the drawing of what it shows.
+            base = f"http://127.0.0.1:{self.server.server_address[1]}"
+            self.m.call("WebDriver:Navigate", {"url": f"{base}/view/scenes/bracket.step"})
+            got = self.m.run("""
+                until(() => window.tracepaper3d?.state.model, () => {
+                  const t = window.tracepaper3d, views = [];
+                  t.frame(t.LOOKS.front);
+                  views.push(t.drawingView());
+                  const x = t.slices.planes[0];
+                  Object.assign(x, { on: true, at: 20 });
+                  t.slices.update();
+                  views.push(t.drawingView());
+                  done({ views, button: !document.getElementById('tpv-drawing').hidden });
+                });
+            """)
+            self.assertEqual(got, {"views": ["front", "x=20"], "button": True})
+            # A named section, its dimensions draggable.
+            self.open_viewer("scenes/bracket.step#section-a")
+            moved = self.m.run("""
+                tp.setTool('move');
+                const g = document.getElementById('d-length');
+                const c = tp.A.geometry(tp.A.read(g), tp.fontSizeOf(g)).box.center;
+                fire('pointerdown', screen(g.parentNode, c[0], c[1]), 'mouse');
+                fire('pointermove', screen(g.parentNode, c[0], c[1] - 6), 'mouse');
+                fire('pointerup', screen(g.parentNode, c[0], c[1] - 6), 'mouse');
+                tp.save().then(() => done(tp.A.read(g).offset));
+            """)
+            self.assertEqual(moved, -22)
+            saved = ET.parse(scenes / "bracket.step#section-a.sketch.svg").getroot()
+            self.assertEqual(saved.find(f".//{SVG}g[@id='d-length']").get(f"{TP}offset"), "-22")
+        finally:
+            shutil.rmtree(scenes)
 
     def test_tree_panel_width(self):
         drag = """

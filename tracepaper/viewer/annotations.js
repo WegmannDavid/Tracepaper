@@ -1,4 +1,4 @@
-// Annotations (SPEC.md §2.6–2.7): read a dimension or constraint symbol from its
+// Annotations (SPEC-v0.md §2.6–2.7): read a dimension or constraint symbol from its
 // tp: attributes, draw it, and move it when the person drags it.
 // tracepaper/sheet.py draws the same shapes; keep the two in sync.
 

@@ -59,6 +59,10 @@ export function renderViewsMenu(select, views, current) {
     const tree = viewTree(views);
     select.replaceChildren(...tree.views.map(option), ...groups(tree));
   }
+  if (current && !views.some((v) => v.name === current)) { // a view drawn on the fly
+    select.dataset.key = '';
+    if (![...select.options].some((o) => o.value === current)) select.prepend(new Option(current.split('/').pop(), current));
+  }
   select.value = current ?? '';
   select.disabled = views.length === 0;
 }

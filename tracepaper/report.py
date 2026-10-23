@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
+from . import views as scenes
 from .server import MODEL_SUFFIXES, SKETCH_SUFFIX, view_of_sketch
 from .sheet import INKSCAPE_NS, SVG_NS, TP_NS, fmt
 
@@ -22,7 +23,7 @@ SVG, INK, TP = f"{{{SVG_NS}}}", f"{{{INKSCAPE_NS}}}", f"{{{TP_NS}}}"
 PLACEMENT = ("offset", "text-at", "angle")
 WIDTH_PX = 2000
 # The images show the sheet as on a screen this many pixels wide, at 2 image pixels to
-# each of its pixels, which is what line widths are in (SPEC.md §2.1).
+# each of its pixels, which is what line widths are in (SPEC-v0.md §2.1).
 SCREEN_PX = WIDTH_PX / 2
 SHAPES = {"path", "line", "polyline", "polygon", "circle", "ellipse", "rect"}
 
@@ -52,7 +53,7 @@ def _is_node(el: ET.Element) -> bool:
 
 
 def _layer_tree(parent: ET.Element, above: str = "") -> list:
-    """(path, group) for every node of the tree (SPEC.md §2.4), as the viewer shows it:
+    """(path, group) for every node of the tree (SPEC-v0.md §2.4), as the viewer shows it:
     named groups, e.g. ("Dimensions / Overall", g); unnamed groups in between don't count."""
     out = []
     for el in parent:
@@ -119,7 +120,8 @@ def strokes(root: ET.Element) -> list:
     for p in ink.findall(f"{SVG}path") if ink is not None else []:
         pts = _points(p.get("d", ""))
         if pts:
-            out.append({"color": p.get("stroke"), "from": p.get(f"{TP}color-from"), "points": pts})
+            out.append({"color": p.get("stroke"), "from": p.get(f"{TP}color-from"), "points": pts,
+                        "frame": p.get(f"{TP}frame")})
     return out
 
 
@@ -134,6 +136,48 @@ def moved_labels(sketch: ET.Element, sheet: Optional[ET.Element]) -> list:
             for name in PLACEMENT:
                 if before is not None and g.get(TP + name) != before.get(TP + name):
                     out.append((g.get("id"), name, before.get(TP + name), g.get(TP + name)))
+    return out
+
+
+def _placement(attrs: dict, kind: Optional[str]) -> dict:
+    """An annotation's placement attributes with their defaults filled in, as text: attrs
+    maps names (offset, text-at, angle) to values, numbers or "x y" text or [x, y]."""
+    def text(v):
+        if v is None:
+            return None
+        if isinstance(v, (list, tuple)):
+            return " ".join(fmt(float(c)) for c in v)
+        try:
+            return " ".join(fmt(float(c)) for c in str(v).replace(",", " ").split())
+        except ValueError:
+            return str(v)
+    defaults = {"linear": {"offset": 0, "text-at": 0.5}, "angular": {"text-at": 0.5},
+                "radius": {"offset": 0, "angle": 45}, "diameter": {"offset": 0, "angle": 45},
+                None: {"offset": "0 0"}}.get(kind, {})
+    return {name: text(attrs.get(name, defaults.get(name))) for name in PLACEMENT
+            if attrs.get(name, defaults.get(name)) is not None}
+
+
+def moved_in_scene(sketch: ET.Element, meta: dict, view: Optional[str]) -> list:
+    """(id, attribute, value in the .tp.json, sketch value) for annotations the person dragged
+    on a view of a scene, against the annotations the scene's .tp.json gives that view."""
+    if view is None:
+        given = meta.get("annotations") or []
+    else:
+        spec = scenes.view_spec(meta, view)
+        given = spec["annotations"] if spec else []
+    given = {a["id"]: a for a in given if isinstance(a, dict) and "id" in a}
+    out = []
+    for g in sketch.iter(f"{SVG}g"):
+        a = given.get(g.get("id"))
+        if a is None or not (g.get(f"{TP}dim") or g.get(f"{TP}anchor")):
+            continue
+        kind = g.get(f"{TP}dim")
+        before = _placement(a, kind)
+        after = _placement({name: g.get(TP + name) for name in PLACEMENT if g.get(TP + name) is not None}, kind)
+        for name in PLACEMENT:
+            if name in after and before.get(name) != after[name]:
+                out.append((g.get("id"), name, before.get(name), after[name]))
     return out
 
 
@@ -184,14 +228,20 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
         raise SystemExit(f"tracepaper: no {SKETCH_SUFFIX} file under {path}")
     source = sketch_path.read_text(encoding="utf-8")
     root = ET.fromstring(source)
-    # The view it is of sits next to it, under the name it gives (once a path from the project).
+    # The view it is of sits next to it, under the name it gives (once a path from the project):
+    # a sheet, a model, or a scene, with the view of it after "#".
     of = Path(root.get(f"{TP}sketch-of") or view_of_sketch(sketch_path.name)).name
-    sheet_path = sketch_path.with_name(of)
-    model = sheet_path.suffix.lower() in MODEL_SUFFIXES  # drawn over a 3D view (SPEC.md §3.1)
-    sheet = ET.parse(sheet_path).getroot() if not model and sheet_path.is_file() else None
+    scene_name, scene_view = scenes.split_name(of)
     view = root.find(f"{SVG}metadata/{TP}view")
+    sheet_path = sketch_path.with_name(scene_name)
+    scene = scenes.is_scene(sheet_path)
+    if scene:  # drawn over its 3D view, or on a sheet drawn from it
+        model = view is not None and view.get("kind") == "model view"
+    else:
+        model = sheet_path.suffix.lower() in MODEL_SUFFIXES  # drawn over a 3D view (SPEC.md §3.1)
+    sheet = ET.parse(sheet_path).getroot() if not (model or scene) and sheet_path.is_file() else None
 
-    lines = [f"Sketch: {sketch_path}", f"  of {sheet_path.name}" + ("" if sheet_path.is_file() else " (missing)")
+    lines = [f"Sketch: {sketch_path}", f"  of {of}" + ("" if sheet_path.is_file() else " (missing)")
              + (f", saved {root.get(TP + 'saved')}" if root.get(TP + "saved") else "")]
     if view is not None:
         lines.append("  view: " + ", ".join(f"{k}={v}" for k, v in view.attrib.items()))
@@ -213,10 +263,19 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
         if s["from"]:
             layer = _layer_of(root, s["from"])
             line += f"  colour of {s['from']}" + (f" ({layer})" if layer else "")
+        if s["frame"]:
+            line += f"  drawn at {s['frame']}"
         lines.append(line)
 
     if not model:  # nothing to move on a model
-        moved = moved_labels(root, sheet)
+        if scene:
+            try:
+                moved = moved_in_scene(root, scenes.read_meta(sheet_path), scene_view)
+            except ValueError as err:
+                moved = []
+                lines.append(f"  (can't compare labels: {err})")
+        else:
+            moved = moved_labels(root, sheet)
         lines.append(f"\nMoved labels: {len(moved) or 'none'}")
         lines += [f"  {i}  {name}: {old} -> {new}" for i, name, old, new in moved]
 

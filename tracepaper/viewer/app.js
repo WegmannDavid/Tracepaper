@@ -3,6 +3,8 @@
 // Save writes <sheet>.sketch.svg (SPEC.md §3).
 import * as A from './annotations.js';
 import { INK_COLORS, Ink, PenInput, coalesced, pxPerUnit, swatch, toLocal } from './ink.js';
+import { FieldView } from './fieldview.js';
+import { FramePanel } from './frames.js';
 import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import * as Pen from './pen.js';
 import { renderView } from './screen.js';
@@ -24,6 +26,7 @@ const ui = {
   coords: $('tpv-coords'), toast: $('tpv-toast'), empty: $('tpv-empty'), save: $('tpv-save'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), fit: $('tpv-fit'), swatches: $('tpv-swatches'),
   pen: $('tpv-pen'), penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), pickBox: $('tpv-pick-box'),
+  frames: $('tpv-frames'), framesHead: $('tpv-frames-head'), fields: $('tpv-fields'), fieldsHead: $('tpv-fields-head'),
 };
 
 const state = {
@@ -35,6 +38,8 @@ const state = {
   colorFrom: null, // {id, layer} when the ink colour was picked from the sheet
   picked: null,    // the last picked colour: {color, from}
   gen: 0, busy: false, offline: false,
+  // A scene's frames (frames.js): each one's drawing, as fetched, for the view's mtime.
+  frameTexts: new Map(), framesFor: null, frameWanted: false,
 };
 
 let gesture = null;
@@ -82,25 +87,130 @@ function mount(root) {
 const fontSizeOf = (el) => fontSizeIn(el, state.root);
 const findAnnotation = (id) => (id ? state.annotations.find((g) => g.id === id) ?? null : null);
 
-async function openSheet(name, { reload = false } = {}) {
-  const info = state.views.find((v) => v.name === name && v.kind === 'sheet');
-  if (!info) return;
+// Put a label where it was moved to (a snapshot's placement), redrawn for what it measures
+// now: in another frame, or a sheet rewritten since, that may have moved.
+function placeAs(g, snap) {
+  for (const [n, v] of Object.entries(snap.attrs)) {
+    if (v === null) g.removeAttributeNS(A.TP_NS, n);
+    else g.setAttributeNS(A.TP_NS, `tp:${n}`, v);
+  }
+  const ann = A.read(g);
+  if (ann) A.update(g, ann, fontSizeOf(g));
+  else A.restore(g, snap);
+}
+
+// ---- A scene's frames (SPEC.md §2.10) ----------------------------------------------------
+
+const fieldView = new FieldView({ container: ui.fields, head: ui.fieldsHead });
+
+const frames = new FramePanel({
+  container: ui.frames, onFrame: () => showFrame(), onTrail: () => drawTrail(),
+});
+
+// The drawing of a frame of the view: fetched once for each version of the view.
+async function frameText(name, k) {
+  if (!state.frameTexts.has(k)) {
+    const text = (await fetchOk(`${api('file', name)}?frame=${k}`)).text();
+    state.frameTexts.set(k, text);
+    text.catch(() => state.frameTexts.delete(k));
+  }
+  return state.frameTexts.get(k);
+}
+
+// The view's frames, when it opens or its files change: then every frame's drawing, one
+// after another, so that stepping through them is quick. start: {at}, the frame to show.
+async function loadFrames(name, mtime, start = null) {
+  if (state.framesFor === `${name} ${mtime}`) return;
+  state.framesFor = `${name} ${mtime}`;
+  state.frameTexts = new Map();
+  let info = {};
+  if (/\.(step|stp)(#|$)/i.test(name)) {
+    try { info = await (await fetchOk(api('frames', name))).json(); } catch (err) { toast(err.message, true); }
+  }
+  const k = start && info.frames ? info.frames.findIndex((f) => Object.entries(start.at).every(([a, v]) => f.at[a] === v)) : -1;
+  frames.set(info, k >= 0 ? k : null);
+  ui.framesHead.hidden = !frames.on;
+  if (!frames.on) return;
+  (async () => {
+    for (let k = 0; k < info.frames.length && state.framesFor === `${name} ${mtime}`; k++) {
+      try { await frameText(name, k); } catch { /* fetched again when shown */ }
+    }
+  })();
+}
+
+// Show the frame the panel is at, keeping the ink, the moved labels and what is hidden.
+async function showFrame() {
+  if (state.busy) { state.frameWanted = true; return; }
+  do {
+    state.frameWanted = false;
+    if (frames.index >= 0 && state.name) await openSheet(state.name, { reload: true, keep: true });
+  } while (state.frameWanted);
+}
+
+// Every frame along the first axis, the others where they are, faint behind this one: what
+// the parts sweep through. Only the parts; it follows what the tree hides. It is drawn under
+// the sheet, in a drawing of its own, so it is never saved.
+async function drawTrail() {
+  ui.host.querySelector('.tpv-trail')?.remove();
+  if (!frames.trail || !frames.on || !state.root) return;
+  const name = state.name, here = frames.index;
+  const others = frames.info.axes.slice(1), now = frames.frame;
+  const trail = document.createElementNS(SVG_NS, 'svg');
+  trail.setAttribute('class', 'tpv-trail');
+  for (const a of ['viewBox', 'width', 'height']) trail.setAttribute(a, state.root.getAttribute(a));
+  for (const [k, f] of frames.info.frames.entries()) {
+    if (k === here || !others.every((a) => f.at[a.name] === now?.at[a.name])) continue;
+    let root;
+    try { root = parseSvg(await frameText(name, k)); } catch { continue; }
+    if (state.name !== name || !frames.trail) return;
+    for (const layer of [...root.children]) {
+      const role = layer.getAttributeNS(A.TP_NS, 'role');
+      if (layer.localName !== 'g' || role || labelOf(layer) === 'Sketch') layer.remove();
+    }
+    hideByVisibility(root);
+    for (const g of allNodes(root)) {
+      const visible = state.layerVis.get(pathOf(g, root));
+      if (visible !== undefined) setHidden(g, !visible);
+    }
+    trail.append(...[...root.children].filter((c) => c.localName === 'g'));
+  }
+  if (state.name === name && frames.trail) {
+    ui.host.querySelector('.tpv-trail')?.remove();
+    ui.host.insertBefore(trail, state.root);
+  }
+}
+
+// A view in the listing, or one of a scene's views drawn on the fly ("a.step#x=10"), which
+// changes when the scene does.
+function viewInfo(name) {
+  const listed = state.views.find((v) => v.name === name);
+  if (listed || !name.includes('#')) return listed;
+  const scene = state.views.find((v) => v.name === name.split('#')[0]);
+  return scene && { name, kind: 'sheet', mtime: scene.mtime, sketch: null };
+}
+
+// keep: going to another frame, which keeps the ink and label moves as they are.
+async function openSheet(name, { reload = false, keep = false } = {}) {
+  const info = viewInfo(name);
+  if (info?.kind !== 'sheet') return;
   state.gen++;
   state.busy = true;
   try {
     // On reload with unsaved work, keep the ink and label moves in memory rather than
     // re-reading them from an older sketch file.
-    const carry = reload && state.dirty
-      ? { strokes: [...state.ink.children], moved: state.moved, undo: state.undo }
+    const carry = reload && (state.dirty || keep)
+      ? { strokes: [...state.ink.children], moved: state.moved, undo: state.undo, dirty: state.dirty }
       : null;
     const sketchMtime = info.sketch?.mtime ?? null;
-    let base = await (await fetchOk(api('file', name))).text();
+    let sketch = null;
+    if (sketchMtime && !carry) sketch = await fetchOk(api('sketch', name)).then((r) => r.text(), () => null);
+    const fresh = sketch && BigInt(sketchMtime) >= BigInt(info.mtime); // still what was on screen
+    if (!keep) await loadFrames(name, info.mtime, fresh ? sketchFrame(sketch) : null);
+    let base = frames.on ? await frameText(name, Math.max(0, frames.index))
+      : await (await fetchOk(api('file', name))).text();
     let inkFrom = null;
-    if (sketchMtime && !carry) {
-      const sketch = await fetchOk(api('sketch', name)).then((r) => r.text(), () => null);
-      if (sketch && BigInt(sketchMtime) >= BigInt(info.mtime)) base = sketch; // still what was on screen
-      else inkFrom = sketch; // the sheet changed since: show it, with the unhandled ink on top
-    }
+    if (fresh) base = sketch;
+    else if (sketch) inkFrom = sketch; // the sheet changed since: show it, with the unhandled ink on top
     const root = parseSvg(base);
     mount(root);
     if (inkFrom) {
@@ -113,9 +223,9 @@ async function openSheet(name, { reload = false } = {}) {
       state.ink.append(...carry.strokes);
       for (const [id, snap] of carry.moved) {
         const g = findAnnotation(id);
-        if (g) A.restore(g, snap);
+        if (g) placeAs(g, snap);
       }
-      Object.assign(state, { moved: carry.moved, undo: carry.undo, dirty: true });
+      Object.assign(state, { moved: carry.moved, undo: carry.undo, dirty: carry.dirty || !keep });
     } else {
       Object.assign(state, { moved: new Map(), undo: [], dirty: false });
     }
@@ -126,17 +236,31 @@ async function openSheet(name, { reload = false } = {}) {
     Object.assign(state, { name, sheetMtime: info.mtime, sketchMtime });
     document.title = `${name} · Tracepaper`;
     if (viewInUrl() !== name) history.replaceState(null, '', viewUrl(name));
+    fieldView.attach(root);
     renderLayers();
     renderViews();
     if (!reload) fit();
     updateStatus();
+    drawTrail();
     resolveReady();
   } catch (err) {
     toast(`Could not open ${name}: ${err.message}`, true);
+    if (!state.root) { // nothing shown yet: say why there
+      ui.empty.textContent = `Could not open ${name}: ${err.message.replace(/^\d+ /, '')}`;
+      ui.empty.hidden = false;
+    }
   } finally {
     state.busy = false;
     state.gen++;
   }
+}
+
+// The frame a sketch file was saved at: its index in the panel's frames, or null.
+function sketchFrame(text) {
+  const label = /<tp:view\b[^>]*\sframe="([^"]*)"/.exec(text)?.[1];
+  if (!label) return null;
+  const at = Object.fromEntries(label.split(' ').map((kv) => kv.split('=')).map(([k, v]) => [k, Number(v)]));
+  return { at };
 }
 
 function showEmpty(message) {
@@ -293,7 +417,9 @@ const ink = new Ink({ layer: () => state.ink, ref: () => state.ref, undo: () => 
 
 function beginStroke(clientX, clientY) {
   if (isHidden(state.ink)) setLayerVisible(labelOf(state.ink), true);
-  return ink.begin(clientX, clientY, state.color, state.colorFrom?.id);
+  const s = ink.begin(clientX, clientY, state.color, state.colorFrom?.id);
+  if (frames.label) s.path.setAttributeNS(A.TP_NS, 'tp:frame', frames.label); // the frame it was drawn on
+  return s;
 }
 
 function startDrag(hit, e) {
@@ -362,6 +488,8 @@ function onPointerMove(e) {
   if (!state.root) return;
   const p = toLocal(state.ref, e.clientX, e.clientY);
   if (p) ui.coords.textContent = `x ${p[0].toFixed(2)}   y ${p[1].toFixed(2)} mm`;
+  const value = fieldView.on && fieldView.valueAt(e.clientX, e.clientY);
+  if (p && value) ui.coords.textContent += `   ${value}`;
   if (e.pointerType === 'touch' && touches.has(e.pointerId)) touches.set(e.pointerId, stagePoint(e));
   if (!gesture) {
     if (e.pointerType === 'touch' || spaceHeld) return;
@@ -521,12 +649,12 @@ async function sync(listing) {
   if (!state.name) {
     const sheets = listing.views.filter((v) => v.kind === 'sheet');
     const wanted = viewInUrl() ?? listing.initial;
-    const first = sheets.find((v) => v.name === wanted) ?? sheets[0];
+    const first = (wanted && viewInfo(wanted)?.kind === 'sheet' ? viewInfo(wanted) : null) ?? sheets[0];
     if (first) await openSheet(first.name);
     else if (ui.empty.hidden || ui.empty.textContent === 'Loading…') showEmpty(`No sheets in ${listing.dir}`);
     return;
   }
-  const cur = listing.views.find((v) => v.name === state.name);
+  const cur = viewInfo(state.name);
   if (!cur) return;
   const sketch = cur.sketch?.mtime ?? null;
   if (cur.mtime !== state.sheetMtime) {
@@ -661,6 +789,7 @@ window.addEventListener('keydown', (e) => {
   if (mod && key === 's') { e.preventDefault(); save(); return; }
   if (mod && key === 'z') { e.preventDefault(); undo(); return; }
   if (mod || e.altKey) return;
+  if (frames.key(e)) return;
   if (e.key === ' ') {
     e.preventDefault();
     if (!spaceHeld) { spaceHeld = true; setHover(null); updateCursor(); }
@@ -698,4 +827,4 @@ tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper = { state, ready, A, Pen, pen, tablet, CLIENT, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit,
-  renderScreen };
+  renderScreen, frames, fieldView };

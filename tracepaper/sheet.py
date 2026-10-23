@@ -1,4 +1,4 @@
-"""Write Tracepaper sheets (SPEC.md §2). Standard library only.
+"""Write Tracepaper sheets (SPEC-v0.md §2). Standard library only.
 
     from tracepaper.sheet import PathBuilder, Sheet
 
@@ -42,7 +42,7 @@ K = dict(arrowLen=0.75, arrowHalf=0.15, extGap=0.3, extOver=0.5, textGap=0.25, c
 DEG = math.pi / 180
 EPS = 1e-6
 
-# Line widths and dashes are in pixels on screen, at any zoom (SPEC.md §2.1). Lines
+# Line widths and dashes are in pixels on screen, at any zoom (SPEC-v0.md §2.1). Lines
 # without a width are 1 pixel wide.
 STYLES = {
     "geometry": {"stroke": "#1a1a1a", "stroke-width": "1.5", "fill": "none",
@@ -62,7 +62,7 @@ THIN = "1"  # the default width, which annotations' lines keep on any layer
 # inherited, so every shape carries it.
 SCREEN_WIDTH = {"vector-effect": "non-scaling-stroke"}
 
-# Style used when Sheet.layer() is called with one of the suggested names (SPEC.md §2.4).
+# Style used when Sheet.layer() is called with one of the suggested names (SPEC-v0.md §2.4).
 LAYER_STYLES = {
     "Outline": "geometry", "Hidden": "hidden", "Center": "center", "Construction": "construction",
     "Hatch": "hatch", "Dimensions": "dimensions", "Constraints": "constraints", "Notes": "dimensions",
@@ -392,7 +392,7 @@ class Layer:
         attrs = {"id": f"{parent.element.get('id')}-{slug}" if parent else f"layer-{slug}",
                  _ink("groupmode"): "layer", _ink("label"): name}
         if parent is None:
-            attrs["transform"] = "scale(1,-1)"  # only top-level layers flip: SPEC.md §2.4
+            attrs["transform"] = "scale(1,-1)"  # only top-level layers flip: SPEC-v0.md §2.4
             self.element = ET.Element(_svg("g"), {**attrs, **preset})
         else:
             self.element = ET.SubElement(parent.element, _svg("g"), {**attrs, **preset})
@@ -549,6 +549,7 @@ class Sheet:
         self.bounds = bounds
         self.layers: list = []  # the top-level layers
         self.uses_hatch = False
+        self.hatches: dict = {}  # pattern id -> (angle, spacing), from hatch()
         self._lo = [math.inf, math.inf]
         self._hi = [-math.inf, -math.inf]
 
@@ -557,6 +558,16 @@ class Sheet:
         layer = Layer(self, name, style or LAYER_STYLES.get(name, "geometry"), visible, attrs)
         self.layers.append(layer)
         return layer
+
+    def hatch(self, angle: float = 45, spacing: float = 2) -> str:
+        """A fill of lines at angle (degrees), spacing mm apart and thin at any zoom, for
+        fill=: hatch() is HATCH; other angles and spacings tell parts side by side apart."""
+        if (angle, spacing) == (45, 2):
+            self.uses_hatch = True
+            return HATCH
+        pattern = f"{HATCH_ID}-{fmt(angle)}-{fmt(spacing)}".replace(".", "_")
+        self.hatches[pattern] = (angle, spacing)
+        return f"url(#{pattern})"
 
     def _grow(self, points: Iterable[Point]) -> None:
         for x, y in points:
@@ -581,13 +592,16 @@ class Sheet:
             "font-family": self.font_family, "font-size": fmt(self.font_size)})
         meta = ET.SubElement(root, _svg("metadata"))
         ET.SubElement(meta, _tp("view"), {k: v for k, v in self.view.items() if v is not None})
-        if self.uses_hatch:
+        hatches = {**({HATCH_ID: (45, 2)} if self.uses_hatch else {}), **self.hatches}
+        if hatches:
             defs = ET.SubElement(root, _svg("defs"))
+        for pattern_id, (angle, spacing) in hatches.items():
+            s = fmt(spacing)
             pattern = ET.SubElement(defs, _svg("pattern"), {
-                "id": HATCH_ID, "patternUnits": "userSpaceOnUse", "width": "2", "height": "2",
-                "patternTransform": "rotate(45)"})
-            ET.SubElement(pattern, _svg("path"), {"d": "M1 0 V2", "stroke": "#1a1a1a", "stroke-width": "0.75",
-                                                  **SCREEN_WIDTH})  # 2 mm apart, but thin at any zoom
+                "id": pattern_id, "patternUnits": "userSpaceOnUse", "width": s, "height": s,
+                "patternTransform": f"rotate({fmt(angle)})"})
+            ET.SubElement(pattern, _svg("path"), {"d": f"M{fmt(spacing / 2)} 0 V{s}", "stroke": "#1a1a1a",
+                                                  "stroke-width": "0.75", **SCREEN_WIDTH})  # thin at any zoom
         for layer in self.layers:
             root.append(layer.element)
         return root

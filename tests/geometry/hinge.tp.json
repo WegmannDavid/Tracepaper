@@ -1,0 +1,80 @@
+{
+  "title": "Hinge",
+  "source": "tests/geometry/make.py",
+  "regenerate": "python3 tests/geometry/make.py hinge",
+  "hidden": [
+    "Frame / door"
+  ],
+  "views": [
+    {
+      "name": "across",
+      "title": "across the pin",
+      "kind": "section",
+      "origin": [
+        10,
+        0,
+        0
+      ],
+      "normal": [
+        1,
+        0,
+        0
+      ],
+      "xdir": [
+        0,
+        1,
+        0
+      ]
+    }
+  ],
+  "axes": [
+    {
+      "name": "opening",
+      "unit": "\u00b0"
+    }
+  ],
+  "frames": [
+    {
+      "at": {
+        "opening": 0
+      },
+      "step": ".hinge/opening=0.step"
+    },
+    {
+      "at": {
+        "opening": 15
+      },
+      "step": ".hinge/opening=15.step"
+    },
+    {
+      "at": {
+        "opening": 30
+      },
+      "step": ".hinge/opening=30.step"
+    },
+    {
+      "at": {
+        "opening": 45
+      },
+      "step": ".hinge/opening=45.step"
+    },
+    {
+      "at": {
+        "opening": 60
+      },
+      "step": ".hinge/opening=60.step"
+    },
+    {
+      "at": {
+        "opening": 75
+      },
+      "step": ".hinge/opening=75.step"
+    },
+    {
+      "at": {
+        "opening": 90
+      },
+      "step": ".hinge/opening=90.step"
+    }
+  ]
+}

@@ -1,0 +1,218 @@
+{
+  "title": "Snap clip in its groove",
+  "source": "tests/geometry/make.py",
+  "regenerate": "python3 tests/geometry/make.py clip",
+  "axes": [
+    {
+      "name": "insertion",
+      "unit": "mm"
+    }
+  ],
+  "quantities": [
+    {
+      "name": "deflection",
+      "unit": "mm"
+    },
+    {
+      "name": "force",
+      "unit": "N"
+    },
+    {
+      "name": "strain",
+      "unit": "%",
+      "limit": 1.0
+    }
+  ],
+  "fields": [
+    {
+      "name": "strain",
+      "unit": "%",
+      "limit": 1.0,
+      "displacement": "u"
+    }
+  ],
+  "frames": [
+    {
+      "at": {
+        "insertion": 0.0
+      },
+      "step": ".clip/insertion=0.step",
+      "values": {
+        "deflection": 0.0,
+        "force": 0.0,
+        "strain": 0.0
+      },
+      "fields": {
+        "strain": ".clip/insertion=0.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 0.5
+      },
+      "step": ".clip/insertion=0.5.step",
+      "values": {
+        "deflection": 0.0,
+        "force": 0.0,
+        "strain": 0.0
+      },
+      "fields": {
+        "strain": ".clip/insertion=0.5.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 1.0
+      },
+      "step": ".clip/insertion=1.step",
+      "values": {
+        "deflection": 0.0,
+        "force": 0.0,
+        "strain": 0.0
+      },
+      "fields": {
+        "strain": ".clip/insertion=1.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 1.5
+      },
+      "step": ".clip/insertion=1.5.step",
+      "values": {
+        "deflection": 0.3333,
+        "force": 1.667,
+        "strain": 0.25
+      },
+      "fields": {
+        "strain": ".clip/insertion=1.5.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 2.0
+      },
+      "step": ".clip/insertion=2.step",
+      "values": {
+        "deflection": 0.8667,
+        "force": 4.333,
+        "strain": 0.65
+      },
+      "fields": {
+        "strain": ".clip/insertion=2.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 2.5
+      },
+      "step": ".clip/insertion=2.5.step",
+      "values": {
+        "deflection": 1.4,
+        "force": 7.0,
+        "strain": 1.05
+      },
+      "fields": {
+        "strain": ".clip/insertion=2.5.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 3.0
+      },
+      "step": ".clip/insertion=3.step",
+      "values": {
+        "deflection": 1.4,
+        "force": 7.0,
+        "strain": 1.05
+      },
+      "fields": {
+        "strain": ".clip/insertion=3.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 3.5
+      },
+      "step": ".clip/insertion=3.5.step",
+      "values": {
+        "deflection": 1.4,
+        "force": 7.0,
+        "strain": 1.05
+      },
+      "fields": {
+        "strain": ".clip/insertion=3.5.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 4.0
+      },
+      "step": ".clip/insertion=4.step",
+      "values": {
+        "deflection": 0.0,
+        "force": 0.0,
+        "strain": 0.0
+      },
+      "fields": {
+        "strain": ".clip/insertion=4.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 4.5
+      },
+      "step": ".clip/insertion=4.5.step",
+      "values": {
+        "deflection": 0.0,
+        "force": 0.0,
+        "strain": 0.0
+      },
+      "fields": {
+        "strain": ".clip/insertion=4.5.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 5.0
+      },
+      "step": ".clip/insertion=5.step",
+      "values": {
+        "deflection": 0.0,
+        "force": 0.0,
+        "strain": 0.0
+      },
+      "fields": {
+        "strain": ".clip/insertion=5.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 5.5
+      },
+      "step": ".clip/insertion=5.5.step",
+      "values": {
+        "deflection": 0.0,
+        "force": 0.0,
+        "strain": 0.0
+      },
+      "fields": {
+        "strain": ".clip/insertion=5.5.vtu"
+      }
+    },
+    {
+      "at": {
+        "insertion": 6.0
+      },
+      "step": ".clip/insertion=6.step",
+      "values": {
+        "deflection": 0.0,
+        "force": 0.0,
+        "strain": 0.0
+      },
+      "fields": {
+        "strain": ".clip/insertion=6.vtu"
+      }
+    }
+  ]
+}
