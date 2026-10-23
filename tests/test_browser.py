@@ -546,6 +546,49 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertEqual(got["b"]["shown"], ["group / a", "c"])
         self.assertEqual(got["b"]["rows"][0][1], "partial")
 
+    def test_perspective_view(self):
+        self.open_viewer("single.glb")  # a slab 200 mm wide, and a block on it
+        got = self.m.run("""
+            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+            const button = document.getElementById('tpv-perspective');
+            const onScreen = (cad, cam) => {
+              const v = t.toScene(cad).project(cam);
+              return [(v.x + 1) / 2 * canvas.width, (1 - v.y) / 2 * canvas.height];
+            };
+            // 10 mm along x at the slab's corner nearest to the viewer, and at the one furthest.
+            const lengths = (cam) => [[[200, 0, 0], [190, 0, 0]], [[0, 200, 0], [10, 200, 0]]].map(([p, q]) => {
+              const a = onScreen(p, cam), b = onScreen(q, cam);
+              return Math.hypot(a[0] - b[0], a[1] - b[1]);
+            });
+            t.frame(t.LOOKS.iso);
+            const ortho = lengths(t.viewCamera());
+            button.click();  // renders
+            const cam = t.viewCamera();
+            // The block's top front edge, drawn where the perspective camera sees it, its width on screen.
+            const [x, y] = onScreen([55, 50, 10], cam).map(Math.round);
+            const url = canvas.toDataURL();
+            const persp = lengths(cam), pressed = button.getAttribute('aria-pressed');
+            t.setDrawing(true);
+            const drawing = { perspective: t.state.perspective, disabled: button.disabled };
+            t.setDrawing(false);
+            const img = new Image();
+            img.onload = () => {
+              const c = Object.assign(document.createElement('canvas'), { width: img.width, height: img.height });
+              c.getContext('2d').drawImage(img, 0, 0);
+              const d = c.getContext('2d').getImageData(x - 3, y - 3, 7, 7).data;
+              let darkest = 765;
+              for (let i = 0; i < d.length; i += 4) darkest = Math.min(darkest, d[i] + d[i + 1] + d[i + 2]);
+              done({ ortho, persp, pressed, drawing, darkest, camera: cam.type });
+            };
+            img.src = url;
+        """)
+        self.assertAlmostEqual(got["ortho"][0], got["ortho"][1], delta=0.01)  # orthographic: alike
+        self.assertGreater(got["persp"][0], 1.2 * got["persp"][1], got)  # in perspective, the near end larger
+        self.assertEqual((got["pressed"], got["camera"]), ("true", "PerspectiveCamera"))
+        self.assertLess(got["darkest"], 3 * 100, got)  # an edge there, a set width on screen
+        # Sketching is done in the orthographic view.
+        self.assertEqual(got["drawing"], {"perspective": False, "disabled": True})
+
     def test_transparent_view(self):
         self.open_viewer("core.glb")  # a white block with a red core sealed inside
         pixel = """

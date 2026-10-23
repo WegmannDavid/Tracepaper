@@ -249,7 +249,7 @@ The person can also draw over a model's 3D view (§2.8), or a slicer project's (
 - **The View layer** holds a picture of the view as it was, an `image` covering `area`. The Sketch layer holds the ink, as in §3.
 - **The root** gets `tp:sketch-of="<name>.glb"` (or `"<name>.3mf"`).
 
-Ink belongs to the direction it was drawn from, so the viewer doesn't turn the view while there is ink on it; it only pans and zooms.
+Ink belongs to the direction it was drawn from, so the viewer doesn't turn the view while there is ink on it; it only pans and zooms. The view is orthographic while the person sketches, whatever it was before (§5).
 
 ## 4. Working with an AI (informative)
 
@@ -275,7 +275,7 @@ If the result isn't right, the person sketches again or says so, and the loop re
 `tracepaper view <build folder, or one view>` serves the viewer on 127.0.0.1 and opens it in a browser. The viewer:
 
 - shows the build folder (§1) on a project page, as a tree of its views: its subfolders, which the person can fold, and the sheets and models in them. A folded folder says when a sketch inside it is waiting. Each view opens in a window of its own, so several can be watched side by side, and reloads when its file changes on disk. A view's window has a menu of all views, grouped by folder;
-- shows models (§2.8) and slicer projects (§2.9) in 3D: rotate, pan, zoom, standard directions, and slices along the axes, or just the sections there. The camera stays where it is when the model reloads;
+- shows models (§2.8) and slicer projects (§2.9) in 3D, orthographic or in perspective: rotate, pan, zoom, standard directions, and slices along the axes, or just the sections there. The camera stays where it is when the model reloads;
 - shows each view's tree (§2.4, §2.8) in the same panel, folded at first so only the top level shows, where the person can unfold nodes and hide and show them in that window, as in the OCP viewer: a node's eye shows or hides it with everything inside it, also a node inside a hidden one, and says when only part of that shows; `Ctrl`+click on a name shows only that node (once more: everything), `Alt`+click hides it. A part drawn in one colour shows it beside its name. The person's choices last while the window is open, including when the file is rewritten, and aren't stored;
 - has a transparent view of models, as the OCP viewer does: every face half see-through, so what is inside or behind shows;
 - toggles layers, lets the person drag annotations (§2.6), and provides a pen with a few colours, on sheets and over models, where the view only pans and zooms while there is ink, and turning it first asks to wipe the ink (§3.1);

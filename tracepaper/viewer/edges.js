@@ -33,13 +33,13 @@ const strip = `
     vec4 mvPosition = modelViewMatrix * vec4(mix(start, end, position.x), 1.0);
     #include <clipping_planes_vertex>
     vec4 a = projectionMatrix * modelViewMatrix * vec4(start, 1.0);
-    vec4 b = projectionMatrix * modelViewMatrix * vec4(end, 1.0); // orthographic: w is 1
-    vec2 d = (b.xy - a.xy) * resolution; // twice the length in pixels
+    vec4 b = projectionMatrix * modelViewMatrix * vec4(end, 1.0);
+    vec2 d = (b.xy / b.w - a.xy / a.w) * resolution; // twice the length in pixels
     if (length(d) < 1.0) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; } // seen end on: nothing to see
     vec2 along = normalize(d), across = vec2(-along.y, along.x);
     vec4 p = mix(a, b, position.x);
     // Half the width to either side, and past either end, so that segments join.
-    p.xy += (across * position.y + along * (position.x * 2.0 - 1.0)) * width / resolution;
+    p.xy += (across * position.y + along * (position.x * 2.0 - 1.0)) * width / resolution * p.w; // in perspective too
     gl_Position = p;
   }`;
 
@@ -151,10 +151,10 @@ export class Edges {
     this.material.uniforms.width.value = WIDTH * this.renderer.getPixelRatio();
   }
 
-  // Number the faces in front, for the outline of a cut in the render that follows.
-  pass(scene) {
+  // Number the faces in front, for the outline of a cut in the render that follows with camera.
+  pass(scene, camera = this.camera) {
     if (!this.shown) return;
-    const { renderer, camera } = this, background = scene.background, layers = camera.layers.mask;
+    const { renderer } = this, background = scene.background, layers = camera.layers.mask;
     scene.background = null;
     camera.layers.set(NUMBERS);
     renderer.setRenderTarget(this.faces);

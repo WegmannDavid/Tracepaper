@@ -35,7 +35,7 @@ const ui = {
   penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), fit: $('tpv-fit'), tree: $('tpv-layers'),
   bar: $('tpv-bar'), ink: $('tpv-ink'), inkLayer: $('tp-sketch'), sketch: $('tpv-sketch'), swatches: $('tpv-swatches'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), save: $('tpv-save'), hint: $('tpv-hint'),
-  transparent: $('tpv-transparent'),
+  transparent: $('tpv-transparent'), perspective: $('tpv-perspective'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
 const toast = toaster(ui.toast);
@@ -72,6 +72,29 @@ scene.add(camera);
 const controls = new CadControls(camera, ui.canvas);
 controls.addEventListener('change', render);
 
+// The perspective view, as the OCP viewer's other camera: seen from the same direction as
+// the orthographic camera, which the controls keep turning, panning and zooming, with the
+// OCP viewer's field of view, from the distance at which the plane through the point
+// turned about looks as large as in the orthographic view.
+const FOV = 22; // degrees
+const perspective = new THREE.PerspectiveCamera(FOV, 1, 0.1, 1000);
+
+// The camera the view is drawn with.
+function viewCamera() {
+  if (!state.perspective) return camera;
+  const half = (camera.top - camera.bottom) / 2 / camera.zoom;
+  const distance = half / Math.tan(THREE.MathUtils.degToRad(FOV / 2));
+  const back = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion);
+  Object.assign(perspective, { aspect: (camera.right - camera.left) / (camera.top - camera.bottom),
+                               near: distance / 50, far: distance + 4 * state.radius });
+  perspective.position.copy(controls.target).addScaledVector(back, distance);
+  perspective.quaternion.copy(camera.quaternion);
+  perspective.layers.mask = camera.layers.mask;
+  perspective.updateProjectionMatrix();
+  perspective.updateMatrixWorld();
+  return perspective;
+}
+
 const edges = renderer && new Edges(renderer, camera);
 const slices = new Slices();
 const state = {
@@ -83,14 +106,16 @@ const state = {
   // the sketch file's time, while there is one; gen counts saves, which polls in flight ignore.
   drawing: false, color: INK_COLORS[0][1], undo: [], dirty: false, sketchMtime: null, gen: 0, saving: false,
   transparent: false, // the transparent view
+  perspective: false, radius: 1, // the perspective view, and the model's bounding radius for it
 };
 let resolveReady;
 const ready = new Promise((resolve) => { resolveReady = resolve; });
 
 function render() {
   if (renderer) {
-    if (slices.on) edges.pass(scene); // for the outline of the cut
-    renderer.render(scene, camera);
+    const view = viewCamera();
+    if (slices.on) edges.pass(scene, view); // for the outline of the cut
+    renderer.render(scene, view);
     slices.outline(renderer, edges);
   }
   renderAxes();
@@ -367,6 +392,15 @@ function setTransparent(on) {
   render();
 }
 
+// Ink is drawn on the plane the orthographic view looks at, so sketching is done in it: the
+// perspective view is off while the mouse draws or there is ink.
+function setPerspective(on) {
+  state.perspective = on;
+  ui.perspective.setAttribute('aria-pressed', String(on));
+  updateStatus();
+  render();
+}
+
 function showEdges(shown) {
   edges?.show(shown);
   ui.edges.setAttribute('aria-pressed', String(shown));
@@ -390,6 +424,7 @@ async function load(mtime) {
   for (const { meshes } of parts) meshes.forEach((m) => box.expandByObject(m));
   slices.setModel(parts, edges?.materials ?? [], box);
   setSliceRanges(box);
+  state.radius = box.getBoundingSphere(new THREE.Sphere()).radius;
   const first = !state.model;
   if (state.model) {
     scene.remove(state.model);
@@ -425,6 +460,9 @@ function updateStatus() {
   ui.undo.disabled = !state.undo.length;
   ui.clear.disabled = ink.empty;
   ui.save.disabled = !state.model;
+  ui.perspective.disabled = state.drawing || !ink.empty;
+  ui.perspective.title = ui.perspective.disabled ? 'Sketching is done in the orthographic view'
+    : 'Draw with perspective, as a camera sees it, instead of orthographic (O)';
   ui.hint.textContent = state.drawing ? 'Drag to draw · right-drag to pan · scroll to zoom'
     : ink.empty ? 'Drag to rotate · right-drag to pan · scroll to zoom'
     : 'Turning the view wipes the ink · right-drag to pan · scroll to zoom';
@@ -535,6 +573,10 @@ function wipe() {
 }
 
 function setDrawing(on) {
+  if (on && state.perspective) {
+    setPerspective(false);
+    toast('Sketching is done in the orthographic view');
+  }
   state.drawing = controls.drawing = on;
   ui.sketch.setAttribute('aria-pressed', String(on));
   ui.canvas.style.cursor = on ? 'crosshair' : '';
@@ -546,7 +588,10 @@ function setColor(i) {
   for (const b of ui.swatches.children) b.setAttribute('aria-pressed', String(b.dataset.color === state.color));
 }
 
-const beginStroke = (clientX, clientY) => ink.begin(clientX, clientY, state.color);
+function beginStroke(clientX, clientY) {
+  if (state.perspective) setPerspective(false); // the tablet's pen, which draws whatever the mouse does
+  return ink.begin(clientX, clientY, state.color);
+}
 
 function undo() {
   const u = state.undo.pop();
@@ -651,6 +696,7 @@ function sketchDocument() {
 
 async function save() {
   if (!state.model || state.saving) return;
+  if (state.perspective) setPerspective(false); // the picture is of the orthographic view, as its ink
   state.saving = true;
   state.gen++;
   try {
@@ -741,6 +787,7 @@ for (const b of document.querySelectorAll('[data-look]')) b.addEventListener('cl
 ui.fit.addEventListener('click', () => frame(null));
 ui.edges.addEventListener('click', () => showEdges(!edges?.shown));
 ui.transparent.addEventListener('click', () => setTransparent(!state.transparent));
+ui.perspective.addEventListener('click', () => setPerspective(!state.perspective));
 buildSliceControls();
 INK_COLORS.forEach((_, i) => {
   const b = swatch(i, false); // the number keys look from the standard directions here
@@ -780,6 +827,7 @@ window.addEventListener('keydown', (e) => {
   else if (key === 'f') frame(null);
   else if (key === 'e') showEdges(!edges?.shown);
   else if (key === 't') setTransparent(!state.transparent);
+  else if (key === 'o' && !state.drawing && ink.empty) setPerspective(!state.perspective);
   else if (key === 'p') setDrawing(!state.drawing);
   else if (key === 'escape') setDrawing(false);
 });
@@ -796,4 +844,4 @@ tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten,
-  showEdges, setTransparent, slices, ink, pen, save, undo, setDrawing, viewArea };
+  showEdges, setTransparent, setPerspective, viewCamera, slices, ink, pen, save, undo, setDrawing, viewArea };
