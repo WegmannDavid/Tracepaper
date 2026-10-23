@@ -101,7 +101,6 @@ Suggested layer names (others are fine):
 | Dimensions | dimensions |
 | Constraints | geometric constraint symbols |
 | Notes | text notes |
-| Changes | what the AI just changed, highlighted, so the person can check it |
 
 ### 2.5 Geometry
 
@@ -280,7 +279,7 @@ Ink belongs to the direction it was drawn from, so the viewer doesn't turn the v
 2. Look at it. `tracepaper inspect` does both steps: it lists the strokes, picked colours and moved labels, and renders the whole sheet, a close-up of the ink, and the close-up with the drawing faded. Without it, render with `rsvg-convert -b white -z 6 X.sketch.svg -o x.png`; for a close-up, render a copy whose root `viewBox` is set to the Sketch layer's bounds (with y negated), plus a margin.
 3. Work out what the sketch is and where it goes. Stroke coordinates are model coordinates. Nearby ids and `tp:source` pointers say what the strokes touch, and `tp:view` maps them into 3D. Over a model, the picture shows what the strokes were drawn on, and `tp:view` places them in the model up to a depth along the line of sight. A stroke's `tp:color-from` names the element whose colour it was drawn in. Ink in a sheet colour can be hard to tell apart from the drawing; rendering the Sketch layer alone helps.
 4. Change the real model, in its own pipeline. The sketch gives the shape and a rough size. Exact values come from what the person said or wrote, or from a sensible choice.
-5. Regenerate the sheet. Put the new feature and its dimensions on a `Changes` layer. Keep any label positions the person dragged: compare the sketch file's placement attributes with the sheet's.
+5. Regenerate the sheet. Keep any label positions the person dragged: compare the sketch file's placement attributes with the sheet's.
 6. Delete the sketch file.
 
 If the result isn't right, the person sketches again or says so, and the loop repeats.

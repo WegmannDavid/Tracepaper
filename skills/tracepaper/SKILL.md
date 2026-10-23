@@ -96,11 +96,9 @@ When the user wants to print pieces, the build lays them out and writes the slic
    - `tp:view` maps sheet coordinates into 3D.
    - A `<model>.glb.sketch.svg` (or `<project>.3mf.sketch.svg`, over a slicer project, in the slicer's coordinates) was drawn over a 3D view: its View layer is a picture of what they saw, and the strokes are in mm on the plane they looked at. `tp:view` places that plane in the model (point = origin + x·xdir + y·(normal × xdir)), but not how deep along `normal` they meant it: tell that from the picture, from what lies under the strokes, and from what they said. From a standard direction the coordinates are CAD's own (from the right: x is CAD y, y is CAD z). In a section (`slices` says `section at …`) seen straight on, the plane is the section's and the depth is exact. `hidden` and `slices` say what they had hidden or cut away, `shown` what they showed again inside a hidden node, and `transparent="true"` that every face was see-through, so the picture shows what's inside.
 3. Change the real model in the project's own pipeline. Take sizes from what they wrote or said; otherwise pick sensible values, using the sketch's rough size as a first guess.
-4. Regenerate all affected sheets and models. Put the new feature and its dimensions on a **Changes** layer, which the `tracepaper.sheet` helper draws in amber. Carry over any label positions they dragged (listed under "Moved labels").
+4. Regenerate all affected sheets and models. Carry over any label positions they dragged (listed under "Moved labels").
 5. Delete the sketch file. Its existence means "not handled yet", and the viewer clears the ink when it disappears.
 6. Tell the user how you read the sketch and what you changed, including any value you chose yourself. They'll sketch again or correct you if it's off.
-
-Once the user is happy with a change, fold the Changes layer into the normal layers on the next regeneration.
 
 ## Don't edit Tracepaper itself
 

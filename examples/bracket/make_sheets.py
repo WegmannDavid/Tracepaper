@@ -52,6 +52,8 @@ def section_a() -> Sheet:
     construction = sheet.layer("Construction", visible=False)
     construction.circle("fillet-circle", (T + FILLET, T + FILLET), FILLET, source="inner fillet, base")
     construction.circle("flange-fillet-circle", (T + FILLET, top - FILLET), FILLET, source="inner fillet, flange")
+    construction.line("flange-hole-alignment", (FLANGE_END, top), (FLANGE_END, T),
+                      source="FLANGE_END = HOLE_X - HOLE_D / 2")
 
     dims = sheet.layer("Dimensions")
     dims.linear("d-length", (0, 0), (LENGTH, 0), fmt(LENGTH), dir="x", offset=-16, value=LENGTH,
@@ -69,26 +71,19 @@ def section_a() -> Sheet:
                 type="diameter", value=HOLE_D, refs="hole-axis", source="HOLE_D")
     dims.radius("d-fillet", (T + FILLET, T + FILLET), FILLET, angle=225, offset=-13,
                 refs="cut-upright", source="FILLET")
+    dims.linear("d-flange-len", (0, HEIGHT), (FLANGE_END, HEIGHT), fmt(FLANGE_END), dir="x", offset=7,
+                value="HOLE_X - HOLE_D / 2", refs="cut-upright hole-axis", source="FLANGE_END")
+    dims.linear("d-flange-t", (FLANGE_END, top), (FLANGE_END, HEIGHT), fmt(T), dir="y", offset=-7,
+                value=T, refs="cut-upright", source="T")
+    dims.radius("d-flange-fillet", (T + FILLET, top - FILLET), FILLET, angle=135, offset=-13,
+                refs="cut-upright", source="FILLET")
 
     cons = sheet.layer("Constraints")
     cons.symbol("c-square", (0, 0), "⊥", offset=(-4, -4), type="perpendicular", refs="cut-upright")
     walls = "d-upright-t d-base-t d-flange-t"
     cons.symbol("c-equal-upright", (T, 26), "=", offset=(3, 0), type="equal", refs=walls)
     cons.symbol("c-equal-base", (52, T), "=", offset=(0, 3), type="equal", refs=walls)
-
-    # What changed with the last sketch: the flange, its fillet and dimensions.
-    changes = sheet.layer("Changes")
-    changes.path("new-flange", PathBuilder().move(T, top - FILLET).arc(T + FILLET, top, FILLET, ccw=False)
-                 .line(FLANGE_END, top).line(FLANGE_END, HEIGHT).line(T, HEIGHT), source="flange")
-    changes.line("flange-hole-alignment", (FLANGE_END, top), (FLANGE_END, T), stroke_width=1,
-                 stroke_dasharray="6 4", source="FLANGE_END = HOLE_X - HOLE_D / 2")
-    changes.linear("d-flange-len", (0, HEIGHT), (FLANGE_END, HEIGHT), fmt(FLANGE_END), dir="x", offset=7,
-                   value="HOLE_X - HOLE_D / 2", refs="cut-upright hole-axis", source="FLANGE_END")
-    changes.linear("d-flange-t", (FLANGE_END, top), (FLANGE_END, HEIGHT), fmt(T), dir="y", offset=-7,
-                   value=T, refs="cut-upright", source="T")
-    changes.radius("d-flange-fillet", (T + FILLET, top - FILLET), FILLET, angle=135, offset=-13,
-                   refs="cut-upright", source="FILLET")
-    changes.symbol("c-equal-flange", (25, top), "=", offset=(0, -3.5), type="equal", refs=walls)
+    cons.symbol("c-equal-flange", (25, top), "=", offset=(0, -3.5), type="equal", refs=walls)
     return sheet
 
 
@@ -127,13 +122,8 @@ def top_view() -> Sheet:
     dims.linear("d-hole-y", (LENGTH, 0), (HOLE_X, HOLE_Y), fmt(HOLE_Y), dir="y", offset=-12, value=HOLE_Y,
                 refs="base hole", source="HOLE_Y")
     dims.diameter("d-hole", (HOLE_X, HOLE_Y), r, angle=70, offset=7, refs="hole", source="HOLE_D")
-
-    # What changed with the last sketch: the flange, seen from above.
-    changes = sheet.layer("Changes")
-    changes.polyline("new-flange", [(0, 0), (FLANGE_END, 0), (FLANGE_END, WIDTH), (0, WIDTH)], closed=True,
-                     source="flange")
-    changes.linear("d-flange-len", (0, WIDTH), (FLANGE_END, WIDTH), fmt(FLANGE_END), dir="x", offset=15,
-                   value="HOLE_X - HOLE_D / 2", refs="flange-end hole", source="FLANGE_END")
+    dims.linear("d-flange-len", (0, WIDTH), (FLANGE_END, WIDTH), fmt(FLANGE_END), dir="x", offset=15,
+                value="HOLE_X - HOLE_D / 2", refs="flange-end hole", source="FLANGE_END")
     return sheet
 
 

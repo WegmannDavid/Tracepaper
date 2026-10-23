@@ -51,10 +51,7 @@
       <path d="M41.0261 17.8191 L42.4172 20.1062 L41.4305 20.4653 Z M38.9739 12.1809 L37.5828 9.8938 L38.5695 9.5347 Z" stroke="none" />
       <text transform="translate(46.4652 25.2719) scale(1,-1)" text-anchor="middle" stroke="none">⌀6</text>
     </g>
-  </g>
-  <g id="layer-changes" inkscape:groupmode="layer" inkscape:label="Changes" transform="scale(1,-1)" stroke="#d97706" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path id="new-flange" d="M0 0 L37 0 L37 30 L0 30 Z" vector-effect="non-scaling-stroke" tp:source="flange" />
-    <g id="d-flange-len" tp:type="distance" tp:dim="linear" tp:p1="0 30" tp:p2="37 30" tp:dir="x" tp:offset="15" tp:label="37" tp:refs="flange-end hole" tp:value="HOLE_X - HOLE_D / 2" tp:source="FLANGE_END" fill="#d97706" stroke-width="1">
+    <g id="d-flange-len" tp:type="distance" tp:dim="linear" tp:p1="0 30" tp:p2="37 30" tp:dir="x" tp:offset="15" tp:label="37" tp:refs="flange-end hole" tp:value="HOLE_X - HOLE_D / 2" tp:source="FLANGE_END">
       <path d="M0 31.05 L0 46.75 M37 31.05 L37 46.75 M0 45 L37 45" fill="none" vector-effect="non-scaling-stroke" />
       <path d="M0 45 L2.625 44.475 L2.625 45.525 Z M37 45 L34.375 45.525 L34.375 44.475 Z" stroke="none" />
       <text transform="translate(18.5 45.875) scale(1,-1)" text-anchor="middle" stroke="none">37</text>

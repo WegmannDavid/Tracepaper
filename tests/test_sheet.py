@@ -174,11 +174,11 @@ class SheetOutput(unittest.TestCase):
         dims = sheet.layer("Dimensions")
         dims.sublayer("Overall").linear("d-w", (0, 0), (40, 0), "40", dir="x", offset=-8)
         dims.sublayer("Details", visible=False, stroke="#ff0000").line("tick", (0, 0), (1, 1))
-        sheet.layer("Changes").sublayer("Flange").linear("d-f", (0, 0), (0, 5), "5", dir="y", offset=3)
+        sheet.layer("Outline").sublayer("Flange").linear("d-f", (0, 0), (0, 5), "5", dir="y", offset=3)
         root = ET.fromstring(sheet.tostring().split("\n", 1)[1])
         ns, ink = {"svg": S.SVG_NS}, f"{{{S.INKSCAPE_NS}}}"
         top = root.findall("svg:g", ns)
-        self.assertEqual([g.get(ink + "label") for g in top], ["Dimensions", "Changes"])
+        self.assertEqual([g.get(ink + "label") for g in top], ["Dimensions", "Outline"])
         overall, details = top[0].findall("svg:g", ns)
         self.assertEqual([g.get(ink + "groupmode") for g in (overall, details)], ["layer", "layer"])
         self.assertEqual((overall.get("id"), details.get("id")), ("layer-dimensions-overall", "layer-dimensions-details"))
@@ -187,9 +187,9 @@ class SheetOutput(unittest.TestCase):
         # Annotations draw like their parent layer: thin and filled on Dimensions...
         dim = overall.find("svg:g", ns)
         self.assertEqual((dim.get("fill"), dim.get("stroke-width")), (None, None))
-        # ...and thin with a solid fill on Changes, whose lines are heavy and unfilled.
+        # ...and thin with a solid fill on Outline, whose lines are heavy and unfilled.
         flange_dim = top[1].find("svg:g/svg:g", ns)
-        self.assertEqual((flange_dim.get("fill"), flange_dim.get("stroke-width")), ("#d97706", "1"))
+        self.assertEqual((flange_dim.get("fill"), flange_dim.get("stroke-width")), ("#1a1a1a", "1"))
 
     def test_save_into_a_new_folder(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -56,8 +56,6 @@ STYLES = {
     "hatch": {"stroke": "none", "fill": f"url(#{HATCH_ID})"},
     "dimensions": {"stroke": "#475569", "fill": "#475569"},
     "constraints": {"stroke": "#7c3aed", "fill": "#7c3aed"},
-    "changes": {"stroke": "#d97706", "stroke-width": "2", "fill": "none",
-                "stroke-linecap": "round", "stroke-linejoin": "round"},
 }
 THIN = "1"  # the default width, which annotations' lines keep on any layer
 # Marks a line's width and dashes as pixels on screen for any SVG renderer. It isn't
@@ -68,7 +66,7 @@ SCREEN_WIDTH = {"vector-effect": "non-scaling-stroke"}
 LAYER_STYLES = {
     "Outline": "geometry", "Hidden": "hidden", "Center": "center", "Construction": "construction",
     "Hatch": "hatch", "Dimensions": "dimensions", "Constraints": "constraints", "Notes": "dimensions",
-    "Changes": "changes", "Section lines": "section",
+    "Section lines": "section",
 }
 
 
@@ -387,7 +385,7 @@ class Layer:
         self._fill_attr = preset.get("fill", parent._fill_attr if parent else "")
         self._width = preset.get("stroke-width", parent._width if parent else None)
         # Text and annotation arrows need a solid fill even when the layer's shapes have none,
-        # and annotations stay thin on layers with heavy lines, such as Changes.
+        # and annotations stay thin on layers with heavy lines, such as Outline.
         self._fill = None if self._fill_attr.startswith("#") else self.color
         self._thin = None if self._width in (None, THIN) else THIN
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "layer"
