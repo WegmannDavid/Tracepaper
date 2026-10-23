@@ -114,7 +114,7 @@ The viewer draws every scene the same way; a scene can't change how.
 - **Fields** (§2.11) go under the parts, which are then only outlined, so that the outlines, curves and points show over them.
 - **Notes** are a block of text under the drawing, on the *Notes* layer.
 - **The tree** of a drawing is the scene's, leaving out parts the view doesn't show, with the *Dimensions*, *Constraints*, *Fields* and *Hidden lines* layers beside it.
-- **Text and arrowheads** are sized to the drawing: 3.5 mm, or more for drawings over about 200 mm across.
+- **Text and arrowheads** are sized to the drawing: about a 60th of its larger side, in steps of the ISO text heights (2.5, 3.5, 5, 7 mm ..., halved on below 2.5 mm: 1.75, 1.25, 0.875 ...). So they are as big on screen with the whole drawing in view, whether it is a detail 15 mm across or a building, and the notes too. Sections' hatching is spaced to match. A frame's drawing has the scene's own text height, so it stays the same over the frames.
 
 A drawing reaches the browser, and the sketch file, as an SVG sheet in the format of SPEC-v0.md §2, with `tp:view`'s `scene`, `view` and `frame` saying what it is of.
 

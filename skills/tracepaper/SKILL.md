@@ -20,7 +20,7 @@ Older builds write 2D sheets as layered `.svg` files and 3D models as `.glb` fil
 
 Read `SPEC.md` in this skill's folder every time you start working with views in a session. It links to the live spec in the Tracepaper repository, which is still being developed. Don't rely on memory of an older version. `SPEC-v0.md` describes the older views, and the SVG that drawings and sketch files come as.
 
-The repository (the folder `SPEC.md` links into) also has test scenes: `tests/geometry/make.py` writes them, with CadQuery, and their `.tp.json` files show named sections with dimensions (`bracket`), a 2D scene with dimensions, notes and a field with one value per element (`profile`), frames (`hinge`, opening its door), and frames with values and limits both ways, a strain field, dimensions and notes of each frame's own, a Bézier curve with its ends and handles as points, and a contact point (`clip`, a snap clip pushed into its groove).
+The repository (the folder `SPEC.md` links into) also has test scenes: `tests/geometry/make.py` writes them, with CadQuery, and their `.tp.json` files show named sections with dimensions (`bracket`), a 2D scene with dimensions, notes and a field with one value per element (`profile`), frames (`hinge`, opening its door), and frames with values and limits both ways, a strain field, dimensions and notes of each frame's own, a Bézier curve with its ends and handles as points, and a contact point (`clip`, a snap clip pushed into its groove), and a small detail, 15 mm across, densely dimensioned (`snap`).
 
 ## Tools
 

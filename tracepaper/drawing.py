@@ -76,16 +76,22 @@ def _slug(text: str) -> str:
 
 
 def font_size(size: float) -> float:
-    """Text height for a drawing size mm across: 3.5 mm, or more for big drawings, so that
-    labels stay readable when the whole drawing is in view."""
-    return max(3.5, round(size / 60 * 2) / 2)
+    """Text height for a drawing size mm across: about a 60th of it, so that labels are as big
+    on screen with the whole drawing in view, whether it is a detail of a few millimetres or
+    a building. It steps through the ISO 3098 text heights, 2.5, 3.5, 5, 7, 10 mm and so on, a
+    factor √2 apart, halved on below 2.5 (1.75, 1.25, 0.875 ...), so that it stays put while
+    the drawing changes a little."""
+    k = round(2 * math.log2(max(size, 1e-3) / 150))  # 150 mm across: 2.5 mm
+    return (2.5 if k % 2 == 0 else 3.5) * 2.0 ** (k // 2)
 
 
-def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(), fields=(), ranges=None) -> Sheet:
+def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(), fields=(), ranges=None,
+         text: Optional[float] = None) -> Sheet:
     """The sheet of a view of a scene: spec as views.view_spec gives it, or None for a 2D
     scene's own plane. meta is the scene's .tp.json, name the view's name, hidden the keys
     of the nodes that start hidden, fields as views.fields gives them and ranges each
-    field's (lowest, highest) value, for its colours."""
+    field's (lowest, highest) value, for its colours. text is the text height, if not the
+    drawing's own (font_size): a frame's is the scene's, so that it stays the same over them."""
     if spec is None and scene.flat() is None:  # faces, but not in one plane: seen from above
         spec = {**view_spec({}, "top"), "annotations": meta.get("annotations") or []}
     if spec is None:
@@ -105,7 +111,7 @@ def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(),
     shapes = [s for it in items for s in _shapes(it)]
     box = S.bounds(shapes)
     size = max(box[2] - box[0], box[3] - box[1]) if box else 100
-    fs = font_size(size)
+    fs = text or font_size(size)
     scene_title = meta.get("title") or name.partition("#")[0].rsplit("/", 1)[-1]
     sheet = Sheet(f"{scene_title}, {title}" if title else scene_title, source=meta.get("source"),
                   pipeline=meta.get("pipeline"), regenerate=meta.get("regenerate"),

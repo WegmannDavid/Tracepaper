@@ -189,6 +189,22 @@ class DrawingTest(unittest.TestCase):
         self.assertEqual({g.get("id") for g in root.findall(f".//{SVG}g[@{TP}dim]")}, {"d-bump"})
         self.assertIsNone(root.find(f".//{SVG}path[@id='contact-c-points']"))
 
+    def test_text_is_sized_to_the_drawing(self):
+        # About a 60th of the drawing, in the steps of ISO text heights: small enough on a detail
+        # to read it under its dimensions, big enough on a building to read with it all in view.
+        self.assertEqual([D.font_size(s) for s in (15, 23, 100, 150, 200, 1200)], [0.21875, 0.4375, 1.75, 2.5, 3.5, 20])
+        self.assertEqual(D.font_size(42), D.font_size(44))  # a little bigger, the same
+        scene = GEOMETRY / "snap.step"
+        sheet = D.draw(S.read_step(scene), None, V.read_meta(scene), "snap.step")
+        self.assertEqual(sheet.font_size, 0.21875)
+        root = ET.fromstring(sheet.tostring())
+        self.assertEqual(root.get("font-size"), "0.2188")
+        # The notes and the dimensions round it no bigger than the drawing itself.
+        self.assertLess(float(root.get("viewBox").split()[3]), 2 * 14.7)
+        self.assertEqual(len(root.findall(f".//{SVG}g[@{TP}dim]")), 13)
+        # A frame's text: the scene's, if given.
+        self.assertEqual(D.draw(S.read_step(scene), None, {}, "snap.step", text=2.5).font_size, 2.5)
+
 
 class ViewsTest(unittest.TestCase):
     def test_views_drawn_on_the_fly(self):

@@ -1,11 +1,14 @@
 import http.client
 import json
 import os
+import re
+import shutil
 import tempfile
 import threading
 import unittest
 from unittest import mock
 from pathlib import Path
+from urllib.parse import quote
 
 from tracepaper import server as S
 from tracepaper.server import make_server, view_of_sketch
@@ -224,6 +227,17 @@ class SceneServerTest(unittest.TestCase):
         self.assertIn(b'tp:field="strain"', data)
         self.assertEqual(self.request("GET", "/api/file/clip.step?frame=13")[0], 422)
         self.assertEqual(json.loads(self.request("GET", "/api/frames/bracket.step")[1]), {})
+
+    def test_frames_keep_the_scene_s_text_height(self):
+        # From above, the hinge's door turned 15° to 45° makes a bigger drawing, which on its own
+        # would get bigger text; on the slider it keeps the scene's.
+        for name in ("hinge.step", "hinge.tp.json"):
+            (self.dir / name).write_bytes((GEOMETRY / name).read_bytes())
+        shutil.copytree(GEOMETRY / ".hinge", self.dir / ".hinge")
+        text = lambda query: re.search(rb'<svg[^>]* font-size="([^"]+)"', self.request(
+            "GET", f"/api/file/{quote('hinge.step#top')}{query}")[1]).group(1)
+        self.assertEqual(text(""), b"1.25")
+        self.assertEqual([text(f"?frame={k}") for k in (1, 2, 6)], [b"1.25"] * 3)
 
     def test_sketch_of_a_view_drawn_on_the_fly(self):
         sheet = SHEET

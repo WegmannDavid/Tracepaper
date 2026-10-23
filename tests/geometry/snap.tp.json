@@ -1,0 +1,235 @@
+{
+  "title": "Snap clip, a detail of 15 mm",
+  "source": "tests/geometry/make.py",
+  "regenerate": "python3 tests/geometry/make.py snap",
+  "notes": [
+    "Key",
+    "a  arm length",
+    "b  arm thickness",
+    "h  the hook, how far it sticks out of the arm",
+    "g  the gap between the groove's wall and the arm",
+    "e  the bump on the wall, which the hook rides over",
+    "s  insertion depth",
+    "\u03b4  how far the hook is pushed aside",
+    "The clip of clip.step, 0.35 times as big, 1.05 mm in."
+  ],
+  "annotations": [
+    {
+      "id": "d-arm",
+      "dim": "linear",
+      "p1": [
+        0.35,
+        7.35
+      ],
+      "p2": [
+        0.84,
+        0.35
+      ],
+      "dir": "y",
+      "offset": -1.4,
+      "text-at": 0.5,
+      "value": 7.0,
+      "label": "a = 7"
+    },
+    {
+      "id": "d-thickness",
+      "dim": "linear",
+      "p1": [
+        -0.35,
+        6.65
+      ],
+      "p2": [
+        0.35,
+        6.65
+      ],
+      "dir": "x",
+      "offset": -0.525,
+      "text-at": 1.6,
+      "value": 0.7,
+      "label": "b = 0.7"
+    },
+    {
+      "id": "d-hook",
+      "dim": "linear",
+      "p1": [
+        -0.42,
+        0.7
+      ],
+      "p2": [
+        0.14,
+        0.7
+      ],
+      "dir": "x",
+      "offset": -0.875,
+      "text-at": 0.5,
+      "value": 0.56,
+      "label": "h = 0.56"
+    },
+    {
+      "id": "d-gap",
+      "dim": "linear",
+      "p1": [
+        -0.98,
+        6.65
+      ],
+      "p2": [
+        -0.35,
+        6.65
+      ],
+      "dir": "x",
+      "offset": 0.525,
+      "text-at": -0.6,
+      "value": 0.63,
+      "label": "g = 0.63"
+    },
+    {
+      "id": "d-bump",
+      "dim": "linear",
+      "p1": [
+        -0.98,
+        0.875
+      ],
+      "p2": [
+        -0.42,
+        0.875
+      ],
+      "dir": "x",
+      "offset": -2.1,
+      "text-at": 0.5,
+      "value": 0.56,
+      "label": "e = 0.56"
+    },
+    {
+      "id": "d-ramp",
+      "dim": "linear",
+      "p1": [
+        -0.98,
+        1.4
+      ],
+      "p2": [
+        -0.42,
+        0.875
+      ],
+      "dir": "y",
+      "offset": 0.875,
+      "text-at": 0.5,
+      "value": 0.525
+    },
+    {
+      "id": "d-flat",
+      "dim": "linear",
+      "p1": [
+        -0.42,
+        0.875
+      ],
+      "p2": [
+        -0.42,
+        0.525
+      ],
+      "dir": "y",
+      "offset": 0.875,
+      "text-at": 0.5,
+      "value": 0.35
+    },
+    {
+      "id": "d-back",
+      "dim": "linear",
+      "p1": [
+        -0.42,
+        0.525
+      ],
+      "p2": [
+        -0.98,
+        0.35
+      ],
+      "dir": "y",
+      "offset": 0.875,
+      "text-at": 1.8,
+      "value": 0.175
+    },
+    {
+      "id": "d-depth",
+      "dim": "linear",
+      "p1": [
+        3.15,
+        8.4
+      ],
+      "p2": [
+        3.15,
+        7.35
+      ],
+      "dir": "y",
+      "offset": -0.7,
+      "text-at": 0.5,
+      "value": 1.05,
+      "label": "s = 1.05"
+    },
+    {
+      "id": "d-foot",
+      "dim": "linear",
+      "p1": [
+        -0.35,
+        10.15
+      ],
+      "p2": [
+        3.15,
+        10.15
+      ],
+      "dir": "x",
+      "offset": 0.525,
+      "text-at": 0.5,
+      "value": 3.5
+    },
+    {
+      "id": "d-foot-h",
+      "dim": "linear",
+      "p1": [
+        3.15,
+        7.35
+      ],
+      "p2": [
+        3.15,
+        10.15
+      ],
+      "dir": "y",
+      "offset": -1.4,
+      "text-at": 0.5,
+      "value": 2.8
+    },
+    {
+      "id": "d-deflection",
+      "dim": "linear",
+      "p1": [
+        0.35,
+        0.35
+      ],
+      "p2": [
+        0.84,
+        0.35
+      ],
+      "dir": "x",
+      "offset": -0.7,
+      "text-at": 1.8,
+      "value": 0.49,
+      "label": "\u03b4 = 0.49"
+    },
+    {
+      "id": "d-ramp-angle",
+      "dim": "angular",
+      "center": [
+        -0.98,
+        1.4
+      ],
+      "p1": [
+        -0.98,
+        0.35
+      ],
+      "p2": [
+        -0.42,
+        0.875
+      ],
+      "offset": 0.77,
+      "text-at": 0.6
+    }
+  ]
+}

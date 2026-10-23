@@ -199,42 +199,70 @@ class Scenes:
             if key in self._drawn:
                 self._drawn.move_to_end(key)
                 return self._drawn[key]
-            try:
-                from . import drawing as D, scene as S
-            except ImportError:
-                raise ValueError("showing STEP files needs OpenCascade's Python binding, OCP: "
-                                 "pip install cadquery-ocp (CadQuery and build123d install it)") from None
-            meta = scenes.read_meta(view.path)
-            path, at, entry = view.path, None, None
-            framed = scenes.frames(view.path, meta).get("frames", [])
-            if frame is not None:
-                if not 0 <= frame < len(framed):
-                    raise ValueError(f"{view.path.name} has no frame {frame}")
-                entry = framed[frame]
-                path, at = entry["step"], entry["at"]
-            sc = self._scene(path)
-            hidden = S.find_nodes(sc, meta.get("hidden") or [])
             if view.kind == "model":
+                from . import drawing as D, scene as S
+                sc, meta, _ = self._frame(view, frame)
                 colors = {k: D.rgb(c) for k, c in D.colors(sc).items()}
-                data = S.glb(sc, colors, hidden)
+                data = S.glb(sc, colors, S.find_nodes(sc, meta.get("hidden") or []))
             else:
-                spec, own = None, scenes.frame_meta(meta, entry)  # with the frame's own annotations
-                if view.view is not None:
-                    spec = scenes.view_spec(own, view.view)
-                    if spec is None:
-                        raise ValueError(f"{view.path.name} has no view {view.view!r}")
-                fields = scenes.fields(view.path, meta, entry)
-                sheet = D.draw(sc, spec, own, view.name, hidden=hidden, fields=fields,
-                               ranges=self._ranges(view, meta, framed))
-                if at is not None:
-                    sheet.view["frame"] = scenes.frame_label(at)
-                data = sheet.tostring().encode("utf-8")
-            self._drawn[key] = data
-            while len(self._drawn) > DRAWN_KEPT:
-                self._drawn.popitem(last=False)
+                data = self._sheet(view, frame).tostring().encode("utf-8")
+            self._keep(key, data)
             return data
 
-    def _ranges(self, view: View, meta: dict, framed: list) -> dict:
+    def sheet(self, view: View, frame: Optional[int] = None):
+        """The sheet of a view of a scene, or of one of its frames, as its page shows it."""
+        with self._lock:
+            return self._sheet(view, frame)
+
+    def scene(self, view: View, frame: Optional[int] = None):
+        """The scene a view shows, or one of its frames."""
+        with self._lock:
+            return self._frame(view, frame)[0]
+
+    def _keep(self, key, value) -> None:
+        self._drawn[key] = value
+        while len(self._drawn) > DRAWN_KEPT:
+            self._drawn.popitem(last=False)
+
+    def _frame(self, view: View, frame: Optional[int]):
+        """The scene of a view, or of one of its frames: (scene, .tp.json, the frame's entry)."""
+        try:
+            from . import scene  # noqa: F401  OCP: only once there is a scene to show
+        except ImportError:
+            raise ValueError("showing STEP files needs OpenCascade's Python binding, OCP: "
+                             "pip install cadquery-ocp (CadQuery and build123d install it)") from None
+        meta = scenes.read_meta(view.path)
+        entry = None
+        if frame is not None:
+            framed = scenes.frames(view.path, meta).get("frames", [])
+            if not 0 <= frame < len(framed):
+                raise ValueError(f"{view.path.name} has no frame {frame}")
+            entry = framed[frame]
+        return self._scene(entry["step"] if entry else view.path), meta, entry
+
+    def _sheet(self, view: View, frame: Optional[int]):
+        from . import drawing as D, scene as S
+        sc, meta, entry = self._frame(view, frame)
+        spec, own = None, scenes.frame_meta(meta, entry)  # with the frame's own annotations
+        if view.view is not None:
+            spec = scenes.view_spec(own, view.view)
+            if spec is None:
+                raise ValueError(f"{view.path.name} has no view {view.view!r}")
+        text = None
+        if entry is not None:  # the scene's own, so that it stays the same over the frames
+            key = ("text", view.name, view.mtime())
+            if key not in self._drawn:
+                self._sheet(view, None)
+            text = self._drawn[key]
+        sheet = D.draw(sc, spec, own, view.name, hidden=S.find_nodes(sc, meta.get("hidden") or []),
+                       fields=scenes.fields(view.path, meta, entry), ranges=self._ranges(view, meta), text=text)
+        if entry is None:
+            self._keep(("text", view.name, view.mtime()), sheet.font_size)
+        else:
+            sheet.view["frame"] = scenes.frame_label(entry["at"])
+        return sheet
+
+    def _ranges(self, view: View, meta: dict) -> dict:
         """Each field's lowest and highest value over all the scene's frames, so that its colours
         mean the same in each: {name: (lo, hi)}."""
         from . import fields as F
@@ -242,7 +270,7 @@ class Scenes:
         if key in self._drawn:
             return self._drawn[key]
         out = {}
-        for entry in [None, *framed]:
+        for entry in [None, *scenes.frames(view.path, meta).get("frames", [])]:
             for f in scenes.fields(view.path, meta, entry):
                 try:
                     mesh = F.read_vtu(f["path"])

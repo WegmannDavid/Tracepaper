@@ -24,6 +24,9 @@ something the viewer has to get right when it shows, slices or projects them:
   file for each frame, a key as notes, and each frame's own dimensions and status. The
   arm's centre line is a Bézier curve, with its ends and handles as points, and the
   point where the hook touches the bump is a point too.
+- snap.step: a detail of 15 mm, the clip at 3 mm in, scaled down by SNAP: a dozen
+  dimensions on features 0.07 to 3.5 mm apart, an angle, and a key as notes, all of
+  which have to stay small enough to read the drawing under them.
 - grid.step: 64 parts, all one shape placed 64 times.
 
 Coordinates are millimetres, z up. Nothing here sets a colour.
@@ -405,6 +408,63 @@ def clip_at(depth: float) -> cq.Assembly:
     return a
 
 
+SNAP, SNAP_DEPTH = 0.35, 3.0  # the detail: the clip this much smaller, this far in
+
+
+def scaled(a: cq.Assembly, k: float) -> cq.Assembly:
+    """An assembly of shapes, k times as big, about the origin."""
+    out = cq.Assembly(name=a.name)
+    for child in a.children:
+        out.add(scaled(child, k) if child.children else child.obj.scale(k), name=child.name)
+    return out
+
+
+def snap_meta() -> dict:
+    """The detail's dimensions, in the clip's millimetres and then scaled, and its key."""
+    k, d = SNAP, bending(SNAP_DEPTH)["deflection"]
+    root, tip = 24 - SNAP_DEPTH, 24 - SNAP_DEPTH - ARM
+    hook_x = d - ARM_T / 2  # the arm's left side at its tip, where the hook sticks out
+    dims = [  # id, label, p1, p2, dir, offset, text-at
+        ("d-arm", "a", (ARM_T / 2, root), (ARM_T / 2 + d, tip), "y", -4, 0.5),
+        ("d-thickness", "b", (-ARM_T / 2, root - 2), (ARM_T / 2, root - 2), "x", -1.5, 1.6),
+        ("d-hook", "h", (hook_x - HOOK, tip + 1), (hook_x, tip + 1), "x", -2.5, 0.5),
+        ("d-gap", "g", (WALL, root - 2), (-ARM_T / 2, root - 2), "x", 1.5, -0.6),
+        ("d-bump", "e", (WALL, 2.5), (BUMP[1][0], 2.5), "x", -6, 0.5),
+        ("d-ramp", None, BUMP[0], BUMP[1], "y", 2.5, 0.5),
+        ("d-flat", None, BUMP[1], BUMP[2], "y", 2.5, 0.5),
+        ("d-back", None, BUMP[2], BUMP[3], "y", 2.5, 1.8),
+        ("d-depth", "s", (9, 24), (9, root), "y", -2, 0.5),
+        ("d-foot", None, (-1, root + 8), (9, root + 8), "x", 1.5, 0.5),
+        ("d-foot-h", None, (9, root), (9, root + 8), "y", -4, 0.5),
+        ("d-deflection", "δ", (ARM_T / 2, tip), (ARM_T / 2 + d, tip), "x", -2, 1.8),
+    ]
+    out = []
+    for id, letter, p1, p2, dir, offset, at in dims:
+        p1, p2 = [round(k * c, 6) for c in p1], [round(k * c, 6) for c in p2]
+        value = abs(p2[0] - p1[0]) if dir == "x" else abs(p2[1] - p1[1])
+        out.append({"id": id, "dim": "linear", "p1": p1, "p2": p2, "dir": dir, "offset": round(k * offset, 6),
+                    "text-at": at, "value": round(value, 4),
+                    **({"label": f"{letter} = {value:.3g}"} if letter else {})})
+    out.append({"id": "d-ramp-angle", "dim": "angular", "center": [round(k * c, 6) for c in BUMP[0]],
+                "p1": [round(k * WALL, 6), round(k * BUMP[3][1], 6)], "p2": [round(k * c, 6) for c in BUMP[1]],
+                "offset": round(k * 2.2, 6), "text-at": 0.6})
+    return {
+        "title": "Snap clip, a detail of 15 mm",
+        "source": "tests/geometry/make.py",
+        "regenerate": "python3 tests/geometry/make.py snap",
+        "notes": ["Key",
+                  "a  arm length",
+                  "b  arm thickness",
+                  "h  the hook, how far it sticks out of the arm",
+                  "g  the gap between the groove's wall and the arm",
+                  "e  the bump on the wall, which the hook rides over",
+                  "s  insertion depth",
+                  "δ  how far the hook is pushed aside",
+                  f"The clip of clip.step, {SNAP:g} times as big, {SNAP * SNAP_DEPTH:g} mm in."],
+        "annotations": out,
+    }
+
+
 def grid() -> cq.Assembly:
     a = cq.Assembly(name="grid")
     plate = cq.Workplane("XY").box(20, 20, 4).edges("|Z").fillet(2).faces(">Z").workplane().pushPoints(
@@ -432,6 +492,10 @@ if __name__ == "__main__":
             save(hinge(a), f".hinge/opening={a}.step")
         (HERE / "hinge.tp.json").write_text(json.dumps(hinge_meta(), indent=2) + "\n")
         print("hinge.tp.json")
+    if not only or "snap" in only:
+        save(scaled(clip_at(SNAP_DEPTH), SNAP), "snap.step")
+        (HERE / "snap.tp.json").write_text(json.dumps(snap_meta(), indent=2) + "\n")
+        print("snap.tp.json")
     if not only or "clip" in only:
         save(clip_at(DEPTHS[0]), "clip.step")
         for depth in DEPTHS:
