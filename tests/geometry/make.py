@@ -23,7 +23,13 @@ something the viewer has to get right when it shows, slices or projects them:
   maximum) and pull-out force (with a minimum), the strain in the arm as a field, a .vtu
   file for each frame, a key as notes, and each frame's own dimensions and status. The
   arm's centre line is a Bézier curve, with its ends and handles as points, and the
-  point where the hook touches the bump is a point too.
+  point where the hook touches the bump is a point too. Where they touch, the bump's
+  push on the hook is a field too: forces at three bare points, square to the bump.
+- beam.step: a 2D cantilever and its support, with fields as a FE solver gives them
+  (worked out as a beam here): the stress on a mesh of quadrilaterals, with a maximum,
+  the displacement, which also bends the mesh, the load along its top side on a mesh of
+  lines, and the support's reactions along its fixed end, as forces at the nodes of
+  another.
 - snap.step: a detail of 15 mm, the clip at 3 mm in, scaled down by SNAP: a dozen
   dimensions on features 0.07 to 3.5 mm apart, an angle, and a key as notes, all of
   which have to stay small enough to read the drawing under them.
@@ -39,6 +45,7 @@ import math
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import cadquery as cq
 
@@ -353,6 +360,25 @@ def clip_status(depth: float) -> str:
     return f"s = {depth:g} mm: " + ("riding the bump" if bending(depth)["deflection"] else "not touching yet")
 
 
+def contact_field(depth: float) -> Optional[str]:
+    """Where the bump pushes the hook at an insertion depth, as a .vtu file: the force on the
+    clip (N), square to the bump's side, as big across as it takes to bend the arm, spread
+    over three bare points along the side, a quarter, a half and a quarter of it; or None
+    where they don't touch."""
+    hook = (-ARM_T / 2 - HOOK, 24 - depth - ARM + 1)
+    d = max(0.0, wall_x(hook[1]) - hook[0])
+    if not d or not BUMP[-1][1] < hook[1] < BUMP[0][1]:
+        return None
+    (x0, y0), (x1, y1) = next((a, b) for a, b in zip(BUMP, BUMP[1:]) if b[1] <= hook[1] <= a[1])
+    side = math.hypot(x1 - x0, y1 - y0)
+    along, normal = ((x1 - x0) / side, (y1 - y0) / side), ((y0 - y1) / side, (x1 - x0) / side)
+    push = bending(depth)["force"] / normal[0]
+    at = (hook[0] + d, hook[1])
+    points = [(at[0] + k * 0.15 * along[0], at[1] + k * 0.15 * along[1], 0.0) for k in (-1, 0, 1)]
+    forces = [(w * push * normal[0], w * push * normal[1], 0.0) for w in (0.25, 0.5, 0.25)]
+    return vtu(points, [(0,), (1,), (2,)], [1] * 3, {"f": forces})
+
+
 def clip_meta() -> dict:
     return {
         "title": "Snap clip in its groove",
@@ -364,10 +390,12 @@ def clip_meta() -> dict:
         "quantities": [{"name": "deflection", "unit": "mm"}, {"name": "force", "unit": "N"},
                        {"name": "strain", "unit": "%", "max": 1.0},
                        {"name": "pull-out force", "unit": "N", "min": PULL_MIN}],
-        "fields": [{"name": "strain", "unit": "%", "max": 1.0, "displacement": "u"}],
+        "fields": [{"name": "strain", "unit": "%", "max": 1.0, "displacement": "u"},
+                   {"name": "contact force", "unit": "N", "value": "f"}],
         "frames": [{"at": {"insertion": d}, "step": f".clip/insertion={d:g}.step",
                     "values": {**bending(d), "pull-out force": pull_out(d)},
-                    "fields": {"strain": f".clip/insertion={d:g}.vtu"},
+                    "fields": {"strain": f".clip/insertion={d:g}.vtu",
+                               **({"contact force": f".clip/contact={d:g}.vtu"} if contact_field(d) else {})},
                     "annotations": clip_annotations(d), "notes": [*KEY, "", clip_status(d)]} for d in DEPTHS],
     }
 
@@ -408,6 +436,86 @@ def clip_at(depth: float) -> cq.Assembly:
     a.add(line)
     if d > 0 and BUMP[-1][1] < hook[1] < BUMP[0][1]:
         a.add(cq.Vertex.makeVertex(hook[0] + d, hook[1], 0), name="contact C")
+    return a
+
+
+# The beam: a cantilever of BEAM_L by BEAM_H, BEAM_T thick, held at x = 0, under a load along
+# its top side that grows from nothing there to BEAM_Q at its free end.
+BEAM_L, BEAM_H, BEAM_T, BEAM_Q = 60.0, 8.0, 10.0, 2.0  # mm, mm, mm, N/mm
+BEAM_NX, BEAM_NY = 30, 4  # its mesh's elements along and across it
+
+
+def beam_moment(x: float) -> float:
+    """The bending moment at x (N mm), of the load beyond it: positive where it bends the
+    beam down, the top side in tension."""
+    return BEAM_Q / BEAM_L * ((BEAM_L ** 3 - x ** 3) / 3 - x * (BEAM_L ** 2 - x ** 2) / 2)
+
+
+def beam_bending(steps: int = 600) -> tuple:
+    """How far the beam's axis comes down (v, mm) and turns (v'), at each of steps + 1
+    points along it: EI v'' = -M, held level at x = 0."""
+    inertia = BEAM_T * BEAM_H ** 3 / 12
+    dx = BEAM_L / steps
+    v, slope = [0.0], [0.0]
+    for i in range(steps):
+        m0, m1 = beam_moment(i * dx), beam_moment((i + 1) * dx)
+        slope.append(slope[-1] - (m0 + m1) / 2 * dx / (E * inertia))
+        v.append(v[-1] + (slope[-2] + slope[-1]) / 2 * dx)
+    return v, slope
+
+
+def beam_fields() -> dict:
+    """The beam's fields as .vtu files, by name: on a mesh of quadrilaterals, the stress along
+    it (MPa) and the displacement (mm); the load along its top side (N/mm) on a mesh of lines;
+    and the support's reactions (N) at the nodes of its fixed end, on lines too."""
+    inertia = BEAM_T * BEAM_H ** 3 / 12
+    v, slope = beam_bending()
+    at = lambda x: round(x / BEAM_L * (len(v) - 1))  # noqa: E731
+    points, stress, u = [], [], []
+    for j in range(BEAM_NY + 1):
+        for i in range(BEAM_NX + 1):
+            x, y = BEAM_L * i / BEAM_NX, BEAM_H * j / BEAM_NY
+            c = y - BEAM_H / 2  # from the axis, up
+            points.append((x, y, 0.0))
+            stress.append(beam_moment(x) * c / inertia)
+            u.append((-c * slope[at(x)], v[at(x)], 0.0))
+    row = BEAM_NX + 1
+    quads = [(j * row + i, j * row + i + 1, (j + 1) * row + i + 1, (j + 1) * row + i)
+             for j in range(BEAM_NY) for i in range(BEAM_NX)]
+    top = [(BEAM_L * i / BEAM_NX, BEAM_H, 0.0) for i in range(BEAM_NX + 1)]
+    load = [BEAM_Q * x / BEAM_L for x, _, _ in top]
+    end = [(0.0, BEAM_H * j / BEAM_NY, 0.0) for j in range(BEAM_NY + 1)]
+    dy = BEAM_H / BEAM_NY
+    share = [dy / 2 if j in (0, BEAM_NY) else dy for j in range(BEAM_NY + 1)]
+    shear = [w * (1 - (2 * (y - BEAM_H / 2) / BEAM_H) ** 2) for w, (_, y, _) in zip(share, end)]
+    held = BEAM_Q * BEAM_L / 2  # all the load, up
+    reactions = [(-beam_moment(0) * (y - BEAM_H / 2) / inertia * BEAM_T * w, held * s / sum(shear), 0.0)
+                 for w, s, (_, y, _) in zip(share, shear, end)]
+    lines = lambda n: [(k, k + 1) for k in range(n)]  # noqa: E731
+    return {"beam.vtu": vtu(points, quads, [9] * len(quads), {"stress": stress, "u": u}),
+            "beam.load.vtu": vtu(top, lines(BEAM_NX), [3] * BEAM_NX, {"load": load}),
+            "beam.reaction.vtu": vtu(end, lines(BEAM_NY), [3] * BEAM_NY, {"reaction": reactions})}
+
+
+def beam_meta() -> dict:
+    return {
+        "title": "Cantilever",
+        "source": "tests/geometry/make.py",
+        "regenerate": "python3 tests/geometry/make.py beam",
+        "notes": "Held at its left end, loaded along its top side, more towards its free end.\n"
+                 "Worked out as a beam, as test data: a FE solver's would look like it.",
+        "fields": [{"name": "stress", "unit": "MPa", "max": 20, "file": "beam.vtu", "displacement": "u"},
+                   {"name": "displacement", "unit": "mm", "file": "beam.vtu", "value": "u", "displacement": "u"},
+                   {"name": "load", "unit": "N/mm", "file": "beam.load.vtu"},
+                   {"name": "reaction", "unit": "N", "file": "beam.reaction.vtu"}],
+    }
+
+
+def beam() -> cq.Assembly:
+    """Regions in the plane z = 0: the beam, and the support it is held in."""
+    a = cq.Assembly(name="cantilever")
+    a.add(cq.Sketch().push([(BEAM_L / 2, BEAM_H / 2)]).rect(BEAM_L, BEAM_H)._faces, name="beam")
+    a.add(cq.Sketch().push([(-4, BEAM_H / 2)]).rect(8, BEAM_H + 12)._faces, name="support")
     return a
 
 
@@ -502,7 +610,7 @@ def corner() -> cq.Assembly:
 if __name__ == "__main__":
     only = set(sys.argv[1:])
     for name, make in [("primitives", primitives), ("bracket", bracket), ("freeform", freeform),
-                       ("hinge", hinge), ("profile", profile), ("grid", grid), ("corner", corner)]:
+                       ("hinge", hinge), ("profile", profile), ("grid", grid), ("corner", corner), ("beam", beam)]:
         if not only or name in only:
             save(make(), f"{name}.step")
     if not only or "profile" in only:
@@ -518,10 +626,20 @@ if __name__ == "__main__":
         save(scaled(clip_at(SNAP_DEPTH), SNAP), "snap.step")
         (HERE / "snap.tp.json").write_text(json.dumps(snap_meta(), indent=2) + "\n")
         print("snap.tp.json")
+    if not only or "beam" in only:
+        for name, text in beam_fields().items():
+            (HERE / name).write_text(text)
+        (HERE / "beam.tp.json").write_text(json.dumps(beam_meta(), indent=2) + "\n")
+        print("beam.tp.json")
     if not only or "clip" in only:
         save(clip_at(DEPTHS[0]), "clip.step")
         for depth in DEPTHS:
             save(clip_at(depth), f".clip/insertion={depth:g}.step")
             (HERE / f".clip/insertion={depth:g}.vtu").write_text(clip_field(depth))
+            contact = HERE / f".clip/contact={depth:g}.vtu"
+            if contact_field(depth):
+                contact.write_text(contact_field(depth))
+            else:
+                contact.unlink(missing_ok=True)
         (HERE / "clip.tp.json").write_text(json.dumps(clip_meta(), indent=2) + "\n")
         print("clip.tp.json")

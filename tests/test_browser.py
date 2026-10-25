@@ -1325,6 +1325,80 @@ class ViewerInFirefox(unittest.TestCase):
         finally:
             shutil.rmtree(scenes)
 
+    def test_fields_arrows_and_mesh(self):
+        scenes = self.dir / "fields"
+        shutil.copytree(GEOMETRY, scenes, ignore=shutil.ignore_patterns("*.py", "*.sketch.svg"))
+        try:
+            # The cantilever: stress on quadrilaterals, the displacement as arrows, the load along a
+            # line and the support's reactions at the nodes of another.
+            self.open_viewer("fields/beam.step")
+            got = self.m.run("""
+                until(() => tp.fieldView.fields.length === 4, () => {
+                  const fv = tp.fieldView, by = Object.fromEntries(fv.fields.map((f) => [f.name, f]));
+                  const set = (name, key, value) => { fv.settings.get(name)[key] = value; fv.update(by[name]); };
+                  const shown = (el) => !el.closest('[display="none"]');
+                  const out = { names: fv.fields.map((f) => f.name),
+                                colours: Object.fromEntries(fv.fields.map((f) => [f.name, shown(f.colours)])),
+                                arrows: Object.fromEntries(fv.fields.map((f) => [f.name, f.arrows.length])),
+                                pivot: by.reaction.pivot, lines: by.load.lines.length };
+                  set('stress', 'mesh', true);
+                  const mesh = by.stress.layer.querySelector('.tpv-field-extra');
+                  out.sides = (mesh.getAttribute('d').match(/M/g) || []).length;
+                  set('reaction', 'values', true);
+                  out.labels = [...by.reaction.arrowGroup.querySelectorAll('text')].map((t) => t.textContent);
+                  const a = by.reaction.arrows.find((r) => r.v === Math.max(...by.reaction.arrows.map((q) => q.v)));
+                  const long = () => Math.hypot(a.ends[1][0] - a.ends[0][0], a.ends[1][1] - a.ends[0][1]);
+                  const before = long();
+                  set('reaction', 'length', 2);
+                  out.longer = long() / before;
+                  out.tipAtNode = a.ends[1].map((c) => +c.toFixed(4)).join(' ') === a.at.map((c) => +c.toFixed(4)).join(' ');
+                  const m = by.reaction.arrowGroup.getScreenCTM();
+                  const tip = new DOMPoint(...a.ends[1]).matrixTransform(m);
+                  out.atArrow = fv.valueAt(tip.x - 1, tip.y);
+                  const band = by.load.lines[by.load.lines.length - 1].el.getBoundingClientRect();
+                  out.onBand = fv.valueAt(band.x + band.width / 2, band.y + band.height / 2);
+                  set('displacement', 'scale', 0);
+                  const d = by.displacement.arrows[0];
+                  out.unmoved = d.ends[0].map((c) => +c.toFixed(4)).join(' ') === d.at.map((c) => +c.toFixed(4)).join(' ');
+                  out.panel = [...document.querySelectorAll('.tpv-field[data-field="displacement"] input[type="checkbox"]')]
+                    .map((c) => c.parentNode.textContent.trim());
+                  done(out);
+                });
+            """)
+            self.assertEqual(got["names"], ["stress", "displacement", "load", "reaction"])
+            self.assertEqual(got["colours"], {"stress": True, "displacement": False, "load": True, "reaction": False})
+            self.assertEqual(got["arrows"]["stress"], 0)
+            self.assertTrue(10 < got["arrows"]["displacement"] < 155)  # thinned out
+            self.assertEqual(got["arrows"]["reaction"], 5)
+            self.assertEqual((got["pivot"], got["lines"]), ("tip", 30))
+            self.assertEqual(got["sides"], 30 * 5 + 31 * 4)  # quadrilaterals, not their triangles
+            self.assertEqual(len(got["labels"]), 5)
+            self.assertAlmostEqual(got["longer"], 2, places=3)
+            self.assertTrue(got["tipAtNode"])  # a force on the fixed end, pushing on it
+            self.assertRegex(got["atArrow"], r"^reaction \d+(\.\d+)? N \(-?\d")
+            self.assertRegex(got["onBand"], r"^load 1\.9\d* N/mm$")
+            self.assertTrue(got["unmoved"])
+            self.assertEqual(got["panel"], ["Arrows", "Values", "Colours", "Mesh"])
+            if os.environ.get("TRACEPAPER_SCREENSHOT"):
+                png = self.m.call("WebDriver:TakeScreenshot", {"full": False, "hash": False})["value"]
+                Path(os.environ["TRACEPAPER_SCREENSHOT"]).with_suffix(".fields.png").write_bytes(base64.b64decode(png))
+            # The clip's contact: forces at bare points, in the frames where the hook touches the bump.
+            self.open_viewer("fields/clip.step")
+            got = self.m.run("""
+                until(() => tp.frames.on && tp.fieldView.on, () => {
+                  const names = () => tp.fieldView.fields.map((f) => f.name);
+                  const first = names();
+                  for (let i = 0; i < 5; i++) tp.frames.step(1);
+                  until(() => names().length === 2, () => {
+                    const f = tp.fieldView.fields[1];
+                    done({ first, then: names(), arrows: f.arrows.length, pivot: f.pivot });
+                  });
+                });
+            """)
+            self.assertEqual(got, {"first": ["strain"], "then": ["strain", "contact force"], "arrows": 3, "pivot": "tip"})
+        finally:
+            shutil.rmtree(scenes)
+
     def test_tree_panel_width(self):
         drag = """
             const main = document.querySelector('main'), divider = document.querySelector('.tpv-splitter');

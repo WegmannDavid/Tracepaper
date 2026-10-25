@@ -61,6 +61,11 @@
       "unit": "%",
       "max": 1.0,
       "displacement": "u"
+    },
+    {
+      "name": "contact force",
+      "unit": "N",
+      "value": "f"
     }
   ],
   "frames": [
@@ -240,7 +245,8 @@
         "pull-out force": 0.0
       },
       "fields": {
-        "strain": ".clip/insertion=1.5.vtu"
+        "strain": ".clip/insertion=1.5.vtu",
+        "contact force": ".clip/contact=1.5.vtu"
       },
       "annotations": [
         {
@@ -317,7 +323,8 @@
         "pull-out force": 0.0
       },
       "fields": {
-        "strain": ".clip/insertion=2.vtu"
+        "strain": ".clip/insertion=2.vtu",
+        "contact force": ".clip/contact=2.vtu"
       },
       "annotations": [
         {
@@ -394,7 +401,8 @@
         "pull-out force": 0.0
       },
       "fields": {
-        "strain": ".clip/insertion=2.5.vtu"
+        "strain": ".clip/insertion=2.5.vtu",
+        "contact force": ".clip/contact=2.5.vtu"
       },
       "annotations": [
         {
@@ -471,7 +479,8 @@
         "pull-out force": 0.0
       },
       "fields": {
-        "strain": ".clip/insertion=3.vtu"
+        "strain": ".clip/insertion=3.vtu",
+        "contact force": ".clip/contact=3.vtu"
       },
       "annotations": [
         {
@@ -548,7 +557,8 @@
         "pull-out force": 0.0
       },
       "fields": {
-        "strain": ".clip/insertion=3.5.vtu"
+        "strain": ".clip/insertion=3.5.vtu",
+        "contact force": ".clip/contact=3.5.vtu"
       },
       "annotations": [
         {

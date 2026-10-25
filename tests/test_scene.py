@@ -238,7 +238,7 @@ class DrawingTest(unittest.TestCase):
         names = [g.get(f"{INK}label") for g in root.findall(f"{SVG}g")]
         self.assertLess(names.index("Fields"), names.index("clip"))
         self.assertEqual(root.find(f".//{SVG}path[@id='clip-1']").get("fill"), None)
-        tris = layer.findall(f"{SVG}path")
+        tris = layer.findall(f"{SVG}g[@{TP}part='colours']/{SVG}path")
         self.assertEqual(len(tris), 480)
         # Each corner moved by its displacement, from where it was before.
         t = tris[-1]
@@ -248,6 +248,51 @@ class DrawingTest(unittest.TestCase):
         for k in range(6):
             self.assertAlmostEqual(d[k], p[k] + u[k], places=3)
 
+    def test_arrows_bands_and_elements(self):
+        scene = GEOMETRY / "beam.step"
+        meta = V.read_meta(scene)
+        sheet = D.draw(S.read_step(scene), None, meta, "beam.step", fields=V.fields(scene, meta))
+        root = ET.fromstring(sheet.tostring())
+        layer = lambda name: root.find(f".//{SVG}g[@{TP}field='{name}']")  # noqa: E731
+        part = lambda name, kind: layer(name).find(f"{SVG}g[@{TP}part='{kind}']")  # noqa: E731
+        # A vector is arrows, its lengths' colours hidden at first; a number is colours alone.
+        self.assertEqual(part("displacement", "colours").get("display"), "none")
+        self.assertIsNone(part("stress", "colours").get("display"))
+        self.assertIsNone(part("stress", "arrows"))
+        # Over areas, arrows start at their points; on lines and points, as forces, they end there.
+        self.assertEqual((layer("displacement").get(f"{TP}pivot"), layer("reaction").get(f"{TP}pivot")), ("tail", "tip"))
+        # More than ARROWS_MAX of them are thinned out, evenly.
+        at = [tuple(map(float, a.get(f"{TP}at").split())) for a in part("displacement", "arrows").findall(f"{SVG}path")]
+        self.assertTrue(10 < len(at) < 155)
+        self.assertGreaterEqual(min(math.dist(a, b) for i, a in enumerate(at) for b in at[:i]),
+                                D.ARROW_GAP * sheet.font_size - 1e-6)
+        # The longest is ARROW text heights long, and ends at its node.
+        arrows = part("reaction", "arrows").findall(f"{SVG}path")
+        self.assertEqual(len(arrows), 5)
+        longest = max(arrows, key=lambda a: float(a.get(f"{TP}v")))
+        d = [float(v) for v in re.findall(r"-?\d+\.?\d*(?:e-?\d+)?", longest.get("d"))]
+        self.assertAlmostEqual(math.dist(d[0:2], d[4:6]), D.ARROW * sheet.font_size, places=3)
+        self.assertEqual(d[4:6], [float(v) for v in longest.get(f"{TP}at").split()])
+        # The load: a band along each line, its values at both ends.
+        bands = part("load", "colours").findall(f"{SVG}path")
+        self.assertEqual((len(bands), bands[-1].get("stroke-width"), bands[-1].get(f"{TP}v")), (30, "5", "1.9333 2"))
+        # A quadrilateral's two triangles carry its number, for the mesh.
+        tris = part("stress", "colours").findall(f"{SVG}path")
+        self.assertEqual((len(tris), len({t.get(f"{TP}c") for t in tris})), (240, 120))
+        # Fields with areas go under the parts.
+        names = [g.get(f"{INK}label") for g in root.findall(f"{SVG}g")]
+        self.assertLess(names.index("Fields"), names.index("beam"))
+
+    def test_arrows_keep_one_scale_over_the_frames(self):
+        from tracepaper.server import Scenes, View
+        scenes, view = Scenes(), View("clip.step", "sheet", GEOMETRY / "clip.step")
+        scale = {}
+        for k in (0, 3, 5):
+            layer = ET.fromstring(scenes.sheet(view, k).tostring()).find(f".//{SVG}g[@{TP}field='contact force']")
+            scale[k] = None if layer is None else layer.get(f"{TP}scale")
+        self.assertIsNone(scale[0])  # not touching yet
+        self.assertIsNotNone(scale[3])
+        self.assertEqual(scale[3], scale[5])
 
     def test_points_notes_and_a_frame_s_own_annotations(self):
         scene = GEOMETRY / "clip.step"

@@ -389,3 +389,4 @@ main.tpv-project { display: block; overflow: auto; }
 .tpv-measure-line { fill: none; stroke: #0f766e; stroke-width: 1.5; stroke-dasharray: 5 3; }
 .tpv-measure-dot { stroke: #0f766e; stroke-width: 6; stroke-linecap: round; }
 .tpv-measure text { fill: #0f766e; stroke: #fff; stroke-width: 3; paint-order: stroke; font-weight: 600; }
+.tpv-field-note { margin-top: 2px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }

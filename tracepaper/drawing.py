@@ -32,7 +32,7 @@ from typing import Optional
 
 from . import fields as F
 from . import scene as S
-from .sheet import SCREEN_WIDTH, TP_NS, Sheet, fmt
+from .sheet import K, SCREEN_WIDTH, TP_NS, Sheet, fmt
 from . import views as V
 from .views import view_spec
 
@@ -46,6 +46,11 @@ CURVE = {"stroke": "#475569", "stroke-width": "1", "stroke-dasharray": "6 4", "f
 HIDDEN = {"stroke": "#6b7280", "stroke-width": "1", "stroke-dasharray": "5 3", "fill": "none"}
 DOT_PX = 7  # a point's dot, across, on screen
 TINT = 0.55  # of white mixed into a part's colour for its regions
+FIELD_OVER = "#b91c1c"  # a field's arrows outside its limits
+LINE_PX = 5  # a field's band along a line, wide on screen
+ARROW = 6  # text heights: a field's longest arrow, over all its frames
+ARROWS_MAX = 100  # a field with more arrows than this on a drawing has them thinned out,
+ARROW_GAP = 3  # text heights apart at the least
 # Fields' colour map: viridis, which gets lighter from start to end, so it reads in greys too.
 VIRIDIS = ["#440154", "#472d7b", "#3b528b", "#2c728e", "#21918c", "#28ae80", "#5ec962", "#addc30", "#fde725"]
 
@@ -130,10 +135,11 @@ def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(),
     if box:
         sheet._grow([(box[0], box[1]), (box[2], box[3])])
 
-    # Fields on this view, worked out first: where there are any, they go under the parts, whose
+    # Fields on this view, worked out first: where one has areas, they go under the parts, whose
     # regions are then only outlined, so that the outlines, curves and points show over them.
-    shown_fields = [(f, F.triangles_on(F.read_vtu(f["path"]), pl, f["value"], f.get("displacement"))) for f in fields]
-    shown_fields = [(f, tris) for f, tris in shown_fields if tris]
+    shown_fields = [(f, F.on_plane(F.read_vtu(f["path"]), pl, f["value"], f.get("displacement"))) for f in fields]
+    shown_fields = [(f, on) for f, on in shown_fields if on.triangles or on.lines or on.dots or on.arrows]
+    covered = any(on.triangles for _, on in shown_fields)
     palette = colors(scene)
     hatch = fs * 0.6
     order = {p.key: i for i, p in enumerate(scene.parts())}
@@ -165,7 +171,7 @@ def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(),
             fill = sheet.hatch(45 if k % 2 == 0 else -45, hatch * (1 if k // 2 % 2 == 0 else 1.6))
             for i, face in enumerate(it.regions, 1):
                 d = S.region_d(face)
-                if shown_fields:  # the field shows what's inside
+                if covered:  # the field shows what's inside
                     layer.path(f"{slug}-{'cut-' if isinstance(it, S.Cut) else ''}{i}", d, source=key)
                 elif isinstance(it, S.Cut):
                     layer.path(f"{slug}-tint-{i}", d, stroke="none", fill=_tint(color), fill_rule="evenodd")
@@ -228,38 +234,127 @@ def _notes(sheet: Sheet, lines: list) -> None:
 
 
 def _fields(sheet: Sheet, fields, ranges: dict) -> None:
-    """Each field on a layer of its own under Fields, under the parts: fields as [(field, its
-    triangles in the sheet's plane)], each triangle coloured by the mean of its corners' values
-    and carrying them (tp:v), to be recoloured, cut at a level or traced along isolines by the
-    page, and where the field moves the mesh, each corner's displacement (tp:u) and place
-    before it (tp:p), drawn moved by it."""
+    """Each field on a layer of its own under Fields: fields as [(field, what of it lies in the
+    sheet's plane, F.OnPlane)]. Under the parts where one has areas, else over them.
+
+    Its colours (tp:part="colours"): triangles, bands along lines and dots at bare points,
+    coloured by their values (a triangle's and a band's by the mean of its corners'), carrying
+    them (tp:v), to be recoloured, cut at a level or traced along isolines by the page; the
+    triangles of an element with more than one (a quadrilateral) also its number (tp:c), so
+    that the page can draw the mesh. A vector field's colours are its lengths', hidden at
+    first, and its arrows (tp:part="arrows") show: each from its point (tp:at) along its
+    vector in the plane (tp:vec) at the layer's tp:scale, mm for each of its unit; starting
+    at its point over areas, ending at it on lines and points (tp:pivot), as forces on them
+    are drawn; zero ones left out, and more than ARROWS_MAX thinned out. Where the field moves
+    the mesh, everything carries each point's displacement (tp:u) and place before it (tp:p,
+    tp:at), drawn moved by it."""
     if not fields:
         return
     layer = _role(sheet.layer("Fields", style={"stroke": "none", "fill": "none"}), "fields")
-    sheet.layers.remove(layer)  # under the parts, over the hidden lines
-    under = 1 if sheet.layers and sheet.layers[0].element.get(f"{{{TP_NS}}}role") == "hidden-lines" else 0
-    sheet.layers.insert(under, layer)
-    for f, tris in fields:
-        values = [v for _, vals, _ in tris for v in vals]
+    if any(on.triangles for _, on in fields):  # under the parts, over the hidden lines
+        sheet.layers.remove(layer)
+        under = 1 if sheet.layers and sheet.layers[0].element.get(f"{{{TP_NS}}}role") == "hidden-lines" else 0
+        sheet.layers.insert(under, layer)
+    fs = sheet.font_size
+    svg = "{http://www.w3.org/2000/svg}"
+    for f, on in fields:
+        values = ([v for _, vals, _, _ in on.triangles for v in vals] + [v for _, vals, _ in on.lines for v in vals]
+                  + [v for _, v, _ in on.dots] + [length for _, _, length, _ in on.arrows])
         lo, hi = ranges.get(f["name"]) or ((min(values), max(values)) if values else (0, 1))
         sub = layer.sublayer(f["name"])
+        scale = ARROW * fs / hi if on.vector and hi > 0 else None
+        pivot = "tail" if on.areas else "tip"
         for k, v in (("field", f["name"]), ("unit", f.get("unit") or None), ("range", f"{fmt(lo)} {fmt(hi)}"),
                      ("min", None if f.get("min") is None else fmt(float(f["min"]))),
-                     ("max", None if f.get("max") is None else fmt(float(f["max"])))):
+                     ("max", None if f.get("max") is None else fmt(float(f["max"]))),
+                     ("scale", fmt(scale, 6) if scale else None), ("pivot", pivot if scale else None)):
             if v is not None:
                 sub.element.set(f"{{{TP_NS}}}{k}", v)
         span = (hi - lo) or 1
-        for pts, vals, disp in tris:
+        colours = ET.SubElement(sub.element, f"{svg}g", {f"{{{TP_NS}}}part": "colours"})
+        if on.vector:
+            colours.set("display", "none")
+
+        def shape(d_of, pts, vals, disp, attrs):
             moved = [(x + d[0], y + d[1]) for (x, y), d in zip(pts, disp)] if disp else list(pts)
-            color = field_color((sum(vals) / 3 - lo) / span)
-            attrs = {"d": "M" + " L".join(f"{fmt(x)} {fmt(y)}" for x, y in moved) + " Z", "fill": color,
-                     "stroke": color, "stroke-width": "0.6", **SCREEN_WIDTH,  # no seams between triangles
-                     f"{{{TP_NS}}}v": " ".join(fmt(v) for v in vals)}
+            color = field_color((sum(vals) / len(vals) - lo) / span)
+            attrs = {"d": d_of(moved), **attrs(color), f"{{{TP_NS}}}v": " ".join(fmt(v) for v in vals)}
             if disp:
                 attrs[f"{{{TP_NS}}}u"] = " ".join(f"{fmt(d[0])} {fmt(d[1])}" for d in disp)
                 attrs[f"{{{TP_NS}}}p"] = " ".join(f"{fmt(x)} {fmt(y)}" for x, y in pts)
-            ET.SubElement(sub.element, f"{{http://www.w3.org/2000/svg}}path", attrs)
             sheet._grow(moved)
+            return ET.SubElement(colours, f"{svg}path", attrs)
+
+        def polygon(pts):
+            return "M" + " L".join(f"{fmt(x)} {fmt(y)}" for x, y in pts) + " Z"
+
+        def dot(pts):
+            return f"M{fmt(pts[0][0])} {fmt(pts[0][1])} L{fmt(pts[0][0])} {fmt(pts[0][1])}"
+
+        shared = {}
+        for *_, cell in on.triangles:
+            shared[cell] = shared.get(cell, 0) + 1
+        for pts, vals, disp, cell in on.triangles:
+            el = shape(polygon, pts, vals, disp, lambda c: {"fill": c, "stroke": c, "stroke-width": "0.6", **SCREEN_WIDTH})
+            if shared[cell] > 1:  # no seams between triangles, above; the mesh's edges skip those inside an element
+                el.set(f"{{{TP_NS}}}c", str(cell))
+        for pts, vals, disp in on.lines:
+            shape(lambda m: polygon(m)[:-2], pts, vals, disp,
+                  lambda c: {"fill": "none", "stroke": c, "stroke-width": str(LINE_PX), "stroke-linecap": "round",
+                             **SCREEN_WIDTH})
+        for pt, val, disp in on.dots:
+            shape(dot, [pt], [val], [disp] if disp else None,
+                  lambda c: {"fill": "none", "stroke": c, "stroke-width": str(DOT_PX), "stroke-linecap": "round",
+                             **SCREEN_WIDTH})
+        if not scale:
+            continue
+        arrows = ET.SubElement(sub.element, f"{svg}g", {f"{{{TP_NS}}}part": "arrows"})
+        shown = [a for a in on.arrows if a[2] > 0 and math.hypot(*a[1]) * scale > 1e-9]
+        if len(shown) > ARROWS_MAX:
+            shown = _thinned(shown, ARROW_GAP * fs)
+        lowest, highest = f.get("min"), f.get("max")
+        for (x, y), vec, length, disp in shown:
+            at = (x + disp[0], y + disp[1]) if disp else (x, y)
+            tail, tip, d = arrow(at, vec, scale, pivot, fs)
+            outside = (highest is not None and length > float(highest)) or (lowest is not None and length < float(lowest))
+            color = FIELD_OVER if outside else INK
+            attrs = {"d": d, "fill": color, "stroke": color, "stroke-width": "1.5", "stroke-linejoin": "round",
+                     **SCREEN_WIDTH, f"{{{TP_NS}}}at": f"{fmt(x)} {fmt(y)}",
+                     f"{{{TP_NS}}}vec": f"{fmt(vec[0])} {fmt(vec[1])}", f"{{{TP_NS}}}v": fmt(length)}
+            if disp:
+                attrs[f"{{{TP_NS}}}u"] = f"{fmt(disp[0])} {fmt(disp[1])}"
+            ET.SubElement(arrows, f"{svg}path", attrs)
+            sheet._grow([tail, tip])
+
+
+def arrow(at, vec, scale: float, pivot: str, fs: float):
+    """A field's arrow at point at for vector vec, scale mm for each of its unit, starting at
+    the point (pivot "tail") or ending at it ("tip"): (tail, tip, its path), the shaft up to
+    the head, which is a dimension's arrowhead, shorter on a short arrow. As fieldview.js
+    draws it."""
+    a = (vec[0] * scale, vec[1] * scale)
+    length = math.hypot(*a)
+    tail, tip = (at, (at[0] + a[0], at[1] + a[1])) if pivot == "tail" else ((at[0] - a[0], at[1] - a[1]), at)
+    head = min(K["arrowLen"] * fs, 0.5 * length)
+    ux, uy = a[0] / length, a[1] / length
+    base = (tip[0] - ux * head, tip[1] - uy * head)
+    side = (-uy * head * K["arrowHalf"] / K["arrowLen"], ux * head * K["arrowHalf"] / K["arrowLen"])
+    p = lambda q: f"{fmt(q[0])} {fmt(q[1])}"  # noqa: E731
+    return tail, tip, (f"M{p(tail)} L{p(base)} M{p(tip)} L{p((base[0] + side[0], base[1] + side[1]))} "
+                       f"L{p((base[0] - side[0], base[1] - side[1]))} Z")
+
+
+def _thinned(arrows: list, gap: float) -> list:
+    """Arrows no closer than gap to each other: of each crowd, the first in order of their
+    points, so that the same ones stay from frame to frame on the same mesh."""
+    kept, grid = [], {}
+    for a in sorted(arrows, key=lambda a: (a[0][1], a[0][0])):
+        (x, y), cell = a[0], (math.floor(a[0][0] / gap), math.floor(a[0][1] / gap))
+        near = (b for i in (-1, 0, 1) for j in (-1, 0, 1) for b in grid.get((cell[0] + i, cell[1] + j), ()))
+        if all(math.dist((x, y), b) >= gap for b in near):
+            grid.setdefault(cell, []).append((x, y))
+            kept.append(a)
+    return kept
 
 
 def _role(layer, role: str):

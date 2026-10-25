@@ -1,0 +1,32 @@
+{
+  "title": "Cantilever",
+  "source": "tests/geometry/make.py",
+  "regenerate": "python3 tests/geometry/make.py beam",
+  "notes": "Held at its left end, loaded along its top side, more towards its free end.\nWorked out as a beam, as test data: a FE solver's would look like it.",
+  "fields": [
+    {
+      "name": "stress",
+      "unit": "MPa",
+      "max": 20,
+      "file": "beam.vtu",
+      "displacement": "u"
+    },
+    {
+      "name": "displacement",
+      "unit": "mm",
+      "file": "beam.vtu",
+      "value": "u",
+      "displacement": "u"
+    },
+    {
+      "name": "load",
+      "unit": "N/mm",
+      "file": "beam.load.vtu"
+    },
+    {
+      "name": "reaction",
+      "unit": "N",
+      "file": "beam.reaction.vtu"
+    }
+  ]
+}

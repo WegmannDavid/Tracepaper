@@ -243,7 +243,7 @@ A scene MAY come in **frames**: the whole scene at several values of one or more
 
 ### 2.11 Fields
 
-A scene MAY carry **fields**: values at the nodes of a mesh, such as the strain a FEM solver found, linear across each element.
+A scene MAY carry **fields**: values at the nodes of a mesh, such as the strain a FEM solver found, linear across each element. A value is a number or a vector: a displacement, or the forces between two parts at the nodes where they touch.
 
 ```json
 {
@@ -256,12 +256,17 @@ A scene MAY carry **fields**: values at the nodes of a mesh, such as the strain 
 | `name` | The field's name, shown to the person. |
 | `unit`, `min`, `max` | Its unit, and the least and the most it may be, where it has limits. |
 | `file` | Its `.vtu` file, relative to the scene's folder and inside it. A frame can give one of its own (§2.10). |
-| `value` | The name of the point data to show, or of the cell data: one value for each element, the same all across it. Default: `name`. A vector shows as its length. |
+| `value` | The name of the point data to show, or of the cell data: one value for each element, the same all across it. Default: `name`. A number, or a vector of 2 or 3 components. |
 | `displacement` | The name of a vector point data that moves the mesh's nodes from where the file has them, or none. |
 
-- **The file** is a VTK XML unstructured grid (`.vtu`), as meshio, FEniCS, ParaView and most FEM tools write it: ASCII, binary or appended, compressed with zlib or not. Its cells are triangles, quadrilaterals or tetrahedra (quadratic ones by their corners), in the scene's coordinates.
-- **On a drawing:** the mesh's triangles that lie in the drawing's plane, and where the plane cuts tetrahedra, the cut, which is exact for a field linear across them.
-- **The viewer (informative)** draws each field on its own layer under *Fields*, in a colour map that gets lighter from its lowest value to its highest (viridis, which reads in greys too), the same range over all frames. The person can change the range, show only where the field is outside its limits, add isolines, scale the displacement (0 shows the mesh where the file has it, 1 moved as far as the field says, more to exaggerate), and read the value under the pointer. Fields aren't shown in 3D yet.
+- **The file** is a VTK XML unstructured grid (`.vtu`), as meshio, FEniCS, ParaView and most FEM tools write it: ASCII, binary or appended, compressed with zlib or not. Its cells are triangles, quadrilaterals or tetrahedra, lines (such as the edge where two parts touch) or vertices (bare points, such as where forces act); quadratic ones by their corners; points without cells are bare points. All in the scene's coordinates.
+- **What it is, not how it looks:** a field of forces on a boundary is a mesh of lines or bare points with a vector at each node; a field over a part is a mesh of its areas or volume. The viewer draws them accordingly (below); a field has no keys about looks.
+- **On a drawing:** the mesh's triangles, lines and bare points that lie in the drawing's plane, and where the plane cuts tetrahedra, the cut, which is exact for a field linear across them.
+- **The viewer (informative)** draws each field on its own layer under *Fields*:
+  - **Numbers** in a colour map that gets lighter from its lowest value to its highest (viridis, which reads in greys too), the same range over all frames: areas filled, lines as bands, bare points as dots.
+  - **Vectors** as arrows, at their nodes (or, one for each element, at its middle), as long as they are big, on one scale over all frames: the longest a tenth of the drawing or so. Over areas and volumes an arrow starts at its node, as a field's are drawn; on lines and bare points it ends there, as forces on a body are. Zero ones aren't drawn, and where there are more than about a hundred, they are thinned out evenly. Arrows outside the field's limits are red. Their lengths' colours are there too, hidden at first.
+  - Fields with areas go under the parts, which are then only outlined; fields of lines and points alone go over them.
+  - The person can change the range, the arrows' length, show only what is outside the limits, add isolines, the mesh's edges (quadrilaterals as such) and the arrows' values, scale the displacement (0 shows the mesh where the file has it, 1 moved as far as the field says, more to exaggerate), and read the value under the pointer, or an arrow's near it. Fields aren't shown in 3D yet.
 
 ## 3. Sketch files
 
