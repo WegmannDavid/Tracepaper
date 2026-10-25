@@ -78,7 +78,7 @@ class FieldsTest(unittest.TestCase):
 
     def test_encodings(self):
         points = [(0, 0, 0), (2, 0, 0), (2, 1, 0), (0, 1, 0)]
-        for encoding in ("ascii", "binary", "zlib"):
+        for encoding in ("ascii", "binary", "zlib", "binary apart", "zlib apart"):
             with self.subTest(encoding=encoding):
                 mesh = F.read_vtu(self.write(vtu(points, [[0, 1, 2, 3]], [F.QUAD],
                                                  {"t": [1.0, 2.0, 3.0, 4.0], "u": [(1.0, 0.0, 0.0)] * 4}, encoding)))
@@ -86,6 +86,14 @@ class FieldsTest(unittest.TestCase):
                 self.assertEqual(mesh.triangles, [(0, 1, 2), (0, 2, 3)])  # a quad in two
                 self.assertEqual(mesh.data["t"], [1, 2, 3, 4])
                 self.assertEqual(mesh.data["u"][3], (1, 0, 0))
+
+    def test_unreadable_files_are_named(self):
+        text = vtu([(0, 0, 0)], [[0]], [F.VERTEX], {"t": [1.0]})
+        bad = re.sub(r'(<Points><DataArray[^>]*?) format="ascii">[^<]*', r'\1 format="binary">AAAA', text)  # 3 bytes
+        with self.assertRaisesRegex(ValueError, "^f.vtu: unpack"):
+            F.read_vtu(self.write(bad))
+        with self.assertRaisesRegex(ValueError, "^f.vtu: not a VTK unstructured grid"):
+            F.read_vtu(self.write('<VTKFile type="PolyData"/>'))
 
     def test_triangles_in_the_plane(self):
         points = [(0, 0, 0), (2, 0, 0), (0, 1, 0), (0, 0, 5)]

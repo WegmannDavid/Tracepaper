@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import math
+import re
 import struct
 import xml.etree.ElementTree as ET
 import zlib
@@ -55,7 +56,9 @@ def _decode(el: ET.Element, appended: bytes, header: str, compressed: bool) -> l
     if fmt == "ascii":
         return [float(v) if kind in "fd" else int(v) for v in (el.text or "").split()]
     if fmt == "binary":
-        raw = base64.b64decode("".join((el.text or "").split()))
+        # VTK and meshio write an array's header and its data as base64 strings of their own, one
+        # after the other: each is decoded on its own.
+        raw = b"".join(base64.b64decode(s) for s in re.findall(r"[A-Za-z0-9+/]+=*", el.text or ""))
     else:  # appended: raw bytes, or base64, after the AppendedData element's "_"
         raw = appended[int(el.get("offset", "0")):]
     size = struct.calcsize(header)
@@ -76,13 +79,18 @@ def _decode(el: ET.Element, appended: bytes, header: str, compressed: bool) -> l
 
 def read_vtu(path) -> Mesh:
     """The mesh and point data of a VTK XML unstructured grid (.vtu), ASCII, binary or
-    appended, compressed with zlib or not. Raises ValueError for anything else."""
+    appended, compressed with zlib or not. Raises ValueError, naming the file, for anything
+    else."""
     try:
-        root = ET.parse(path).getroot()
-    except (ET.ParseError, OSError) as err:
+        return _read_vtu(path)
+    except (ValueError, KeyError, IndexError, AttributeError, struct.error, zlib.error, ET.ParseError, OSError) as err:
         raise ValueError(f"{Path(path).name}: {err}") from None
+
+
+def _read_vtu(path) -> Mesh:
+    root = ET.parse(path).getroot()
     if root.get("type") != "UnstructuredGrid":
-        raise ValueError(f"{Path(path).name}: not a VTK unstructured grid (.vtu)")
+        raise ValueError("not a VTK unstructured grid (.vtu)")
     header = TYPES[root.get("header_type", "UInt32")]
     compressed = root.get("compressor") == "vtkZLibDataCompressor"
     appended = b""
@@ -94,7 +102,7 @@ def read_vtu(path) -> Mesh:
             appended = base64.b64decode(appended)
     piece = root.find("UnstructuredGrid/Piece")
     if piece is None:
-        raise ValueError(f"{Path(path).name}: no Piece")
+        raise ValueError("no Piece")
 
     def array(parent: str, name: str = None):
         for el in piece.findall(f"{parent}/DataArray"):
@@ -104,7 +112,7 @@ def read_vtu(path) -> Mesh:
 
     points_el = array("Points")
     if points_el is None:
-        raise ValueError(f"{Path(path).name}: no Points")
+        raise ValueError("no Points")
     flat = _decode(points_el, appended, header, compressed)
     ncomp = int(points_el.get("NumberOfComponents", "3"))
     points = [tuple(flat[i:i + ncomp]) + (0.0,) * (3 - ncomp) for i in range(0, len(flat), ncomp)]
