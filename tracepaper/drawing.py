@@ -1,9 +1,10 @@
 """Sheets drawn from scenes (SPEC.md §2.5): exact drawings in the viewer's own look.
 
-A scene holds geometry only; how it looks is decided here, the same for every scene:
+A scene holds geometry and its parts' colours; how it looks is decided here, the same for
+every scene:
 
-- Each part gets a colour of PALETTE, in the order of the tree, and the 3D view uses
-  the same ones.
+- Each part has the colour the file gives it, or else one of PALETTE, in the order of
+  the tree, and the 3D view uses the same ones.
 - A section draws what the plane cuts from each solid as regions, tinted in the part's
   colour and hatched, at an angle and spacing of its own so that parts side by side
   stay apart in greys, and outlined. Surfaces cut become lines in the part's colour.
@@ -58,8 +59,15 @@ def field_color(t: float) -> str:
 
 
 def colors(scene: S.Scene) -> dict:
-    """Each part's colour, by key: PALETTE in the order of the tree."""
-    return {p.key: PALETTE[i % len(PALETTE)] for i, p in enumerate(scene.parts())}
+    """Each part's colour, by key: the one the file gives it, else PALETTE's, in the order
+    of the tree."""
+    out, i = {}, 0
+    for p in scene.parts():
+        if p.color:
+            out[p.key] = "#" + "".join(f"{round(c * 255):02x}" for c in p.color[:3])
+        else:
+            out[p.key], i = PALETTE[i % len(PALETTE)], i + 1
+    return out
 
 
 def rgb(color: str) -> tuple:

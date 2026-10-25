@@ -5,6 +5,7 @@ Uses the test geometry in tests/geometry (make.py there writes it). Skipped with
 import json
 import math
 import re
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -27,6 +28,65 @@ SVG, INK, TP = "{http://www.w3.org/2000/svg}", "{http://www.inkscape.org/namespa
 def length(edges) -> float:
     # Along their curves: BRepGProp crashes on the edges hidden line removal makes.
     return sum(GCPnts_AbscissaPoint.Length_s(BRepAdaptor_Curve(TopoDS.Edge_s(e))) for e in edges)
+
+
+def colours_elsewhere(path: Path) -> None:
+    """A STEP file with colours where other CAD programs than CadQuery put them: on one of a
+    box's two instances, on the solids inside a part (red, green, green), and on a group's
+    instance rather than on the part in it."""
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt, gp_Trsf, gp_Vec
+    from OCP.Quantity import Quantity_Color, Quantity_ColorRGBA, Quantity_TypeOfColor
+    from OCP.STEPCAFControl import STEPCAFControl_Writer
+    from OCP.STEPControl import STEPControl_AsIs
+    from OCP.TCollection import TCollection_ExtendedString
+    from OCP.TDataStd import TDataStd_Name
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.TopoDS import TopoDS_Compound
+    from OCP.XCAFDoc import XCAFDoc_ColorType, XCAFDoc_DocumentTool
+
+    doc = TDocStd_Document(TCollection_ExtendedString("XmlOcaf"))
+    tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    colours = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+
+    def named(label, name):
+        TDataStd_Name.Set_s(label, TCollection_ExtendedString(name))
+        return label
+
+    def colour(label, r, g, b):
+        rgb = Quantity_Color(r, g, b, Quantity_TypeOfColor.Quantity_TOC_sRGB)
+        colours.SetColor(label, Quantity_ColorRGBA(rgb, 1.0), XCAFDoc_ColorType.XCAFDoc_ColorSurf)
+
+    def at(x, y):
+        t = gp_Trsf()
+        t.SetTranslation(gp_Vec(x, y, 0))
+        return TopLoc_Location(t)
+
+    def box(x, size):
+        return BRepPrimAPI_MakeBox(gp_Pnt(x, 0, 0), size, size, size).Shape()
+
+    top = named(tool.NewShape(), "top")
+    solids, builder = TopoDS_Compound(), BRep_Builder()
+    builder.MakeCompound(solids)
+    parts = [box(3 * i, 2) for i in range(3)]
+    for solid in parts:
+        builder.Add(solids, solid)
+    blocks = named(tool.AddShape(solids, False), "blocks")
+    for solid, rgb in zip(parts, [(1, 0, 0), (0, 1, 0), (0, 1, 0)]):
+        colour(tool.AddSubShape(blocks, solid), *rgb)
+    named(tool.AddComponent(top, blocks, TopLoc_Location()), "blocks")
+    cube = named(tool.AddShape(box(0, 4), False), "cube")
+    named(tool.AddComponent(top, cube, at(20, 0)), "plain")
+    colour(named(tool.AddComponent(top, cube, at(30, 0)), "blue"), 0, 0, 1)
+    group = named(tool.NewShape(), "group")
+    named(tool.AddComponent(group, named(tool.AddShape(box(0, 3), False), "inner"), TopLoc_Location()), "inner")
+    colour(named(tool.AddComponent(top, group, at(0, 20)), "group"), 1, 1, 0)
+    tool.UpdateAssemblies()
+    writer = STEPCAFControl_Writer()
+    writer.Transfer(doc, STEPControl_AsIs)
+    writer.Write(str(path))
 
 
 @unittest.skipIf(S is None, "needs OCP")
@@ -96,6 +156,34 @@ class SceneTest(unittest.TestCase):
         self.assertAlmostEqual(root["rotation"][0], -math.sqrt(0.5))  # z up into glTF's y up
         self.assertEqual(len(gltf["materials"]), 9)  # a colour for each part
         self.assertGreater(len(binary), 1000)
+
+    def test_parts_keep_the_file_s_colours(self):
+        corner = S.read_step(GEOMETRY / "corner.step")
+        color = {p.key: p.color for p in corner.parts()}
+        for got, want in zip(color["frame"], (0.42, 0.45, 0.5, 1)):
+            self.assertAlmostEqual(got, want, places=3)  # sRGB, as CadQuery was given it
+        self.assertAlmostEqual(color["glass"][3], 0.35, places=3)
+        self.assertIsNone(color["seal"])
+        palette = D.colors(corner)
+        self.assertEqual(palette["frame"], "#6b7380")
+        self.assertEqual(palette["seal"], D.PALETTE[0])  # the first part without a colour
+        self.assertEqual(palette["Screws / screw 1"], palette["Screws / screw 2"])
+        gltf, _ = read_glb_bytes(S.glb(corner, {k: D.rgb(c) for k, c in palette.items()}))
+        material = {m["name"]: m for m in gltf["materials"]}
+        frame, glass = (material[k]["pbrMetallicRoughness"]["baseColorFactor"] for k in ("frame", "glass"))
+        self.assertAlmostEqual(frame[0], 0.147, places=3)  # glTF's colours are linear: 0x6b is 0.147
+        self.assertNotIn("alphaMode", material["frame"])
+        self.assertAlmostEqual(glass[3], 0.35, places=3)  # see-through
+        self.assertEqual(material["glass"]["alphaMode"], "BLEND")
+
+    def test_colours_on_instances_solids_and_groups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            colours_elsewhere(Path(tmp) / "colours.step")
+            scene = S.read_step(Path(tmp) / "colours.step")
+        color = {p.key: p.color and tuple(round(c, 3) for c in p.color) for p in scene.parts()}
+        self.assertEqual(color, {"blocks": (0, 1, 0, 1),  # the commonest of its solids'
+                                 "plain": None, "blue": (0, 0, 1, 1),  # one shape, its instances' own
+                                 "group / inner": (1, 1, 0, 1)})  # from the group
 
 
 def read_glb_bytes(data: bytes):

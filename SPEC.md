@@ -2,7 +2,7 @@
 
 Tracepaper is a visual aid for a person working on CAD geometry with an AI. The AI's build writes **scenes**: the geometry as exact solids, regions and curves in STEP files, with a little JSON beside them for what STEP can't say. The person looks at them in the Tracepaper viewer, in 3D and as exact 2D drawings (sections and projections, through any plane), toggles parts, drags dimension labels out of the way, and sketches roughly what they want changed. They save, then ask for the change in the usual way ("I sketched a chamfer on section A"), and the AI reads the **sketch file** the viewer wrote.
 
-Tracepaper is a lens, not a model. The real geometry stays in whatever CAD pipeline the project uses (CadQuery, build123d, FreeCAD, plain code). A scene is a snapshot of it, and how it looks is the viewer's business: files say what things are, never what colour or how thick. Mapping a sketch back into the pipeline is the AI's job. Nothing in Tracepaper solves or checks constraints.
+Tracepaper is a lens, not a model. The real geometry stays in whatever CAD pipeline the project uses (CadQuery, build123d, FreeCAD, plain code). A scene is a snapshot of it, and how it looks is the viewer's business: files say what things are, and the parts' colours, never how thick or how drawn. Mapping a sketch back into the pipeline is the AI's job. Nothing in Tracepaper solves or checks constraints.
 
 MUST, SHOULD and MAY are used as in RFC 2119.
 
@@ -34,7 +34,7 @@ A scene is a STEP file (ISO 10303-21, AP203, AP214 or AP242, `.step` or `.stp`) 
   - **faces without a volume**: the regions of a 2D scene (§2.2), and otherwise surfaces, which sections cut into lines;
   - **curves**: reference geometry, such as an axis, a path or an older design's outline, drawn thin and dashed;
   - **points** (vertices on no edge): reference geometry too, such as a spline's control points or a contact point, drawn as dots. A part of points only, beside the curve they belong to, keeps them apart: its ends in one part and its handles in another, say.
-- **No looks.** Colours, layers and styles in the file are ignored: the viewer chooses them (§2.5).
+- **Colours, no other looks.** A part has the colour the file gives it: its instance's, its shape's, the commonest of its solids' or faces', or else the nearest group's. A colour that isn't opaque makes the part see-through in 3D, as glass. Colours are optional, and the viewer chooses one for a part without (§2.5). Layers and styles in the file are ignored.
 - With CadQuery: `assembly.export("build/part.step")`, parts named with `name=`. With build123d: `export_step(assembly, "build/part.step")`, parts named with `label`.
 
 ### 2.2 2D scenes
@@ -106,7 +106,7 @@ A named view is a plane:
 The viewer draws every scene the same way; a scene can't change how.
 
 - **Exact.** Sections and projections are worked out on the exact geometry (OpenCascade, in the viewer's server) and drawn with SVG's lines, circular and elliptical arcs and Bézier curves: lines, arcs, ellipses and polynomial splines come out exactly, other curves (hyperbolas, rational splines) to within 0.1 µm. Projections use OpenCascade's exact hidden-line removal, which can take seconds for large or freeform scenes; each view is worked out once for each version of its files.
-- **Colours.** Each part gets a colour of a fixed palette, in the order of the tree, the same in 3D and in drawings.
+- **Colours.** Each part has the colour the file gives it (§2.1), or else one of a fixed palette, given out in the order of the tree to the parts without; the same in 3D and in drawings. Sections and 2D scenes tint their regions with it, so dark colours still leave the hatching and outlines readable.
 - **Sections** draw what the plane cuts from each solid as regions, tinted in the part's colour, hatched at an angle and spacing of their own so that parts side by side stay apart in greys, and outlined. Surfaces cut become lines.
 - **2D scenes** draw their regions tinted and outlined.
 - **Projections** draw each part's visible edges, its smooth edges (where faces meet tangentially) lighter, and its hidden edges dashed, on a layer of their own, *Hidden lines*, hidden at first.
@@ -197,7 +197,7 @@ As SPEC-v0.md §2.7: arrowheads, extension lines, labels and leaders, in multipl
 
 ### 2.8 The 3D view
 
-The viewer shows a scene in 3D as the server tessellates it (to within 0.05 mm and 0.3 rad): each part in its colour (§2.5), with the edges between its faces. The person can turn, pan and zoom it, slice it, see through it, and open the exact drawing of what it shows (§5). Curves, points and fields aren't shown in 3D yet.
+The viewer shows a scene in 3D as the server tessellates it (to within 0.05 mm and 0.3 rad): each part in its colour (§2.5), see-through as far as the file makes it, with the edges between its faces. Slices don't close a part that is see-through. The person can turn, pan and zoom it, slice it, see through it, and open the exact drawing of what it shows (§5). Curves, points and fields aren't shown in 3D yet.
 
 ### 2.9 Slicer projects
 

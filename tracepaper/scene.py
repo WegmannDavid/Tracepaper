@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import struct
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Optional
@@ -42,6 +43,7 @@ from OCP.gp import gp_Ax2, gp_Ax3, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf
 from OCP.HLRAlgo import HLRAlgo_Projector
 from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
 from OCP.IFSelect import IFSelect_RetDone
+from OCP.Quantity import Quantity_Color, Quantity_ColorRGBA
 from OCP.ShapeUpgrade import ShapeUpgrade_ShapeDivideClosed
 from OCP.STEPCAFControl import STEPCAFControl_Reader
 from OCP.TCollection import TCollection_ExtendedString
@@ -53,7 +55,7 @@ from OCP.TopAbs import (TopAbs_EDGE, TopAbs_FACE, TopAbs_FORWARD, TopAbs_REVERSE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
-from OCP.XCAFDoc import XCAFDoc_DocumentTool
+from OCP.XCAFDoc import XCAFDoc_ColorTool, XCAFDoc_ColorType, XCAFDoc_DocumentTool
 
 from .model import glb_bytes
 
@@ -70,11 +72,13 @@ SCALE = 1e4  # fmt(): coordinates in path data to 0.1 µm
 @dataclass
 class Node:
     """A named node of a scene. key is its path of names ("Screws / screw 1"); a part has a
-    shape, in the scene's coordinates, and a group has children."""
+    shape, in the scene's coordinates, and a group has children. color is the colour the
+    file gives a part, (r, g, b, opacity) from 0 to 1 in sRGB, as CSS has them, or None."""
     name: str
     key: str
     shape: Optional[TopoDS_Shape] = None
     children: list = field(default_factory=list)
+    color: Optional[tuple] = None
 
 
 @dataclass
@@ -198,43 +202,71 @@ def _name(label: TDF_Label) -> Optional[str]:
     return None
 
 
+_SURFACES = (XCAFDoc_ColorType.XCAFDoc_ColorSurf, XCAFDoc_ColorType.XCAFDoc_ColorGen,
+             XCAFDoc_ColorType.XCAFDoc_ColorCurv)  # which of a label's colours counts, first
+
+
+def _color(label: Optional[TDF_Label], kinds=_SURFACES) -> Optional[tuple]:
+    """The colour a label gives, (r, g, b, opacity) in sRGB, or None."""
+    for kind in kinds if label is not None else ():
+        c = Quantity_ColorRGBA()
+        if XCAFDoc_ColorTool.GetColor_s(label, kind, c):
+            rgb = c.GetRGB()  # OpenCascade's are linear; STEP files and CSS have sRGB
+            return tuple(Quantity_Color.Convert_LinearRGB_To_sRGB_s(v) for v in (rgb.Red(), rgb.Green(), rgb.Blue())) \
+                + (c.Alpha(),)
+    return None
+
+
 def read_step(path) -> Scene:
     """The scene in a STEP file: its assemblies as groups and its shapes as parts, named as
     the file names them. Instances keep the names of their own (screw 1, screw 2); a single
-    top assembly is left out, so that its parts are the top level. Raises ValueError for a
-    file OpenCascade can't read."""
+    top assembly is left out, so that its parts are the top level. A part has the colour
+    the file gives it: its instance's, its shape's, the commonest of its solids' or faces',
+    or the nearest group's. Raises ValueError for a file OpenCascade can't read."""
     doc = TDocStd_Document(TCollection_ExtendedString("XmlOcaf"))
     reader = STEPCAFControl_Reader()
     reader.SetNameMode(True)
-    reader.SetColorMode(False)  # colours are the viewer's to choose
+    reader.SetColorMode(True)
     reader.SetLayerMode(False)
     if reader.ReadFile(str(path)) != IFSelect_RetDone or not reader.Transfer(doc):
         raise ValueError(f"{path} is not a STEP file OpenCascade can read")
     tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
 
-    def node(label: TDF_Label, above: str, location: TopLoc_Location, fallback: str) -> Optional[Node]:
-        name = _name(label)
+    def color(labels, shape: TopoDS_Shape, above: Optional[tuple]) -> Optional[tuple]:
+        kinds = _SURFACES if has_faces(shape) else _SURFACES[::-1]  # curves: their own colour first
+        for label in labels:
+            if (c := _color(label, kinds)) is not None:
+                return c
+        subs = TDF_LabelSequence()
+        tool.GetSubShapes_s(labels[-1], subs)
+        found = Counter(c for i in range(1, subs.Length() + 1) if (c := _color(subs.Value(i), kinds)) is not None)
+        return found.most_common(1)[0][0] if found else above
+
+    def node(label: TDF_Label, above: str, location: TopLoc_Location, fallback: str,
+             inherited: Optional[tuple]) -> Optional[Node]:
+        name, instance = _name(label), None
         if tool.IsReference_s(label):
             target = TDF_Label()
             tool.GetReferredShape_s(label, target)
             location = location.Multiplied(tool.GetLocation_s(label))
-            label, name = target, name or _name(target)
+            instance, label, name = label, target, name or _name(target)
         name = name or fallback
         key = f"{above}{SEP}{name}" if above else name
         if tool.IsAssembly_s(label):
             kids = TDF_LabelSequence()
             tool.GetComponents_s(label, kids)
-            children = _children([kids.Value(i) for i in range(1, kids.Length() + 1)], key, location)
+            own = _color(instance) or _color(label)
+            children = _children([kids.Value(i) for i in range(1, kids.Length() + 1)], key, location, own or inherited)
             return Node(name, key, children=children)
         shape = tool.GetShape_s(label)
         if shape.IsNull():
             return None
-        return Node(name, key, shape=shape.Moved(location))
+        return Node(name, key, shape=shape.Moved(location), color=color([instance, label], shape, inherited))
 
-    def _children(labels, above, location) -> list:
+    def _children(labels, above, location, inherited=None) -> list:
         out, seen = [], {}
         for i, label in enumerate(labels, 1):
-            n = node(label, above, location, f"part {i}")
+            n = node(label, above, location, f"part {i}", inherited)
             if n is None:
                 continue
             count = seen[n.name] = seen.get(n.name, 0) + 1
@@ -253,16 +285,17 @@ def read_step(path) -> Scene:
 
 def _renamed(n: Node, name: str, above: str) -> Node:
     key = f"{above}{SEP}{name}" if above else name
-    return Node(name, key, n.shape, [_renamed(c, c.name, key) for c in n.children])
+    return Node(name, key, n.shape, [_renamed(c, c.name, key) for c in n.children], n.color)
 
 
 # ---- 3D: triangles for the viewer ---------------------------------------------------------
 
 def glb(scene: Scene, colors: dict, hidden=()) -> bytes:
     """The scene as a glTF binary for the 3D view (SPEC.md §2.8): a node per tree node, each
-    part's faces a primitive each, in the part's colour from colors (key -> (r, g, b)),
-    millimetres with z up turned into glTF's y up on the root. Faces only: curves aren't
-    drawn in 3D yet. Nodes whose keys are in hidden start hidden."""
+    part's faces a primitive each, in the part's colour from colors (key -> (r, g, b), sRGB
+    from 0 to 1) and as see-through as the file makes it, millimetres with z up turned into
+    glTF's y up on the root. Faces only: curves aren't drawn in 3D yet. Nodes whose keys are
+    in hidden start hidden."""
     data = bytearray()
     views, accessors, meshes, materials, nodes = [], [], [], [], []
     hidden = set(hidden)
@@ -273,16 +306,20 @@ def glb(scene: Scene, colors: dict, hidden=()) -> bytes:
         data.extend(b"\0" * (-len(data) % 4))
         return len(views) - 1
 
-    def material(key: str) -> int:
-        r, g, b = colors.get(key, (0.6, 0.6, 0.6))
-        materials.append({"name": key, "pbrMetallicRoughness": {"baseColorFactor": [r, g, b, 1],
-                                                               "metallicFactor": 0, "roughnessFactor": 0.7},
-                          "doubleSided": True})
+    def material(n: Node) -> int:
+        rgb = [Quantity_Color.Convert_sRGB_To_LinearRGB_s(v) for v in colors.get(n.key, (0.6, 0.6, 0.6))]
+        opacity = n.color[3] if n.color else 1.0
+        m = {"name": n.key, "pbrMetallicRoughness": {"baseColorFactor": [*rgb, opacity],  # linear, as glTF's are
+                                                     "metallicFactor": 0, "roughnessFactor": 0.7},
+             "doubleSided": True}
+        if opacity < 1:
+            m["alphaMode"] = "BLEND"
+        materials.append(m)
         return len(materials) - 1
 
     def part_mesh(n: Node) -> Optional[int]:
         BRepMesh_IncrementalMesh(n.shape, MESH_DEFLECTION, False, MESH_ANGLE, True)
-        m = material(n.key)
+        m = material(n)
         primitives = []
         for face in _items(n.shape, TopAbs_FACE):
             face = TopoDS.Face_s(face)

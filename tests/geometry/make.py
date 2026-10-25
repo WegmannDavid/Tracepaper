@@ -28,8 +28,11 @@ something the viewer has to get right when it shows, slices or projects them:
   dimensions on features 0.07 to 3.5 mm apart, an angle, and a key as notes, all of
   which have to stay small enough to read the drawing under them.
 - grid.step: 64 parts, all one shape placed 64 times.
+- corner.step: a window's corner in the colours the CAD gives it, as CadQuery writes
+  them: a steel frame, a glass pane that is see-through, two brass screws, and a seal
+  left without one.
 
-Coordinates are millimetres, z up. Nothing here sets a colour.
+Coordinates are millimetres, z up. Only corner.step sets colours.
 """
 import json
 import math
@@ -477,10 +480,29 @@ def grid() -> cq.Assembly:
     return a
 
 
+def corner() -> cq.Assembly:
+    frame = cq.Workplane("XY").box(60, 30, 8, centered=False).union(
+        cq.Workplane("XY").box(8, 30, 60, centered=False)).faces(">Z[1]").workplane(origin=(0, 0, 8)).pushPoints(
+        [(30, 5), (48, 5)]).hole(3, 6)
+    a = cq.Assembly(name="corner")
+    a.add(frame, name="frame", color=cq.Color(0.42, 0.45, 0.5))
+    a.add(cq.Workplane("XY").box(44, 4, 44, centered=False).translate((14, 13, 14)), name="glass",
+          color=cq.Color(0.65, 0.82, 0.95, 0.35))
+    seal = cq.Workplane("XY").box(46, 4, 4, centered=False).translate((10, 13, 9)).union(
+        cq.Workplane("XY").box(4, 4, 46, centered=False).translate((9, 13, 10)))
+    a.add(seal, name="seal")
+    screws = cq.Assembly(name="Screws")
+    for i, x in enumerate((30, 48), 1):
+        screw = cq.Workplane("XY").circle(1.5).extrude(-6).faces(">Z").workplane().circle(3).extrude(2)
+        screws.add(screw.translate((x, 5, 8)), name=f"screw {i}", color=cq.Color(0.8, 0.65, 0.3))
+    a.add(screws)
+    return a
+
+
 if __name__ == "__main__":
     only = set(sys.argv[1:])
     for name, make in [("primitives", primitives), ("bracket", bracket), ("freeform", freeform),
-                       ("hinge", hinge), ("profile", profile), ("grid", grid)]:
+                       ("hinge", hinge), ("profile", profile), ("grid", grid), ("corner", corner)]:
         if not only or name in only:
             save(make(), f"{name}.step")
     if not only or "profile" in only:
