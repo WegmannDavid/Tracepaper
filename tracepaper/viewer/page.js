@@ -19,20 +19,21 @@ export const listViews = async () => (await fetchOk('/api/views')).json();
 
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }); // "part 2" before "part 10"
 
-// The views as the tree of folders they're in. A folder is {name, path, folders, views},
-// where path is its names joined with "/" ("" for the build folder itself), and each
-// view gets file, its file name. Folders and views are each in order of their names.
-export function viewTree(views) {
+// The views as the tree of folders they're in, plus the folders given (paths, such as
+// "a/b"), which may be empty. A folder is {name, path, folders, views}, where path is its
+// names joined with "/" ("" for the build folder itself), and each view gets file, its file
+// name. Folders and views are each in order of their names.
+export function viewTree(views, folders = []) {
   const folder = (name, path) => ({ name, path, folders: new Map(), views: [] });
   const root = folder('', '');
+  const into = (names) => names.reduce((f, name) => {
+    if (!f.folders.has(name)) f.folders.set(name, folder(name, f.path ? `${f.path}/${name}` : name));
+    return f.folders.get(name);
+  }, root);
+  for (const path of folders) into(path.split('/'));
   for (const v of views) {
     const names = v.name.split('/');
-    let f = root;
-    for (const name of names.slice(0, -1)) {
-      if (!f.folders.has(name)) f.folders.set(name, folder(name, f.path ? `${f.path}/${name}` : name));
-      f = f.folders.get(name);
-    }
-    f.views.push({ ...v, file: names.at(-1) });
+    into(names.slice(0, -1)).views.push({ ...v, file: names.at(-1) });
   }
   const sorted = (f) => ({
     ...f,

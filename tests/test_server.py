@@ -76,6 +76,14 @@ class ServerTest(unittest.TestCase):
                          ["a.svg", "b.svg", "models/a/b/c/d/deep.glb", "models/part.glb"])
         self.assertIn(b"model.js", self.request("GET", "/view/models/a/b/c/d/deep.glb")[1])
 
+    def test_lists_empty_folders(self):
+        (self.dir / "print" / "plates").mkdir(parents=True)
+        (self.dir / "venv").mkdir()
+        (self.dir / ".cache").mkdir()
+        listing = json.loads(self.request("GET", "/api/views")[1])
+        self.assertEqual(listing["folders"], ["models", "print", "print/plates"])
+        self.assertEqual(len(listing["views"]), 3)
+
     def test_slicer_projects_are_models(self):
         write_3mf(self.dir / "plate.3mf", [("piece", (50, 50, 5), 10, 1)])
         (self.dir / "broken.3mf").write_text("not a zip")

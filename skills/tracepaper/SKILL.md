@@ -12,7 +12,7 @@ Tracepaper is a visual aid between the user and you. The project's build writes 
 
 Scenes hold geometry, and the parts' colours if the project gives them. Everything else about how they look (line widths, hatching, hidden lines) is the viewer's business, the same for every project, so don't try to style anything else.
 
-Tracepaper never holds the model. It's a lens on whatever pipeline the project uses, for example build123d, CadQuery, FreeCAD or plain code. The user opens the build folder in the viewer, which shows it as a tree of the views and the subfolders holding them; each view opens in its own browser window and updates by itself when the build rewrites its files.
+Tracepaper never holds the model. It's a lens on whatever pipeline the project uses, for example build123d, CadQuery, FreeCAD or plain code. The user opens the build folder in the viewer, which shows it as a tree of the views and its subfolders; each view opens in its own browser window and updates by itself when the build rewrites its files.
 
 Older builds write 2D sheets as layered `.svg` files and 3D models as `.glb` files (`SPEC-v0.md`). The viewer still shows them, but write scenes for anything new, and move a project's views over to scenes when you next work on them, if the user agrees.
 
@@ -39,7 +39,7 @@ The repository (the folder `SPEC.md` links into) also has test scenes: `tests/ge
 
 The views go into the project's build folder itself, such as `build/`, next to the build's other output (STL files, caches), and the viewer shows that folder: `tracepaper view build`. If the project has no build folder yet, make one. The user sees it as a tree, so its layout is part of what you show them.
 
-- Only `.step`, `.3mf`, `.svg` and `.glb` files show up, and only the folders holding them; everything else in the build folder is left out, as is any folder whose name starts with a dot. So every file there with one of those endings must be a view: STEP files the build writes for other uses (for printing, for other CAD programs) go into a dot folder, such as `build/.step/`, or somewhere else.
+- Only `.step`, `.3mf`, `.svg` and `.glb` files show up, and the subfolders, empty ones too; everything else in the build folder is left out, as is any folder whose name starts with a dot. So every file there with one of those endings must be a view: STEP files the build writes for other uses (for printing, for other CAD programs) go into a dot folder, such as `build/.step/`, or somewhere else.
 - Write each file somewhere the viewer skips first, then rename it into place (`os.replace`), so the viewer never reads half a file: under a name ending in `.tmp`, or in a dot folder. `save_scene` does this itself.
 - Group the views in subfolders by what they're for, for example the whole assembly and its parts in `window/`, print plates in `print/`, and test pieces in `tests/`. A handful of views can stay at the top. When a flat folder has grown past about ten views, propose subfolders to the user.
 - Never empty the build folder on a rebuild (`rm -rf build`, `shutil.rmtree`, a `clean` target): the user's sketch files wait next to their views until you've handled them. Write each view over its old file, and delete only views the build no longer makes.

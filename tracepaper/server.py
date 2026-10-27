@@ -138,13 +138,26 @@ def _scene_views(rel: Path, path: Path, sketches: set) -> list:
     return out
 
 
+def _walk(directory: Path):
+    """os.walk over directory, leaving out the folders the viewer skips: dot folders and SKIP_DIRS."""
+    for root, dirs, files in os.walk(directory):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS]
+        yield root, dirs, files
+
+
+def list_folders(directory: Path) -> list:
+    """All the folders below directory that the viewer shows, empty ones too: their paths
+    from it, with "/" between folders, in order."""
+    return sorted((Path(root) / d).relative_to(directory).as_posix()
+                  for root, dirs, _ in _walk(directory) for d in dirs)
+
+
 def list_views(directory: Path) -> list:
     """The views in directory and all the folders below it, which the project page shows as
     a tree: [View], in order of their names."""
     found = []
-    for root, dirs, files in os.walk(directory):
+    for root, dirs, files in _walk(directory):
         rel = Path(root).relative_to(directory)
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS]
         sketches = {f for f in files if f.endswith(SKETCH_SUFFIX)}
         for f in files:
             kind = KINDS.get(Path(f).suffix.lower())
@@ -396,7 +409,8 @@ class Handler(BaseHTTPRequestHandler):
             sketch = _mtime(v.sketch())
             views.append({"name": v.name, "kind": v.kind, "mtime": mtime,
                           "sketch": {"mtime": sketch} if sketch else None})
-        return {"dir": str(self.server.directory), "initial": self.server.initial, "views": views}
+        return {"dir": str(self.server.directory), "initial": self.server.initial, "views": views,
+                "folders": list_folders(self.server.directory)}
 
     def _static(self, rel: str) -> None:
         path = (VIEWER_DIR / rel).resolve()

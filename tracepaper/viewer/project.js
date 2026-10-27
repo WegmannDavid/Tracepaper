@@ -63,7 +63,7 @@ function folderItem(f) {
   row.title = f.path;
   const twisty = span('tpv-folder-twisty', '');
   const n = count(f);
-  const info = span('tpv-view-info', `${n} view${n === 1 ? '' : 's'}`);
+  const info = span('tpv-view-info', n === 0 ? 'no views' : `${n} view${n === 1 ? '' : 's'}`);
   if (waiting(f)) info.prepend(span('tpv-waiting', WAITING));
   row.append(twisty, span('tpv-view-name', f.name), info);
   const contents = list(f);
@@ -97,10 +97,10 @@ function render(listing) {
     dir = listing.dir;
     recall();
   }
-  const next = JSON.stringify(listing.views);
+  const next = JSON.stringify([listing.views, listing.folders]);
   if (next === key) return;
   key = next;
-  $('tpv-list').replaceChildren(...list(viewTree(listing.views)).children);
+  $('tpv-list').replaceChildren(...list(viewTree(listing.views, listing.folders ?? [])).children);
   $('tpv-empty').hidden = listing.views.length > 0;
   $('tpv-empty').textContent = 'No views yet: scenes (.step), slicer projects (.3mf), and sheets (.svg) and models (.glb) in this folder and its subfolders show up here.';
 }

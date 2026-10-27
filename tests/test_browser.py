@@ -1166,6 +1166,7 @@ class ViewerInFirefox(unittest.TestCase):
         parts = self.dir / "parts"
         nested = parts / "brackets"
         nested.mkdir(parents=True)
+        (parts / "empty").mkdir()  # shown too, so the build's layout is seen before it has views
         for name in ("part 10.svg", "part 2.svg"):
             shutil.copy(self.dir / "section-A.svg", nested / name)
         shutil.copy(self.dir / "bracket.glb", parts / "assembly.glb")
@@ -1197,7 +1198,10 @@ class ViewerInFirefox(unittest.TestCase):
                 "folder": "parts", "open": True, "shown": True, "waiting": False, "items": [
                     {"folder": "brackets", "open": True, "shown": True, "waiting": False,
                      "items": ["part 2.svg", "part 10.svg"]},
+                    {"folder": "empty", "open": True, "shown": True, "waiting": False, "items": []},
                     "assembly.glb"]})
+            self.assertEqual(self.m.run(describe + "done(folder('empty').querySelector('.tpv-view-info').textContent);"),
+                             "no views")
             self.assertIn("section-A.svg", got[1:])
             href = self.m.run("done(new URL([...document.querySelectorAll('.tpv-view-link')]"
                               ".find((a) => a.textContent.includes('part 10')).href).pathname);")
