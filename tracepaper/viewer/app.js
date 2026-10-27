@@ -20,6 +20,8 @@ const HIT_PX = 8;         // how close the pointer must be to grab a label
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 400;
 const POLL_MS = 1000;
+const TEXT_KEY = 'tpv-text:'; // + the view's name: how many steps smaller or larger this browser shows its dimensions' text
+const TEXT_STEPS = [-6, 4];   // each a factor √2: from an eighth of the drawing's own to four times
 
 const ui = {
   bar: $('tpv-bar'), stage: $('tpv-stage'), camera: $('tpv-camera'), paper: $('tpv-paper'),
@@ -28,6 +30,7 @@ const ui = {
   undo: $('tpv-undo'), clear: $('tpv-clear'), fit: $('tpv-fit'), swatches: $('tpv-swatches'),
   pen: $('tpv-pen'), penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), pickBox: $('tpv-pick-box'),
   frames: $('tpv-frames'), framesHead: $('tpv-frames-head'), fields: $('tpv-fields'), fieldsHead: $('tpv-fields-head'),
+  textSmaller: $('tpv-text-smaller'), textLarger: $('tpv-text-larger'), textSize: $('tpv-text'),
 };
 
 const state = {
@@ -39,6 +42,7 @@ const state = {
   colorFrom: null, // {id, layer} when the ink colour was picked from the sheet
   picked: null,    // the last picked colour: {color, from}
   gen: 0, busy: false, offline: false,
+  textStep: 0, // the dimensions' text, in steps from the drawing's own (TEXT_KEY)
   // A scene's frames (frames.js): each one's drawing, as fetched, for the view's mtime.
   frameTexts: new Map(), framesFor: null, frameWanted: false,
 };
@@ -101,6 +105,49 @@ function placeAs(g, snap) {
   else A.restore(g, snap);
 }
 
+// ---- The dimensions' text -----------------------------------------------------------------
+
+// ISO 3098 text heights, a factor √2 apart: 2.5 mm at k = 0, 3.5 at 1, 5 at 2, 1.75 at -1 ...
+const isoHeight = (k) => (k % 2 === 0 ? 2.5 : 3.5) * 2 ** Math.floor(k / 2);
+
+// The text height of the dimensions and symbols: the drawing's own, or the person's steps
+// smaller or larger. The notes keep the drawing's, as do the fields and the hatching.
+function textHeight() {
+  const own = fontSizeIn(state.root, state.root);
+  return state.textStep ? isoHeight(Math.round(2 * Math.log2(own / 2.5)) + state.textStep) : own;
+}
+
+function rememberedTextStep(name) {
+  try { return clamp(Math.round(Number(localStorage.getItem(TEXT_KEY + name))) || 0, ...TEXT_STEPS); } catch { return 0; }
+}
+
+// Draw the annotations at the text height: those it changes again, where they are placed now.
+function applyText() {
+  for (const g of state.annotations) {
+    const was = fontSizeOf(g);
+    if (state.textStep) g.setAttribute('font-size', A.fmt(textHeight()));
+    else g.removeAttribute('font-size');
+    const fs = fontSizeOf(g), ann = fs !== was && A.read(g);
+    if (ann) A.render(g, A.geometry(ann, fs), fs);
+  }
+  const own = fontSizeIn(state.root, state.root);
+  ui.textSize.textContent = state.root ? `${A.fmt(textHeight(), 3)} mm` : '';
+  ui.textSize.title = state.root ? `Text height of the dimensions and symbols; the drawing's own: ${A.fmt(own, 3)} mm` : '';
+  ui.textSmaller.disabled = !state.root || state.textStep <= TEXT_STEPS[0];
+  ui.textLarger.disabled = !state.root || state.textStep >= TEXT_STEPS[1];
+}
+
+function stepText(by) {
+  if (!state.root) return;
+  state.textStep = clamp(state.textStep + by, ...TEXT_STEPS);
+  try {
+    if (state.textStep) localStorage.setItem(TEXT_KEY + state.name, String(state.textStep));
+    else localStorage.removeItem(TEXT_KEY + state.name);
+  } catch { /* not remembered */ }
+  applyText();
+  measure.render();
+}
+
 // ---- A scene's frames (SPEC.md §2.10) ----------------------------------------------------
 
 const fieldView = new FieldView({ container: ui.fields, head: ui.fieldsHead });
@@ -108,7 +155,7 @@ const fieldView = new FieldView({ container: ui.fields, head: ui.fieldsHead });
 // Measuring (measure.js): its readout follows the pointer's coordinates.
 const measure = new Measure({
   stage: ui.stage, host: ui.host, ref: () => state.ref, root: () => state.root,
-  fontSize: () => fontSizeIn(state.root, state.root), changed: (text) => { state.measured = text; },
+  fontSize: () => textHeight(), changed: (text) => { state.measured = text; },
 });
 
 const frames = new FramePanel({
@@ -250,6 +297,8 @@ async function openSheet(name, { reload = false, keep = false } = {}) {
     } else {
       Object.assign(state, { moved: new Map(), undo: [], dirty: false });
     }
+    state.textStep = rememberedTextStep(name);
+    applyText();
     for (const g of allNodes(root)) {
       const visible = state.layerVis.get(pathOf(g, root));
       if (visible !== undefined) setHidden(g, !visible);
@@ -291,6 +340,7 @@ function showEmpty(message) {
   Object.assign(state, { root: null, ref: null, ink: null, annotations: [], name: null });
   ui.empty.textContent = message;
   ui.empty.hidden = false;
+  applyText();
   renderLayers();
   updateStatus();
 }
@@ -788,6 +838,8 @@ for (const b of document.querySelectorAll('[data-tool]')) b.addEventListener('cl
 ui.undo.addEventListener('click', undo);
 ui.clear.addEventListener('click', clearInk);
 ui.fit.addEventListener('click', fit);
+ui.textSmaller.addEventListener('click', () => stepText(-1));
+ui.textLarger.addEventListener('click', () => stepText(1));
 ui.save.addEventListener('click', save);
 // Don't leave toolbar buttons focused, or Space would press them.
 ui.bar.addEventListener('click', (e) => { if (e.target.closest('button')) e.target.closest('button').blur(); });
@@ -855,6 +907,7 @@ new MutationObserver((changes) => {
 
 setColor(0);
 setTool(state.tool);
+applyText();
 applyCamera();
 updateStatus();
 poll();

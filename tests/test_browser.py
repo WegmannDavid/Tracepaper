@@ -1459,6 +1459,51 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertGreater(math.degrees(math.atan2(float(end[1]), float(end[0]))), 1.3 * math.degrees(math.atan2(35, 60)))
         self.assertEqual(got["undone"], [30, 0.5, None])
 
+    def test_dimension_text_smaller_or_larger(self):
+        # The toolbar steps the dimensions' text through the ISO heights, and their arrowheads
+        # with it; the notes keep the drawing's. This browser remembers it for the view, and
+        # a sketch saved meanwhile shows the dimensions as they were seen.
+        sheet = Sheet("Text sizes")
+        sheet.layer("Outline").path("box", PathBuilder().move(0, 0).line(40, 0).line(40, 20).line(0, 20).close())
+        sheet.layer("Dimensions").linear("d-w", (0, 0), (40, 0), "40", dir="x", offset=-8)
+        sheet.layer("Notes").text("note-1", (0, -20), "A note")
+        sheet.save(self.dir / "text-sizes.svg")
+        self.open_viewer("text-sizes.svg")
+        look = """
+            const g = document.getElementById('d-w');
+            const heads = g.querySelectorAll('path')[1].getAttribute('d');
+            return { fs: tp.fontSizeOf(g), own: g.getAttribute('font-size'), heads,
+                     note: tp.fontSizeOf(document.getElementById('note-1')),
+                     shown: document.getElementById('tpv-text').textContent,
+                     smaller: !document.getElementById('tpv-text-smaller').disabled };
+        """
+        before = self.m.run(f"done((() => {{ {look} }})());")
+        self.assertEqual((before["fs"], before["own"], before["note"], before["shown"]), (3.5, None, 3.5, "3.5 mm"))
+        smaller = self.m.run(f"""
+            for (let i = 0; i < 3; i++) document.getElementById('tpv-text-smaller').click();
+            done((() => {{ {look} }})());
+        """)
+        self.assertEqual((smaller["fs"], smaller["own"], smaller["note"], smaller["shown"]), (1.25, "1.25", 3.5, "1.25 mm"))
+        self.assertNotEqual(smaller["heads"], before["heads"])
+        self.open_viewer("text-sizes.svg")  # again: remembered
+        again = self.m.run(f"done((() => {{ {look} }})());")
+        self.assertEqual((again["fs"], again["heads"]), (1.25, smaller["heads"]))
+        self.m.run("tp.state.dirty = true; tp.save().then(() => done(true));")
+        saved = ET.parse(self.dir / "text-sizes.sketch.svg").getroot()
+        self.assertEqual(saved.find(f".//{SVG}g[@id='d-w']").get("font-size"), "1.25")
+        self.assertEqual(saved.find(f".//{SVG}text[@id='note-1']").get("font-size"), None)
+        smallest = self.m.run(f"""
+            for (let i = 0; i < 10; i++) document.getElementById('tpv-text-smaller').click();
+            done((() => {{ {look} }})());
+        """)
+        self.assertEqual((smallest["fs"], smallest["smaller"]), (0.4375, False))  # an eighth: six steps
+        back = self.m.run(f"""
+            for (let i = 0; i < 6; i++) document.getElementById('tpv-text-larger').click();
+            done({{ ...(() => {{ {look} }})(), kept: localStorage.getItem('tpv-text:text-sizes.svg') }});
+        """)
+        self.assertEqual((back["fs"], back["own"], back["heads"], back["kept"]), (3.5, None, before["heads"], None))
+        (self.dir / "text-sizes.sketch.svg").unlink()
+
     def test_sketch_round_trip(self):
         self.open_viewer()
 
