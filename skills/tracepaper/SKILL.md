@@ -12,7 +12,7 @@ Tracepaper is a visual aid between the user and you. The project's build writes 
 
 Scenes hold geometry, and the parts' colours if the project gives them. Everything else about how they look (line widths, hatching, hidden lines) is the viewer's business, the same for every project, so don't try to style anything else.
 
-Tracepaper never holds the model. It's a lens on whatever pipeline the project uses, for example build123d, CadQuery, FreeCAD or plain code. The user opens the build folder in the viewer, which shows it as a tree of the views and its subfolders; each view opens in its own browser window and updates by itself when the build rewrites its files.
+Tracepaper never holds the model. It's a lens on whatever pipeline the project uses, for example build123d, CadQuery, FreeCAD or plain code. The user opens the build folder in the viewer, which shows it as a tree of the views and its subfolders; each view opens in its own browser tab and updates by itself when the build rewrites its files.
 
 Older builds write 2D sheets as layered `.svg` files and 3D models as `.glb` files (`SPEC-v0.md`). The viewer still shows them, but write scenes for anything new, and move a project's views over to scenes when you next work on them, if the user agrees.
 

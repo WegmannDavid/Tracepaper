@@ -833,7 +833,7 @@ function openDrawing() {
     return;
   }
   const name = `${viewName}#${view}`;
-  window.open(viewUrl(name), `tracepaper:${name}`, 'popup,width=1280,height=860');
+  window.open(viewUrl(name), `tracepaper:${name}`);
 }
 
 // ---- Tablet pen

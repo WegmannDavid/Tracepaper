@@ -45,10 +45,10 @@ function viewItem(v) {
   if (v.sketch) info.prepend(span('tpv-waiting', WAITING));
   a.append(span(`tpv-kind ${v.kind}`, v.kind === 'model' ? '3D' : '2D'), span('tpv-view-name', v.file), info);
   a.addEventListener('click', (e) => {
-    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return; // the browser's own way: a tab
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return; // the browser's own way
     e.preventDefault();
-    // One window per view: clicking again brings the open one forward.
-    window.open(a.href, `tracepaper:${v.name}`, 'popup,width=1280,height=860');
+    // One tab per view: clicking again brings the open one forward.
+    window.open(a.href, `tracepaper:${v.name}`);
   });
   li.append(a);
   return li;
