@@ -17,6 +17,7 @@ import { renderTree } from './tree.js';
 
 const REF_ID = 'tpv-ref';
 const HIT_PX = 8;         // how close the pointer must be to grab a label
+const CLICK_PX = 4;       // a press that moves less is a click, not a drag
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 400;
 const POLL_MS = 1000;
@@ -463,7 +464,7 @@ function capture(e) {
   try { ui.stage.setPointerCapture(e.pointerId); } catch { /* not an active pointer */ }
 }
 
-const startPan = (e) => ({ type: 'pan', id: e.pointerId, last: stagePoint(e) });
+const startPan = (e) => ({ type: 'pan', id: e.pointerId, last: stagePoint(e), from: stagePoint(e) });
 
 function startPinch() {
   const [a, b] = [...touches.values()];
@@ -513,7 +514,9 @@ function endGesture() {
   gesture = null;
   if (g?.type === 'stroke') ink.commit(g);
   else if (g?.type === 'erase') ink.finishErase(g.removed);
-  else if (g?.type === 'drag') {
+  else if (g?.type === 'pan' && g.clears && Math.hypot(g.last.x - g.from.x, g.last.y - g.from.y) < CLICK_PX) {
+    measure.clear();
+  } else if (g?.type === 'drag') {
     const after = A.snapshot(g.el);
     if (!A.samePlacement(after, g.before)) {
       state.undo.push({ type: 'annot', id: g.el.id, el: g.el, before: g.before });
@@ -540,9 +543,11 @@ function onPointerDown(e) {
     // A pen's eraser end erases, whatever the tool.
     gesture = { type: 'erase', id: e.pointerId, removed: [] };
     ink.eraseAt(e.clientX, e.clientY, gesture.removed);
-  } else if (e.button === 1 || (e.button === 0 && spaceHeld)) gesture = startPan(e);
-  else if (e.button === 2 && state.tool === 'measure') { measure.clear(); return; }
-  else if (e.button !== 0) return;
+  } else if (e.button === 1 || e.button === 2 || (e.button === 0 && (spaceHeld || e.shiftKey))) {
+    gesture = startPan(e);
+    // In Measure, a right click that doesn't drag starts the measurement again.
+    gesture.clears = e.button === 2 && state.tool === 'measure';
+  } else if (e.button !== 0) return;
   else if (state.tool === 'measure') {
     measure.pick(e.clientX, e.clientY);
     ui.coords.textContent = state.measured;

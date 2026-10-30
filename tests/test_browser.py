@@ -662,10 +662,11 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertTrue(zoomed)
         self.assertEqual(zoomed["after"], zoomed["target"])
 
-        # The mouse works as in the OCP viewer. Rotating is its trackball: a drag through the
+        # The mouse works much as in the OCP viewer. Rotating is its trackball: a drag through the
         # middle tips the model over about a horizontal axis, one along the edge turns it about
         # the line of sight, and Ctrl keeps only the up/down part. The rotation centre stays in
-        # the middle of the view. Panning moves the model with the pointer, at OCP's 0.88.
+        # the middle of the view. Panning moves the model with the pointer, at OCP's 0.88, and
+        # works as on drawings: the right or middle button, or Shift or Space with the left.
         moves = self.m.run("""
             const t = window.tracepaper3d, THREE = t.THREE, canvas = document.getElementById('tpv-canvas');
             canvas.setPointerCapture = () => {};  // synthetic pointers can't be captured
@@ -698,11 +699,18 @@ class ViewerInFirefox(unittest.TestCase):
             const point = t.controls.target.clone();
             const onScreen = () => { const v = point.clone().project(t.camera);
                                      return [(v.x + 1) / 2 * r.width, (1 - v.y) / 2 * r.height]; };
-            const before = onScreen();
-            drag(2, 0.5, 0.5, 0.6, 0.7);
-            const after = onScreen();
-            done({ tip, roll, ctrl, fitKeepsRoll, panned: [after[0] - before[0], after[1] - before[1]],
-                   pointer: [r.width * 0.1, r.height * 0.2] });
+            const panned = {};
+            for (const [name, button, keys, space] of [['right', 2, {}], ['middle', 1, {}],
+                                                       ['shift', 0, { shiftKey: true }], ['space', 0, {}, true]]) {
+              if (space) window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+              const before = onScreen(), zoom = t.camera.zoom, turn = t.camera.quaternion.clone();
+              drag(button, 0.5, 0.5, 0.6, 0.7, keys);
+              const after = onScreen();
+              if (space) window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+              panned[name] = [after[0] - before[0], after[1] - before[1], t.camera.zoom / zoom,
+                              t.camera.quaternion.angleTo(turn)];
+            }
+            done({ tip, roll, ctrl, fitKeepsRoll, panned, pointer: [r.width * 0.1, r.height * 0.2] });
         """)
         for name, axis in (("tip", 0), ("roll", 2), ("ctrl", 0)):
             turn = moves[name]
@@ -712,8 +720,10 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertGreater(moves["roll"]["axis"][2], 0.85)  # a stock trackball has no roll at all
         self.assertGreater(moves["ctrl"]["axis"][0], 0.999)  # the sideways part of the drag is ignored
         self.assertTrue(moves["fitKeepsRoll"])
-        for got, pointer in zip(moves["panned"], moves["pointer"]):
-            self.assertAlmostEqual(got, 0.88 * pointer, delta=0.5)
+        for name, (dx, dy, zoom, turn) in moves["panned"].items():
+            for got, pointer in zip((dx, dy), moves["pointer"]):
+                self.assertAlmostEqual(got, 0.88 * pointer, delta=0.5, msg=name)
+            self.assertEqual((zoom, turn), (1, 0), name)
         self.m.run("window.tracepaper3d.frame(window.tracepaper3d.LOOKS.iso); done(true);")
 
         # The axes in the bottom left turn with the camera.
@@ -1462,6 +1472,48 @@ class ViewerInFirefox(unittest.TestCase):
         end = got["round"]["d"].split(" A40 40 0 0 1 ")[1].split()[:2]
         self.assertGreater(math.degrees(math.atan2(float(end[1]), float(end[0]))), 1.3 * math.degrees(math.atan2(35, 60)))
         self.assertEqual(got["undone"], [30, 0.5, None])
+
+    def test_panning(self):
+        # As in the 3D view: the right or middle button, or Shift or Space with the left, pans,
+        # whatever the tool; in Measure a right click that doesn't drag starts again.
+        self.open_viewer("tree.svg")
+        got = self.m.run("""
+            const drag = (button, from, to, keys = {}) => {
+              const send = (type, p) => stage.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true,
+                pointerId: 3, pointerType: 'mouse', isPrimary: true, clientX: p.x, clientY: p.y, ...keys,
+                button: type === 'pointermove' ? -1 : button, buttons: type === 'pointerup' ? 0 : 1 << button }));
+              send('pointerdown', from);
+              for (let i = 1; i <= 4; i++) send('pointermove', { x: from.x + (to.x - from.x) * i / 4, y: from.y + (to.y - from.y) * i / 4 });
+              send('pointerup', to);
+            };
+            const panned = (button, keys, space) => {
+              if (space) window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+              const p = screen(tp.state.ref, 20, 10), { x, y, s } = tp.state.cam;
+              drag(button, p, { x: p.x + 30, y: p.y + 20 }, keys);
+              if (space) window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+              return [tp.state.cam.x - x, tp.state.cam.y - y, tp.state.cam.s / s];
+            };
+            const out = {};
+            for (const tool of ['move', 'pen', 'measure']) {
+              tp.setTool(tool);
+              out[tool] = { right: panned(2), middle: panned(1), shift: panned(0, { shiftKey: true }), space: panned(0, {}, true) };
+            }
+            out.ink = tp.state.ink.children.length;
+            const pick = (x, y) => { const p = screen(tp.state.ref, x, y); tp.measure.pick(p.x, p.y); };
+            pick(0, 0); pick(40, 0);
+            const p = screen(tp.state.ref, 20, 10);
+            drag(2, p, { x: p.x + 30, y: p.y });
+            out.keptByDrag = tp.measure.picks.length;
+            drag(2, p, { x: p.x + 1, y: p.y });
+            out.clearedByClick = tp.measure.picks.length;
+            tp.setTool('move');
+            done(out);
+        """)
+        for tool in ("move", "pen", "measure"):
+            for way, moved in got[tool].items():
+                self.assertEqual(moved, [30, 20, 1], (tool, way))
+        self.assertEqual(got["ink"], 0)
+        self.assertEqual((got["keptByDrag"], got["clearedByClick"]), (2, 0))
 
     def test_dimension_text_smaller_or_larger(self):
         # The toolbar steps the dimensions' text through the ISO heights, and their arrowheads

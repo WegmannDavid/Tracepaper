@@ -1,20 +1,22 @@
-// Mouse controls of the 3D view, done the way the OCP CAD viewer does them: its
+// Mouse controls of the 3D view, done much the way the OCP CAD viewer does them: its
 // trackball in "Holroyd" mode, with its default speeds (three-cad-viewer's
-// CADTrackballControls and Controls, MIT, by Bernhard Walter).
+// CADTrackballControls and Controls, MIT, by Bernhard Walter). Panning is as on the
+// drawings, though, for people who don't know CAD programs.
 //
 // - Left drag rotates as if the model sat in a ball filling most of the view: grab
 //   it near the middle to tip it over, near the edge to turn it about the line of
 //   sight. The camera keeps no fixed "up", so nothing ties it to a vertical axis.
 //   With Ctrl only up/down movements count, with Alt only sideways ones.
-// - Right drag, or Shift + left drag, pans: the model follows the pointer.
-// - The wheel and middle drag zoom about the middle of the view, so the point
-//   everything rotates about (target) stays put.
+// - Right or middle drag, or Shift or Space (space) + left drag, pans: the model
+//   follows the pointer.
+// - The wheel zooms about the middle of the view, so the point everything rotates
+//   about (target) stays put.
 //
 // The camera is orthographic. Its orientation is camera.quaternion, which these
 // controls turn directly; position is target plus the turned eye vector.
 //
-// While the page draws (drawing), the left button is the page's, and Shift + left
-// drag still pans. mayRotate() is asked before a drag turns the view; a page with ink
+// While the page draws (drawing), the left button is the page's, and Shift or Space +
+// left drag still pans. mayRotate() is asked before a drag turns the view; a page with ink
 // on the view says no until the ink is gone.
 import * as THREE from 'three';
 
@@ -23,7 +25,7 @@ const PAN = 0.22 * 4; // OCP's default pan speed and its factor for orthographic
 const ZOOM = 2; // OCP's default zoom speed for its trackball
 const WHEEL = [0.00025, 0.01, 0.025]; // zoom per wheel delta in pixels, lines, pages
 
-const ROTATE = 'rotate', MOVE = 'pan', DOLLY = 'zoom';
+const ROTATE = 'rotate', MOVE = 'pan';
 
 export class CadControls extends THREE.EventDispatcher {
   constructor(camera, element) {
@@ -33,6 +35,7 @@ export class CadControls extends THREE.EventDispatcher {
     this.target = new THREE.Vector3();
     this.drag = null; // { mode, id, x, y, sideways, upDown } while a button is down
     this.drawing = false;
+    this.space = false; // Space held: the left button pans
     this.mayRotate = () => true;
     element.style.touchAction = 'none';
     element.addEventListener('pointerdown', (e) => this.down(e));
@@ -45,7 +48,7 @@ export class CadControls extends THREE.EventDispatcher {
 
   down(e) {
     if (this.drag || (e.pointerType === 'pen' && (e.button === 5 || e.buttons & 32))) return; // a pen's eraser end
-    const mode = e.button === 1 ? DOLLY : e.button === 2 || (e.button === 0 && e.shiftKey) ? MOVE
+    const mode = e.button === 1 || e.button === 2 || (e.button === 0 && (e.shiftKey || this.space)) ? MOVE
       : e.button === 0 && !this.drawing ? ROTATE : null;
     if (!mode || (mode === ROTATE && !this.mayRotate())) return;
     e.preventDefault();
@@ -57,8 +60,7 @@ export class CadControls extends THREE.EventDispatcher {
     const d = this.drag;
     if (!d || e.pointerId !== d.id || (e.clientX === d.x && e.clientY === d.y)) return;
     if (d.mode === ROTATE) this.rotate(d.x, d.y, e.clientX, e.clientY, d);
-    else if (d.mode === MOVE) this.pan(e.clientX - d.x, e.clientY - d.y);
-    else this.zoomBy(1 + ((e.clientY - d.y) / this.element.clientHeight) * ZOOM);
+    else this.pan(e.clientX - d.x, e.clientY - d.y);
     d.x = e.clientX;
     d.y = e.clientY;
   }

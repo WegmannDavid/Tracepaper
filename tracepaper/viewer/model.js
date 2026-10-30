@@ -635,8 +635,18 @@ function setDrawing(on) {
   }
   state.drawing = controls.drawing = on;
   ui.sketch.setAttribute('aria-pressed', String(on));
-  ui.canvas.style.cursor = on ? 'crosshair' : '';
+  updateCursor();
   updateStatus();
+}
+
+// Space held: the left button pans, as on the drawings.
+function holdSpace(on) {
+  controls.space = on;
+  updateCursor();
+}
+
+function updateCursor() {
+  ui.canvas.style.cursor = controls.space ? 'grab' : state.drawing ? 'crosshair' : '';
 }
 
 function setColor(i) {
@@ -664,7 +674,7 @@ function onPointerDown(e) {
   if (e.pointerType === 'pen' && (e.button === 5 || e.buttons & 32)) {
     gesture = { type: 'erase', id: e.pointerId, removed: [] };
     ink.eraseAt(e.clientX, e.clientY, gesture.removed);
-  } else if (state.drawing && e.button === 0 && !e.shiftKey && e.pointerType !== 'touch') {
+  } else if (state.drawing && e.button === 0 && !e.shiftKey && !controls.space && e.pointerType !== 'touch') {
     gesture = { type: 'stroke', id: e.pointerId, ...beginStroke(e.clientX, e.clientY) };
   } else return;
   try { ui.canvas.setPointerCapture(e.pointerId); } catch { /* not an active pointer */ }
@@ -915,7 +925,10 @@ window.addEventListener('keydown', (e) => {
   if (mod || e.altKey) return;
   if (frames.key(e)) return;
   const look = { 0: 'iso', 7: 'top', 1: 'front', 3: 'right' }[e.key];
-  if (look) frame(LOOKS[look]);
+  if (e.key === ' ') {
+    e.preventDefault();
+    if (!controls.space) holdSpace(true);
+  } else if (look) frame(LOOKS[look]);
   else if (key === 'f') frame(null);
   else if (key === 'e') showEdges(!edges?.shown);
   else if (key === 't') setTransparent(!state.transparent);
@@ -924,6 +937,8 @@ window.addEventListener('keydown', (e) => {
   else if (key === 'p') setDrawing(!state.drawing);
   else if (key === 'escape') setDrawing(false);
 });
+window.addEventListener('keyup', (e) => { if (e.key === ' ') holdSpace(false); });
+window.addEventListener('blur', () => holdSpace(false)); // its keyup goes elsewhere
 window.addEventListener('beforeunload', (e) => { if (state.dirty) e.preventDefault(); });
 // The window or the tree panel changes the view's shape, which the tablet's drawing area follows.
 new ResizeObserver(() => { resize(); tablet.render(); screenChanged(); }).observe(ui.canvas);
