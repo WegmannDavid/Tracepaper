@@ -113,7 +113,7 @@ The viewer draws every scene the same way; a scene can't change how.
 - **Projections** draw each part's visible edges, its smooth edges (where faces meet tangentially) lighter, and its hidden edges dashed, on a layer of their own, *Hidden lines*, hidden at first.
 - **Curves** are thin and dashed, in their part's colour, so that one part's curves (a centre line) stay apart from another's (an older outline). **Points** are dots a few pixels across at any zoom, in their part's colour, named in a tooltip.
 - **Fields** (§2.11) go under the parts, which are then only outlined, so that the outlines, curves and points show over them.
-- **Notes** are a block of text under the drawing, on the *Notes* layer.
+- **Notes** are a block of text under the drawing, on the *Notes* layer, a line given broken between words where it is wider than the drawing (but not into lines of fewer than 60 characters).
 - **The tree** of a drawing is the scene's, leaving out parts the view doesn't show, with the *Dimensions*, *Constraints*, *Fields* and *Hidden lines* layers beside it.
 - **Text and arrowheads** are sized to the drawing: about a 60th of its larger side, in steps of the ISO text heights (2.5, 3.5, 5, 7 mm ..., halved on below 2.5 mm: 1.75, 1.25, 0.875 ...). So they are as big on screen with the whole drawing in view, whether it is a detail 15 mm across or a building, and the notes too. Sections' hatching is spaced to match. A frame's drawing has the scene's own text height, so it stays the same over the frames. The person can make the annotations' text, and their arrowheads with it, a few steps smaller or larger in the drawing's window (§5), for a drawing whose details are much smaller than its extent; the notes, the fields and the hatching keep the drawing's.
 
@@ -296,7 +296,7 @@ Beside its scenes, the build MAY write **plots**: curves and values over axes, a
 | `x`, `y` | The axes (below), shared by every panel that doesn't give its own. |
 | `series`, `marks` | One panel's series and marks; or `panels`, a list of panels, each with its own `series` and `marks`, a `title`, and `x` or `y` if it doesn't share the plot's. |
 
-An **axis** has a `label` and a `unit`; a `scale`, `linear` (the default) or `log`; a `range`, `[lowest, highest]`, either of them `null` for the data's; `ticks`, the values to mark, each a number or `[value, "label"]` (such as the nominal third octaves 50, 63, 80 ... at their exact values), else the viewer's own; and `min` and `max`, the least and the most a value may be, as a quantity's (§2.10).
+An **axis** has a `label` and a `unit`; a `scale`, `linear` (the default) or `log`; a `range`, `[lowest, highest]`, either of them `null` for the data's, that is the series shown when the plot opens (not those `hidden` at first, which run past the panel's edge when shown), their spreads and marks, and the limits; `ticks`, the values to mark, each a number or `[value, "label"]` (such as the nominal third octaves 50, 63, 80 ... at their exact values), else the viewer's own; and `min` and `max`, the least and the most a value may be, as a quantity's (§2.10).
 
 A **series** has a `name`, unique in its panel, and `x` and `y`, lists of numbers as long as each other, `null` in `y` for a gap. What it is:
 
@@ -310,7 +310,7 @@ A **series** has a `name`, unique in its panel, and `x` and `y`, lists of number
 
 A **mark** is a line across a panel at `x`, or along it at `y`, with a `label`, and `of`, the series it belongs to, if any: drawn in its colour and hidden with it.
 
-- **Panels** sit side by side, or one above the other where they share `x` and not `y`. A shared axis has the same range in every panel sharing it.
+- **Panels** sit side by side, or one above the other where they share `x` and not `y`. Notes are drawn under them as on drawings (§2.5), broken to the plot's width. A shared axis has the same range in every panel sharing it.
 - **The viewer (informative)** gives each series its colour (Okabe and Ito's, which colour-blind eyes tell apart), its dashes and its markers, the same in every panel by name, so that series stay apart on a screen without colour too; and each a line in the legend under its panel, with its `summary`. Limits are dashed and red; values beyond them are ringed in red, and a curve beyond them drawn over in red. A series' tree node holds its details and its legend line, so hiding it hides those too. The pointer reads the axes' values, and the value of the nearest point of a series shown, with its spread.
 - **The sheet** a plot is drawn as is a drawing as in §2.5, with `tp:view kind="plot"`. Its `tp:view` holds a `tp:panel` for each panel: its `name`, and `x-axis` and `y-axis`, each `"<scale> <lowest> <highest> <from> <to>"`, the axis's range and where it lies on the sheet in mm, with `x-label`, `x-unit`, `y-label` and `y-unit`. Each series' group has `tp:series` (its name), `tp:panel` (its panel's index), `tp:kind`, and its numbers in `tp:xs`, `tp:ys`, `tp:low` and `tp:high`, separated by spaces, `-` for none. So a sketch file over a plot (§3), `<name>.plot.json.sketch.svg`, gives the strokes in the data's terms, and `tracepaper inspect` says so: the panel, the values along each axis, and the series nearest them.
 

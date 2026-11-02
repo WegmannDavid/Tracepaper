@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import re
+import textwrap
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Union
@@ -129,6 +130,29 @@ def _unit(p):
 
 def text_width(label: str, fs: float) -> float:
     return len(label) * K["charW"] * fs
+
+
+def wrap(line: str, width: float, fs: float, least: int = 60) -> list:
+    """A line of text broken between words where it is wider than width mm at text height
+    fs, but never into lines of fewer than least characters: its pieces, one or more."""
+    chars = max(least, int(width / (K["charW"] * fs)))
+    return textwrap.wrap(line, chars, break_long_words=False, break_on_hyphens=False) or [line]
+
+
+def notes(layer, lines: list) -> None:
+    """Lines of text on layer, under what the sheet has drawn so far, as wide as that at the
+    most (sheet.wrap): note-<n> for the n-th line given, note-<n>-<k> for the rest of it."""
+    sheet = layer.sheet
+    fs = sheet.font_size
+    drawn = sheet._lo[0] <= sheet._hi[0]
+    x0, y0 = sheet._lo if drawn else (0, 0)
+    width = sheet._hi[0] - x0 if drawn else 0
+    row = 0
+    for i, line in enumerate(lines, 1):
+        for k, piece in enumerate(wrap(line, width, fs) if line.strip() else [""]):
+            row += 1
+            if piece.strip():
+                layer.text(f"note-{i}" + (f"-{k + 1}" if k else ""), (x0, y0 - 1.5 * fs - 1.4 * fs * row), piece)
 
 
 def _empty() -> dict:

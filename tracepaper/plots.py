@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
-from .sheet import SVG_NS, TP_NS, Sheet, fmt, text_width
+from .sheet import SVG_NS, TP_NS, Sheet, fmt, notes as write_notes, text_width
 
 PLOT_SUFFIX = ".plot.json"
 KINDS = ("curve", "values", "points")
@@ -288,17 +288,20 @@ class Axis:
         return f"{num(v, digits)} {unit}" if unit else num(v, digits)
 
 
-def _extent(panels: list, axis: str) -> tuple:
-    """The lowest and highest of what the panels draw along an axis: their series (and
-    spreads), marks and limits; on a log axis what is above 0."""
+def _extent(panels: list, axis: str, shown=lambda s: True) -> tuple:
+    """The lowest and highest of what the panels draw along an axis: the series shown (all
+    of a panel's, if none of them is), with their spreads and marks, and the loose marks
+    and limits; on a log axis what is above 0."""
     spec = panels[0][axis]
     vals = []
     for p in panels:
-        for s in p["series"]:
+        series = [s for s in p["series"] if shown(s)] or p["series"]
+        names = {s["name"] for s in series}
+        for s in series:
             vals += [v for v in s[axis] if v is not None]
             if axis == "y":
                 vals += [v for key in ("low", "high") for v in (s[key] or []) if v is not None]
-        vals += [m["at"] for m in p["marks"] if m["axis"] == axis]
+        vals += [m["at"] for m in p["marks"] if m["axis"] == axis and (m["of"] is None or m["of"] in names)]
     vals += [v for v in (spec["min"], spec["max"]) if v is not None]
     if spec["scale"] == "log":
         vals = [v for v in vals if v > 0]
@@ -521,13 +524,30 @@ def draw(plot: dict, name: str) -> PlotSheet:
     def shown(path: list) -> bool:
         return not any(h == " / ".join(path) or h == path[-1] for h in hidden)
 
-    # The ranges: shared axes over every panel sharing them.
+    # Each series' node in the tree: the panel's (if there are several), its family's or the
+    # series' it is the detail of, its own.
+    many = len(panels) > 1
+    names = [p["title"] or (f"panel {i + 1}" if many else "") for i, p in enumerate(panels)]
+    paths = {}
+    for name, p in zip(names, panels):
+        prefix = [name] if many else []
+        for s in p["series"]:
+            if not s["detail_of"]:
+                paths[id(s)] = prefix + ([s["family"]] if s["family"] else []) + [s["name"]]
+        for s in p["series"]:
+            if s["detail_of"]:
+                main = next(m for m in p["series"] if m["name"] == s["detail_of"])
+                paths[id(s)] = paths[id(main)] + [s["name"]]
+    at_first = lambda s: all(shown(paths[id(s)][:k]) for k in range(1, len(paths[id(s)]) + 1))
+
+    # The ranges: shared axes over every panel sharing them, fitted to the series shown at
+    # first; one shown later in the tree may run past the panel's edge.
     ranges = []
     for p in panels:
         r = {}
         for k in ("x", "y"):
             sharing = [q for q in panels if not q["own"][k]] if not p["own"][k] else [p]
-            r[k] = _range(p[k], *_extent(sharing, k), k)
+            r[k] = _range(p[k], *_extent(sharing, k, at_first), k)
         ranges.append(r)
 
     # Each panel's place: side by side, or one above the other where they share x alone.
@@ -559,8 +579,7 @@ def draw(plot: dict, name: str) -> PlotSheet:
             x += W + 2 * fs
 
     for i, (p, r, (px, py)) in enumerate(zip(panels, ranges, places)):
-        many = len(panels) > 1
-        pname = p["title"] or (f"panel {i + 1}" if many else "")
+        pname = names[i]
         top = sheet.layer(pname, style={"stroke": INK, "fill": "none"}) if many else None
         prefix = [pname] if many else []
 
@@ -778,12 +797,8 @@ def draw(plot: dict, name: str) -> PlotSheet:
                 main.element.remove(g.element)
                 main.element.insert(0, g.element)
 
-    if plot["notes"]:
-        notes = sheet.layer("Notes", style={"stroke": "none", "fill": INK})
-        x0, y0 = sheet._lo
-        for k, line in enumerate(plot["notes"], 1):
-            if line.strip():
-                notes.text(f"note-{k}", (x0, y0 - 1.5 * fs - 1.4 * fs * k), line)
+    if plot["notes"]:  # broken to the plot's width
+        write_notes(sheet.layer("Notes", style={"stroke": "none", "fill": INK}), plot["notes"])
     return sheet
 
 

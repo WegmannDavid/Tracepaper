@@ -338,6 +338,17 @@ class DrawingTest(unittest.TestCase):
         # A frame's text: the scene's, if given.
         self.assertEqual(D.draw(S.read_step(scene), None, {}, "snap.step", text=2.5).font_size, 2.5)
 
+    def test_long_notes_are_broken_to_the_drawing_s_width(self):
+        scene = S.read_step(GEOMETRY / "profile.step")
+        width = lambda meta: float(ET.fromstring(D.draw(scene, None, meta, "profile.step").tostring())
+                                   .get("viewBox").split()[2])
+        long = {"notes": "Key: " + "a parameter = its value, " * 40}
+        self.assertEqual(width(long), width({"notes": "Key"}))
+        root = ET.fromstring(D.draw(scene, None, long, "profile.step").tostring())
+        notes = [t.text for t in root.findall(f".//{SVG}g[@{INK}label='Notes']/{SVG}text")]
+        self.assertGreater(len(notes), 2)
+        self.assertEqual(" ".join(notes), long["notes"].strip())
+
 
 class ViewsTest(unittest.TestCase):
     def test_views_drawn_on_the_fly(self):

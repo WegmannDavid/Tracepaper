@@ -32,7 +32,7 @@ from typing import Optional
 
 from . import fields as F
 from . import scene as S
-from .sheet import K, SCREEN_WIDTH, TP_NS, Sheet, fmt
+from .sheet import K, SCREEN_WIDTH, TP_NS, Sheet, fmt, notes as write_notes
 from . import views as V
 from .views import view_spec
 
@@ -222,15 +222,11 @@ def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(),
 
 
 def _notes(sheet: Sheet, lines: list) -> None:
-    """Notes as a block of text under the drawing, its lines as given."""
+    """Notes as a block of text under the drawing, its lines as given, each broken between
+    words where it is wider than the drawing."""
     if not lines:
         return
-    layer = _role(sheet.layer("Notes"), "annotations")
-    fs = sheet.font_size
-    x0, y0 = (sheet._lo if sheet._lo[0] <= sheet._hi[0] else (0, 0))
-    for i, line in enumerate(lines, 1):
-        if line.strip():
-            layer.text(f"note-{i}", (x0, y0 - 1.5 * fs - 1.4 * fs * i), line)
+    write_notes(_role(sheet.layer("Notes"), "annotations"), lines)
 
 
 def _fields(sheet: Sheet, fields, ranges: dict) -> None:

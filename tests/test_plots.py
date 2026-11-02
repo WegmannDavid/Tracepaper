@@ -154,6 +154,35 @@ class DrawTest(unittest.TestCase):
         self.assertEqual(a.get("x-axis").split()[3:], b.get("x-axis").split()[3:])  # one above the other
         self.assertNotEqual(a.get("y-axis").split()[1:3], b.get("y-axis").split()[1:3])
 
+    def test_ranges_fit_what_is_shown_at_first(self):
+        # A hidden detail's peak doesn't stretch the axis; shown, it runs past the panel's edge.
+        plot = {"y": {"range": [0, None]},
+                "series": [{"name": "a", "kind": "values", "x": [1, 2, 3], "y": [10, 40, 90]},
+                           {"name": "a fine", "detail-of": "a", "x": [1, 2, 3], "y": [10, 116, 90]},
+                           {"name": "b", "x": [1, 3], "y": [20, 30], "family": "f"}],
+                "marks": [{"y": 200, "label": "of the detail", "of": "a fine"}], "hidden": ["a"]}
+        top = lambda plot: float(plots.draw(plots.check(plot), "p.plot.json").to_element()
+                                 .find(f"{SVG}metadata/{TP}view/{TP}panel").get("y-axis").split()[2])
+        self.assertEqual(top(plot), 30)  # only b shown: a, its detail and its mark hidden with it
+        plot["hidden"] = ["a fine"]
+        self.assertEqual(top(plot), 100)
+        plot["hidden"] = []
+        self.assertEqual(top(plot), 200)
+        plot["hidden"] = ["f", "a"]  # nothing shown: all of it
+        self.assertEqual(top(plot), 200)
+
+    def test_long_notes_are_broken_to_the_plot_s_width(self):
+        plot = clip_plot()
+        del plot["panels"][1]
+        width = lambda p: float(plots.draw(plots.check(p), "p.plot.json").to_element().get("viewBox").split()[2])
+        narrow = width(plot)
+        plot["notes"] = ["word " * 200, "", "short"]
+        root = plots.draw(plots.check(plot), "p.plot.json").to_element()
+        self.assertEqual(float(root.get("viewBox").split()[2]), narrow)
+        notes = [(t.get("id"), t.text) for t in root.iter(f"{SVG}text") if t.get("id", "").startswith("note-")]
+        self.assertGreater(len(notes), 5)
+        self.assertEqual((notes[0][0], notes[1][0], notes[-1]), ("note-1", "note-1-2", ("note-3", "short")))
+
     def test_out_of_range_is_cut_off(self):
         plot = {"x": {"range": [0, 10]}, "y": {"range": [0, 1]},
                 "series": [{"name": "a", "x": [-5, 5, 15], "y": [0.5, 0.5, 2], "kind": "values"}]}
