@@ -1,7 +1,8 @@
 """Local HTTP server behind the viewer.
 
-It lists a project's views (scenes, .step, with the sheets drawn from them; and 2D
-sheets, .svg, and 3D models, .glb) and serves them with the pages that show them,
+It lists a project's views (scenes, .step, with the sheets drawn from them; plots,
+.plot.json, drawn as sheets; and 2D sheets, .svg, and 3D models, .glb) and serves them
+with the pages that show them,
 writes sketch files when the person presses Save (SPEC.md §3, §5), and connects a
 tablet (pen.py) when a page asks, passing its pen input to the view the person last
 used. Scenes need OpenCascade's Python binding (OCP); everything else, only Python.
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import plate
+from . import plate, plots
 from . import views as scenes
 from .pen import PenHub
 
@@ -64,6 +65,10 @@ class View:
     def scene(self) -> bool:
         return scenes.is_scene(self.path)
 
+    @property
+    def plot(self) -> bool:
+        return plots.is_plot(self.path)
+
     def files(self) -> list:
         """The files it is drawn from: a scene's views change when its .tp.json or its frames do."""
         if not self.scene:
@@ -96,7 +101,9 @@ def sketch_path(view: Path) -> Path:
 def view_of_sketch(name: str) -> str:
     """The view a sketch file's name is for: the inverse of sketch_path."""
     stem = name[: -len(SKETCH_SUFFIX)]
-    return stem if "#" in stem or Path(stem).suffix.lower() in MODEL_SUFFIXES else stem + ".svg"
+    if "#" in stem or Path(stem).suffix.lower() in MODEL_SUFFIXES or plots.is_plot(Path(stem)):
+        return stem
+    return stem + ".svg"
 
 
 _solid_scans: dict = {}  # path -> (mtime, size, has solids)
@@ -160,7 +167,7 @@ def list_views(directory: Path) -> list:
         rel = Path(root).relative_to(directory)
         sketches = {f for f in files if f.endswith(SKETCH_SUFFIX)}
         for f in files:
-            kind = KINDS.get(Path(f).suffix.lower())
+            kind = "sheet" if plots.is_plot(Path(f)) else KINDS.get(Path(f).suffix.lower())
             if not kind or f.startswith(".") or f.endswith(SKETCH_SUFFIX):
                 continue
             if kind == "scene":
@@ -308,25 +315,29 @@ class ViewerServer(ThreadingHTTPServer):
         self.pen_hub = PenHub(pen.size_mm, getattr(pen, "pixels", None)) if pen is not None else None
         port = self.server_address[1]
         self.allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
-        self._models = {}  # path -> (mtime, size, .glb): slicer projects already turned into models
+        self._models = {}  # path -> (mtime, size, .glb or SVG): slicer projects turned into models, plots drawn
         self._models_lock = threading.Lock()
         self.scenes = Scenes()
 
     def view_file(self, view: View, frame: Optional[int] = None) -> bytes:
         """A view's file as its page reads it. A slicer project becomes a model, a .glb
-        (plate.py), once for each version of it, and a scene its 3D view or a sheet drawn from
-        it, of one of its frames if given. Raises ValueError if that fails."""
+        (plate.py), and a plot a sheet (plots.py), once for each version of it, and a scene
+        its 3D view or a sheet drawn from it, of one of its frames if given. Raises
+        ValueError if that fails."""
         if view.scene:
             return self.scenes.output(view, frame)
         path = view.path
-        if path.suffix.lower() != ".3mf":
+        if path.suffix.lower() != ".3mf" and not view.plot:
             return path.read_bytes()
         stat = path.stat()
         with self._models_lock:
             cached = self._models.get(path)
             if cached and cached[:2] == (stat.st_mtime_ns, stat.st_size):
                 return cached[2]
-        data = plate.to_glb(path)
+        if view.plot:
+            data = plots.draw(plots.read_plot(path), view.name).tostring().encode("utf-8")
+        else:
+            data = plate.to_glb(path)
         with self._models_lock:
             self._models[path] = (stat.st_mtime_ns, stat.st_size, data)
             while len(self._models) > MODELS_KEPT:
@@ -408,7 +419,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             sketch = _mtime(v.sketch())
             views.append({"name": v.name, "kind": v.kind, "mtime": mtime,
-                          "sketch": {"mtime": sketch} if sketch else None})
+                          "sketch": {"mtime": sketch} if sketch else None, **({"plot": True} if v.plot else {})})
         return {"dir": str(self.server.directory), "initial": self.server.initial, "views": views,
                 "folders": list_folders(self.server.directory)}
 

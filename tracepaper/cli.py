@@ -13,8 +13,8 @@ def main(argv=None) -> None:
     view = commands.add_parser("view", help="open a project's views (scenes, drawings of them, slicer projects) "
                                             "in the viewer")
     view.add_argument("path", nargs="?", default=".",
-                      help="the build folder, whose .step scenes, .3mf slicer projects, and older .svg sheets and .glb "
-                           "models it shows (in subfolders too), or one view to open directly")
+                      help="the build folder, whose .step scenes, .plot.json plots, .3mf slicer projects, and older "
+                           ".svg sheets and .glb models it shows (in subfolders too), or one view to open directly")
     view.add_argument("--port", type=int, default=7310, help="port to serve on (default 7310, or a free one)")
     view.add_argument("--no-browser", action="store_true", help="don't open a browser")
     view.add_argument("--tablet-host", default="remarkable", metavar="HOST",
@@ -24,10 +24,11 @@ def main(argv=None) -> None:
                       help="how the tablet is held, in degrees clockwise from upright: "
                            "90 (the default) is landscape with the power button on the right, 270 on the left")
     render = commands.add_parser(
-        "render", help="draw a view of a scene (a .step file) as the viewer does, to check it: an SVG and a PNG")
+        "render", help="draw a view of a scene (a .step file) or a plot (.plot.json) as the viewer does, to check "
+                       "it: an SVG and a PNG")
     render.add_argument("view", help="a scene, scene.step, with one of its views after # if wanted: "
                                      "scene.step#section-a, scene.step#x=12.5, scene.step#front; "
-                                     "a 3D scene without one is drawn isometric")
+                                     "a 3D scene without one is drawn isometric; or a plot, name.plot.json")
     render.add_argument("--frame", type=int, help="draw this frame of the scene's frames (0 is the first)")
     render.add_argument("--out", type=Path, help="the PNG to write (default: next to the scene, in a "
                                                  "temporary folder); the SVG goes next to it")

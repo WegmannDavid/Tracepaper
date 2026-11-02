@@ -43,7 +43,7 @@ function viewItem(v) {
   a.title = v.name;
   const info = span('tpv-view-info', ago(v.mtime));
   if (v.sketch) info.prepend(span('tpv-waiting', WAITING));
-  a.append(span(`tpv-kind ${v.kind}`, v.kind === 'model' ? '3D' : '2D'), span('tpv-view-name', v.file), info);
+  a.append(span(`tpv-kind ${v.kind}`, v.plot ? 'Plot' : v.kind === 'model' ? '3D' : '2D'), span('tpv-view-name', v.file), info);
   a.addEventListener('click', (e) => {
     if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return; // the browser's own way
     e.preventDefault();

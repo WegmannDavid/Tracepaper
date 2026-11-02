@@ -13,10 +13,11 @@ MUST, SHOULD and MAY are used as in RFC 2119.
 | `<name>.step` | the AI's build | a scene (§2) |
 | `<name>.tp.json` | the AI's build | what the scene's STEP file can't say: annotations, named views, frames, fields (§2.3) |
 | `.vtu`, `.step` in a dot folder | the AI's build | a scene's fields (§2.11) and frames (§2.10) |
+| `<name>.plot.json` | the AI's build | a plot: curves and values over axes, drawn as a sheet (§2.12) |
 | `<view>.sketch.svg` | the viewer, when the person presses Save | the view as it was on screen, plus their ink (§3) |
 | `<name>.3mf` | the AI's build, with the slicer's command line | a slicer project, shown in 3D (§2.9) |
 
-- **The build folder.** The views live in the folder the build writes its output to, such as `build/`, among that output (STL files, caches), in subfolders that group them by what they're for. The viewer shows the folder as a tree of its views and subfolders, empty ones too (§5); other files are left out, as are folders whose names start with a dot. Every `.step`, `.3mf`, `.svg` and `.glb` file there is taken for a view, so the build's other files MUST NOT end in those; STEP files for other uses go in a dot folder or elsewhere.
+- **The build folder.** The views live in the folder the build writes its output to, such as `build/`, among that output (STL files, caches), in subfolders that group them by what they're for. The viewer shows the folder as a tree of its views and subfolders, empty ones too (§5); other files are left out, as are folders whose names start with a dot. Every `.step`, `.plot.json`, `.3mf`, `.svg` and `.glb` file there is taken for a view, so the build's other files MUST NOT end in those; STEP files for other uses go in a dot folder or elsewhere.
 - The build writes each file under a name the viewer skips (ending in `.tmp`, or in a dot folder) and renames it into place, so the viewer never reads half of it. It writes each view in place of the old one, and deletes only views it no longer makes. It MUST NOT empty the build folder wholesale, since sketch files wait there next to their views until the AI has handled them.
 - An existing sketch file means "not handled yet". The AI deletes it once it has acted on it.
 - Older builds write 2D sheets as `.svg` files and 3D models as `.glb` files, in the format of [SPEC-v0.md](SPEC-v0.md). The viewer still shows them (§6).
@@ -268,6 +269,51 @@ A scene MAY carry **fields**: values at the nodes of a mesh, such as the strain 
   - Fields with areas go under the parts, which are then only outlined; fields of lines and points alone go over them.
   - The person can change the range, the arrows' length, show only what is outside the limits, add isolines, the mesh's edges (quadrilaterals as such) and the arrows' values, scale the displacement (0 shows the mesh where the file has it, 1 moved as far as the field says, more to exaggerate), and read the value under the pointer, or an arrow's near it. Fields aren't shown in 3D yet.
 
+### 2.12 Plots
+
+Beside its scenes, the build MAY write **plots**: curves and values over axes, as a solver or a calculation gives them, such as a glazing's sound transmission loss over frequency or a clip's force over lift. A plot is a file `<name>.plot.json`, written as views are (§1), and shown as a drawing: the person hides series in the tree, reads values under the pointer and sketches on it, as on a scene's drawings. Like a scene, it says what its data is, not how it looks.
+
+```json
+{
+  "title": "Transmission loss",
+  "source": "window/acoustics.py",
+  "regenerate": "python -m window.acoustics plot",
+  "notes": "Field incidence.",
+  "x": {"label": "frequency", "unit": "Hz", "scale": "log", "ticks": [50, 63, 80, 100, 125]},
+  "y": {"label": "transmission loss", "unit": "dB", "min": 30},
+  "series": [
+    {"name": "8 mm", "kind": "values", "family": "inner pane", "x": [50, 63, 80, 100, 125], "y": [31, 24, 42, 43, 44],
+     "low": [29, 20, 40, 41, 43], "high": [33, 27, 44, 45, 46], "summary": "Rw (C; Ctr) = 41 (−1; −4) dB"},
+    {"name": "8 mm every frequency", "detail-of": "8 mm", "x": [44.7, 45.1, 45.6], "y": [31.6, 32.0, 32.4]}
+  ],
+  "marks": [{"x": 59, "label": "resonance", "of": "8 mm"}]
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `title`, `source`, `pipeline`, `rev`, `regenerate`, `notes`, `hidden` | As a scene's `.tp.json` has them (§2.3). `hidden` names series, families or panels, or paths through them (`"8 mm / 8 mm every frequency"`). |
+| `x`, `y` | The axes (below), shared by every panel that doesn't give its own. |
+| `series`, `marks` | One panel's series and marks; or `panels`, a list of panels, each with its own `series` and `marks`, a `title`, and `x` or `y` if it doesn't share the plot's. |
+
+An **axis** has a `label` and a `unit`; a `scale`, `linear` (the default) or `log`; a `range`, `[lowest, highest]`, either of them `null` for the data's; `ticks`, the values to mark, each a number or `[value, "label"]` (such as the nominal third octaves 50, 63, 80 ... at their exact values), else the viewer's own; and `min` and `max`, the least and the most a value may be, as a quantity's (§2.10).
+
+A **series** has a `name`, unique in its panel, and `x` and `y`, lists of numbers as long as each other, `null` in `y` for a gap. What it is:
+
+| Key | Meaning |
+|---|---|
+| `kind` | `curve` (the default): a function at as many points as it takes, drawn as a line; `values`: a function at these points only, such as third-octave band values, drawn as markers joined by a thin line; `points`: values that don't follow one another, such as measurements, markers alone. |
+| `detail-of` | The name of a series in the same panel that this one is the detail of, such as its values at every frequency beside the band values: drawn faint and thin in that series' colour, and in the tree inside it. |
+| `family` | A name the series shares with others in an order, such as an inner pane 6, 8 and 10 mm thick: drawn in one hue from light to dark, in the order they come, and in the tree as a node holding them. |
+| `low`, `high` | Lists as long as `x`: the spread at each point, the lowest and the highest value (not distances from `y`), `null` where there is none; drawn as error bars on values and points, a band along a curve. |
+| `summary` | Text for the legend beside its name, such as its single-number rating. |
+
+A **mark** is a line across a panel at `x`, or along it at `y`, with a `label`, and `of`, the series it belongs to, if any: drawn in its colour and hidden with it.
+
+- **Panels** sit side by side, or one above the other where they share `x` and not `y`. A shared axis has the same range in every panel sharing it.
+- **The viewer (informative)** gives each series its colour (Okabe and Ito's, which colour-blind eyes tell apart), its dashes and its markers, the same in every panel by name, so that series stay apart on a screen without colour too; and each a line in the legend under its panel, with its `summary`. Limits are dashed and red; values beyond them are ringed in red, and a curve beyond them drawn over in red. A series' tree node holds its details and its legend line, so hiding it hides those too. The pointer reads the axes' values, and the value of the nearest point of a series shown, with its spread.
+- **The sheet** a plot is drawn as is a drawing as in §2.5, with `tp:view kind="plot"`. Its `tp:view` holds a `tp:panel` for each panel: its `name`, and `x-axis` and `y-axis`, each `"<scale> <lowest> <highest> <from> <to>"`, the axis's range and where it lies on the sheet in mm, with `x-label`, `x-unit`, `y-label` and `y-unit`. Each series' group has `tp:series` (its name), `tp:panel` (its panel's index), `tp:kind`, and its numbers in `tp:xs`, `tp:ys`, `tp:low` and `tp:high`, separated by spaces, `-` for none. So a sketch file over a plot (§3), `<name>.plot.json.sketch.svg`, gives the strokes in the data's terms, and `tracepaper inspect` says so: the panel, the values along each axis, and the series nearest them.
+
 ## 3. Sketch files
 
 When the person presses Save on a view, the viewer writes `<view>.sketch.svg` next to the scene: `bracket.step#section-a.sketch.svg` on a named view, `bracket.step#x=12.5.sketch.svg` on a section opened from the 3D view, `profile.step.sketch.svg` on a 2D scene, and `bracket.step.sketch.svg` over a scene's 3D view (§3.1).
@@ -324,13 +370,14 @@ If the result isn't right, the person sketches again or says so, and the loop re
 
 `tracepaper view <build folder, or one view>` serves the viewer on 127.0.0.1 and opens it in a browser. It needs OpenCascade's Python binding, OCP (which CadQuery and build123d install), for scenes. The viewer:
 
-- shows the build folder (§1) on a project page, as a tree of its views: its subfolders, empty ones too, which the person can fold, and the scenes, their named views, and the other views in them. A folded folder says when a sketch inside it is waiting. Each view opens in a tab of its own, which the person can drag out into a window to watch several side by side, and reloads when its files change on disk;
+- shows the build folder (§1) on a project page, as a tree of its views: its subfolders, empty ones too, which the person can fold, and the scenes, their named views, the plots, and the other views in them. A folded folder says when a sketch inside it is waiting. Each view opens in a tab of its own, which the person can drag out into a window to watch several side by side, and reloads when its files change on disk;
 - shows scenes in 3D, orthographic or in perspective: rotate, pan, zoom, standard directions, slices along the axes, or just the sections there, and a transparent view. *Drawing* opens the exact drawing of what the 3D view shows, in a tab of its own: the section through the slice plane that is on, or the scene from the standard direction it looks from;
 - shows each view's tree in a panel beside it, where the person can hide and show nodes in that window, as in the OCP viewer: a node's eye shows or hides it with everything inside it, also a node inside a hidden one; `Ctrl`+click on a name shows only that node, `Alt`+click hides it. The person's choices last while the window is open, including when the files are rewritten, and aren't stored;
 - lets the person drag annotations' labels, and provides a pen with a few colours, on drawings and over 3D views, where the view only pans and zooms while there is ink;
 - measures on drawings: the person picks points, which snap to vertices (the ends of lines, arcs and curves), the centres of circles and arcs, points and the points annotations measure from, or else to the nearest point on a line or curve, and reads the distance between two, with Δx and Δy, and the angle at the middle one of three. The measurement is drawn over the drawing, not saved;
 - makes the annotations' text smaller or larger on drawings, through the ISO heights (*A−*, *A+*); the browser remembers it for each view, and a sketch file saved meanwhile has the annotations at that size;
 - steps through a scene's frames (§2.10) and shows its fields (§2.11), in the panel;
+- draws plots (§2.12), and reads their values under the pointer;
 - can take ink from a drawing tablet, such as a reMarkable 2, which the person connects and disconnects in a view's window; connecting takes the tablet from any other viewer that has it. The tablet covers the current view of the window the person used last with the mouse, fitted at one scale for both axes. A tablet with a screen shows a drawing, lined up with the pen; over a 3D view it shows only the frame of where the pen draws;
 - writes the sketch file on Save (§3), and clears the ink once the AI has deleted that file;
 - never solves, checks or interprets anything, and never runs `regenerate`.

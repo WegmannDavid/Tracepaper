@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
+from . import plots
 from . import views as scenes
 from .server import MODEL_SUFFIXES, SKETCH_SUFFIX, view_of_sketch
 from .sheet import INKSCAPE_NS, SVG_NS, TP_NS, fmt
@@ -235,11 +236,12 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
     view = root.find(f"{SVG}metadata/{TP}view")
     sheet_path = sketch_path.with_name(scene_name)
     scene = scenes.is_scene(sheet_path)
+    plot = plots.is_plot(sheet_path)  # its strokes in the data's terms
     if scene:  # drawn over its 3D view, or on a sheet drawn from it
         model = view is not None and view.get("kind") == "model view"
     else:
         model = sheet_path.suffix.lower() in MODEL_SUFFIXES  # drawn over a 3D view (SPEC.md §3.1)
-    sheet = ET.parse(sheet_path).getroot() if not (model or scene) and sheet_path.is_file() else None
+    sheet = ET.parse(sheet_path).getroot() if not (model or scene or plot) and sheet_path.is_file() else None
 
     lines = [f"Sketch: {sketch_path}", f"  of {of}" + ("" if sheet_path.is_file() else " (missing)")
              + (f", saved {root.get(TP + 'saved')}" if root.get(TP + "saved") else "")]
@@ -254,7 +256,8 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
     ink = strokes(root)
     lines.append(f"\nStrokes: {len(ink)} " + (
         "(mm on the plane the view looked at, y up: model point = origin + x·xdir + y·(normal × xdir), "
-        "at some depth along normal)" if model else "(model mm, y up)"))
+        "at some depth along normal)" if model else "(the sheet's mm, y up; where they lie in the plot below each)"
+        if plot else "(model mm, y up)"))
     for i, s in enumerate(ink, 1):
         x0, y0, x1, y1 = _bounds(s["points"])
         (sx, sy), (ex, ey) = s["points"][0], s["points"][-1]
@@ -266,8 +269,10 @@ def inspect(path: Path, out_dir: Optional[Path] = None) -> str:
         if s["frame"]:
             line += f"  drawn at {s['frame']}"
         lines.append(line)
+        if plot:
+            lines.append(f"         {plots.stroke_report(root, s['points'])}")
 
-    if not model:  # nothing to move on a model
+    if not model and not plot:  # nothing to move on a model or a plot
         if scene:
             try:
                 moved = moved_in_scene(root, scenes.read_meta(sheet_path), scene_view)

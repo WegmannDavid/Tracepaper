@@ -24,6 +24,8 @@ from tracepaper.model import mark_hidden, write_glb
 from tracepaper.pen import screen_size, tablet_size
 from tracepaper.server import make_server
 from tracepaper.sheet import PathBuilder, Sheet
+from tracepaper.report import inspect
+from tracepaper.views import save_plot
 
 try:
     from test_plate import write_3mf  # run by `unittest discover tests`, which puts tests/ on the path
@@ -1514,6 +1516,43 @@ class ViewerInFirefox(unittest.TestCase):
                 self.assertEqual(moved, [30, 20, 1], (tool, way))
         self.assertEqual(got["ink"], 0)
         self.assertEqual((got["keptByDrag"], got["clearedByClick"]), (2, 0))
+
+    def test_plot(self):
+        # A plot is drawn as a sheet: its series are nodes of the tree, the pointer reads the
+        # data's values and the nearest point of a series shown, and a sketch is saved next to it.
+        bands = [50, 100, 200, 400, 800, 1600, 3200]
+        save_plot(self.dir / "loss.plot.json", {
+            "title": "Loss", "x": {"label": "frequency", "unit": "Hz", "scale": "log"},
+            "y": {"label": "loss", "unit": "dB"},
+            "series": [{"name": "pane", "kind": "values", "x": bands, "y": [20 + 5 * k for k in range(7)],
+                        "low": [19 + 5 * k for k in range(7)], "high": [22 + 5 * k for k in range(7)]},
+                       {"name": "pane fine", "detail-of": "pane", "x": [50, 3200], "y": [20, 50]},
+                       {"name": "laminated", "x": bands, "y": [30 + 5 * k for k in range(7)]}]})
+        self.open_viewer("loss.plot.json")
+        got = self.m.run("""
+            const tree = [...document.querySelectorAll('#tpv-layers .tpv-node-name')].map((n) => n.textContent);
+            const at = (x, y) => screen(tp.state.ref, x, y);
+            const panel = tp.state.plot.panels[0];
+            const point = (f, db) => at(panel.x.at(f), panel.y.at(db));
+            const read = (p) => { fire('pointermove', p, 'mouse'); return document.getElementById('tpv-coords').textContent; };
+            const onPoint = read(point(200, 30));
+            const between = read(point(300, 40));
+            tp.setLayerVisible('pane', false);
+            const hidden = read(point(200, 30));
+            tp.setLayerVisible('pane', true);
+            stroke([[panel.x.at(400), panel.y.at(38)], [panel.x.at(800), panel.y.at(44)]]);
+            tp.save().then(() => done({ tree, onPoint, between, hidden }));
+        """)
+        self.assertEqual(got["tree"], ["Sketch", "laminated", "pane", "Axes"])  # topmost first, as on drawings
+        self.assertEqual(got["onPoint"], "frequency 200 Hz   loss 30 dB   pane: 200 Hz, 30 dB (29 … 32)")
+        self.assertTrue(got["between"].startswith("frequency 300 Hz   loss 40 dB"), got["between"])
+        self.assertNotIn("pane:", got["between"])  # no point near
+        self.assertEqual(got["hidden"], "frequency 200 Hz   loss 30 dB")
+        sketch = self.dir / "loss.plot.json.sketch.svg"
+        self.assertTrue(sketch.is_file())
+        report = inspect(sketch, Path(self.tmp.name) / "images")
+        self.assertIn("frequency 400 Hz..800 Hz, loss 38 dB..44 dB", report)
+        sketch.unlink()
 
     def test_dimension_text_smaller_or_larger(self):
         # The toolbar steps the dimensions' text through the ISO heights, and their arrowheads

@@ -6,6 +6,7 @@ import { INK_COLORS, Ink, PenInput, coalesced, pxPerUnit, swatch, toLocal } from
 import { FieldView } from './fieldview.js';
 import { FramePanel } from './frames.js';
 import { Measure } from './measure.js';
+import { plotOf, readout as plotReadout } from './plot.js';
 import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import * as Pen from './pen.js';
 import { renderView } from './screen.js';
@@ -85,6 +86,7 @@ function mount(root) {
   state.ref = ref;
   state.ink = ensureInkLayer(root);
   state.annotations = [...root.querySelectorAll('g')].filter(A.isAnnotation);
+  state.plot = plotOf(root); // a plot's axes and series, for its values under the pointer
   ui.paper.setAttribute('width', root.width.baseVal.value);
   ui.paper.setAttribute('height', root.height.baseVal.value);
   ui.empty.hidden = true;
@@ -131,15 +133,15 @@ function applyText() {
     const fs = fontSizeOf(g), ann = fs !== was && A.read(g);
     if (ann) A.render(g, A.geometry(ann, fs), fs);
   }
-  const own = fontSizeIn(state.root, state.root);
-  ui.textSize.textContent = state.root ? `${A.fmt(textHeight(), 3)} mm` : '';
-  ui.textSize.title = state.root ? `Text height of the dimensions and symbols; the drawing's own: ${A.fmt(own, 3)} mm` : '';
-  ui.textSmaller.disabled = !state.root || state.textStep <= TEXT_STEPS[0];
-  ui.textLarger.disabled = !state.root || state.textStep >= TEXT_STEPS[1];
+  const own = fontSizeIn(state.root, state.root), none = !state.annotations.length; // a plot has none
+  ui.textSize.textContent = none ? '' : `${A.fmt(textHeight(), 3)} mm`;
+  ui.textSize.title = none ? '' : `Text height of the dimensions and symbols; the drawing's own: ${A.fmt(own, 3)} mm`;
+  ui.textSmaller.disabled = none || state.textStep <= TEXT_STEPS[0];
+  ui.textLarger.disabled = none || state.textStep >= TEXT_STEPS[1];
 }
 
 function stepText(by) {
-  if (!state.root) return;
+  if (!state.annotations.length) return;
   state.textStep = clamp(state.textStep + by, ...TEXT_STEPS);
   try {
     if (state.textStep) localStorage.setItem(TEXT_KEY + state.name, String(state.textStep));
@@ -570,7 +572,8 @@ function onPointerDown(e) {
 function onPointerMove(e) {
   if (!state.root) return;
   const p = toLocal(state.ref, e.clientX, e.clientY);
-  if (p) ui.coords.textContent = `x ${p[0].toFixed(2)}   y ${p[1].toFixed(2)} mm`;
+  const inPlot = p && state.plot && plotReadout(state.plot, p, pxPerUnit(state.ref), shown);
+  if (p) ui.coords.textContent = inPlot || `x ${p[0].toFixed(2)}   y ${p[1].toFixed(2)} mm`;
   const value = fieldView.on && fieldView.valueAt(e.clientX, e.clientY);
   if (p && value) ui.coords.textContent += `   ${value}`;
   if (e.pointerType === 'touch' && touches.has(e.pointerId)) touches.set(e.pointerId, stagePoint(e));

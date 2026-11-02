@@ -251,6 +251,14 @@ def fields(scene: Path, meta: dict, frame: dict = None) -> list:
     return out
 
 
+def save_plot(path, plot: dict) -> Path:
+    """Write a plot (SPEC.md §2.12) as path, a <name>.plot.json, after checking it: to a
+    temporary name first and renamed into place, so the viewer never reads half a file.
+    Makes the folder if need be. Raises ValueError saying what is wrong with the plot."""
+    from . import plots
+    return plots.save(path, plot)
+
+
 def save_scene(assembly, path, meta: Optional[dict] = None) -> Path:
     """Write a scene: assembly, a CadQuery assembly or anything with CadQuery's export(path,
     exportType), as the STEP file path, and meta, if given, as its .tp.json; each to a

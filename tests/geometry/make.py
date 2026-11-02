@@ -519,6 +519,70 @@ def beam() -> cq.Assembly:
     return a
 
 
+def beam_plot() -> dict:
+    """The beam's bending moment and deflection along it, one above the other on the same
+    x, and some deflections "measured" with their spread; the deflection's limit just short
+    of the free end's."""
+    steps = 60
+    xs = [BEAM_L * i / steps for i in range(steps + 1)]
+    v, _ = beam_bending(steps)
+    measured = [10, 20, 30, 40, 50, 60]
+    at = [v[round(x / BEAM_L * steps)] * (1 + 0.04 * math.sin(3 * x)) for x in measured]
+    return {
+        "title": "Cantilever along its length",
+        "source": "tests/geometry/make.py", "regenerate": "python3 tests/geometry/make.py plots",
+        "notes": "As the beam scene's fields have it; the measurements made up, as test data.",
+        "x": {"label": "x", "unit": "mm"},
+        "panels": [
+            {"title": "bending moment", "y": {"label": "M", "unit": "N mm"},
+             "series": [{"name": "moment", "x": xs, "y": [round(beam_moment(x), 3) for x in xs]}]},
+            {"title": "deflection", "y": {"label": "v", "unit": "mm", "min": round(0.97 * v[-1], 3)},
+             "series": [{"name": "worked out", "x": xs, "y": [round(d, 4) for d in v]},
+                        {"name": "measured", "kind": "values", "x": measured, "y": [round(d, 4) for d in at],
+                         "low": [round(1.06 * d, 4) for d in at], "high": [round(0.94 * d, 4) for d in at]}],
+             "marks": [{"x": BEAM_L - 8, "label": "load starts to count", "of": "worked out"}]},
+        ],
+    }
+
+
+GLAZING_BANDS = [50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500,
+                 3150, 4000, 5000]
+
+
+def glazing_plot() -> dict:
+    """Sound transmission loss of single panes over frequency, made up from the mass law and a
+    dip at coincidence: each pane's third-octave values with their spread (the lowest to the
+    highest frequency in the band), its curve at every frequency as their detail, three
+    thicknesses as a family, and a lighter pane apart."""
+    fine = [44.7 * 1.01 ** k for k in range(487)]  # 44.7 to 5600 Hz
+
+    def loss(t: float, f: float) -> float:
+        fc = 12000 / t  # Hz: coincidence
+        dip = 9 * math.exp(-(math.log(f / fc) / 0.25) ** 2)
+        return 20 * math.log10(2.5 * t * f) - 47 - dip + 1.5 * math.sin(f / 37)
+
+    series = []
+    for name, family, t in (("4 mm", None, 4), ("6 mm", "pane", 6), ("8 mm", "pane", 8), ("10 mm", "pane", 10)):
+        curve = [round(loss(t, f), 2) for f in fine]
+        bands = [[c for f, c in zip(fine, curve) if b / 2 ** (1 / 6) <= f < b * 2 ** (1 / 6)] for b in GLAZING_BANDS]
+        mean = [round(sum(b) / len(b), 2) for b in bands]
+        series.append({"name": name, "kind": "values", "family": family, "x": GLAZING_BANDS, "y": mean,
+                       "low": [min(b) for b in bands], "high": [max(b) for b in bands],
+                       "summary": f"coincidence {12000 / t:.0f} Hz"})
+        series.append({"name": f"{name} every frequency", "detail-of": name, "x": [round(f, 2) for f in fine],
+                       "y": curve})
+    return {
+        "title": "Transmission loss of single panes",
+        "source": "tests/geometry/make.py", "regenerate": "python3 tests/geometry/make.py plots",
+        "notes": "Made up from the mass law, as test data.",
+        "x": {"label": "frequency", "unit": "Hz", "scale": "log", "range": [44.7, 5600], "ticks": GLAZING_BANDS},
+        "y": {"label": "transmission loss", "unit": "dB", "min": 25},
+        "series": series,
+        "marks": [{"x": 1500, "label": "coincidence of 8 mm", "of": "8 mm"}, {"y": 40, "label": "the wall's"}],
+        "hidden": ["4 mm every frequency", "6 mm every frequency", "10 mm every frequency"],
+    }
+
+
 SNAP, SNAP_DEPTH = 0.35, 3.0  # the detail: the clip this much smaller, this far in
 
 
@@ -631,6 +695,11 @@ if __name__ == "__main__":
             (HERE / name).write_text(text)
         (HERE / "beam.tp.json").write_text(json.dumps(beam_meta(), indent=2) + "\n")
         print("beam.tp.json")
+    if not only or "plots" in only:
+        from tracepaper.views import save_plot
+        for name, plot in (("beam", beam_plot()), ("glazing", glazing_plot())):
+            save_plot(HERE / "plots" / f"{name}.plot.json", plot)
+            print(f"plots/{name}.plot.json")
     if not only or "clip" in only:
         save(clip_at(DEPTHS[0]), "clip.step")
         for depth in DEPTHS:
