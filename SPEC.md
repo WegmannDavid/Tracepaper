@@ -74,7 +74,7 @@ Next to `<name>.step`, `<name>.tp.json` MAY say what the STEP file can't. Every 
 | `annotations` | A 2D scene's annotations (§2.6), in its plane's coordinates. |
 | `notes` | Text for the person: a key to the letters in the dimensions, what changed since the last version. One text with line breaks, or a list of lines. Every drawing of the scene shows it, under the drawing. |
 | `views` | Named views (§2.4), each with its own `annotations` and `notes`. |
-| `sliders`, `define`, `moves` | The scene's moving parts: sliders the person moves, and formulas of them that turn and slide nodes (§2.13). |
+| `sliders`, `define`, `moves` | The scene's moving parts: sliders the person moves, and formulas of them that turn and slide nodes, or bend them along a path (§2.13). |
 | `axes`, `quantities`, `frames` | The scene's frames (§2.10), for parts that change shape. |
 | `fields` | Fields on the scene (§2.11). |
 
@@ -318,7 +318,7 @@ A **mark** is a line across a panel at `x`, or along it at `y`, with a `label`, 
 
 ### 2.13 Moving parts
 
-A scene's parts MAY move: the `.tp.json` gives **sliders**, which the person moves, and **moves**, which turn and slide nodes of the tree by **formulas** of the sliders. The STEP file has the parts at rest, where every move is 0. The viewer works the formulas out as the slider moves and places the parts; it never checks the result. Parts go where the formulas put them, through each other or apart: making the motion right, such as working out a linkage, is the AI's.
+A scene's parts MAY move: the `.tp.json` gives **sliders**, which the person moves, and **moves**, which turn and slide nodes of the tree, or bend them along a path, by **formulas** of the sliders. The STEP file has the parts at rest, where every move is 0. The viewer works the formulas out as the slider moves and places the parts; it never checks the result. Parts go where the formulas put them, through each other or apart: making the motion right, such as working out a linkage, is the AI's.
 
 ```json
 {
@@ -337,11 +337,29 @@ A scene's parts MAY move: the `.tp.json` gives **sliders**, which the person mov
 |---|---|
 | `sliders` | Each with a `name` to use in formulas (letters, digits and `_`, not starting with a digit), its `range`, `[lowest, highest]`, a `unit` to show, and `start`, where it starts: 0 if that is in its range, else its lowest. A slider MAY be part of a track (below): `on`, `draw` and `closed`. |
 | `define` | Names for formulas, `{name: formula}`, each of the sliders and the names before it: for a value several moves use. |
-| `moves` | In order. Each moves `node`, a path or a plain name as in `hidden` (§2.3), with every node inside it. A `turn` is by `by` degrees about `axis` through the point `through` ([0, 0, 0] if left out), counter-clockwise looking against the axis; a `slide` is by `by` mm along `along`. Axes and points are where they are at rest, in the STEP file's coordinates. |
+| `moves` | In order. Each moves `node`, a path or a plain name as in `hidden` (§2.3), with every node inside it. A `turn` is by `by` degrees about `axis` through the point `through` ([0, 0, 0] if left out), counter-clockwise looking against the axis; a `slide` is by `by` mm along `along`. Axes and points are where they are at rest, in the STEP file's coordinates. A `follow` bends the node's parts along a `path` and moves them `by` mm along it (below). |
 
-- **Nested moves.** A node inside a moved one moves with it: its own moves come first, then those of the nodes around it. So a handle turning on a sash is given about its spindle at rest, and goes along as the sash opens. A node with several moves makes them one after another.
+- **Nested moves.** A node inside a moved one moves with it: its own moves come first, then those of the nodes around it. So a handle turning on a sash is given about its spindle at rest, and goes along as the sash opens. A node with several moves makes them one after another. A part bent along a path is bent first, as it rests, before any turn or slide.
 - **Formulas** are numbers, the sliders' and definitions' names, `+ - * /`, `^` (power, from the right), parentheses, `pi`, and the functions `sin cos tan asin acos atan atan2(y, x) sqrt abs min max clamp(x, lo, hi) floor ceil round exp ln`. Angles are degrees, in and out: `asin(0.5)` is 30. `round` rounds halves up. A formula MAY be just a number. A move whose formula has no value at a position (`sqrt` of a negative number, a division by 0) is left out there.
 - **Frames and moves** go together: the moves move the parts of whichever frame is shown.
+
+**Parts that follow a path.** A flexible part that slides round a corner, such as a steel band or a cable in its guide, is one part bent along a path, not a chain of rigid pieces:
+
+```json
+{"node": "Sash / band", "follow": {"path": [[0, 0, 0], [100, 0, 0], [100, 0, 60]], "round": 10, "by": "rod"}}
+```
+
+| Key | Meaning |
+|---|---|
+| `path` | Two or more points, `[[x, y, z], ...]`, at rest, all in one plane: the path is the straight lines through them, with every corner rounded by an arc. Before its first point and past its last it runs on straight. |
+| `round` | The radius of the corners' arcs, in mm, the same for all: required above 0 for a path with corners. Each line must be long enough for the arcs at its ends. |
+| `by` | A formula, as a slide's: how far the part has moved along the path, in mm of the path's length. |
+
+- **The STEP file has the part straight**, lying along the path's first line, as if the whole path were pulled straight in that line's direction: what is to be a length *s* along the path, measured from its first point, lies at first point + *s* · (the first line's direction), also beyond the first line's end, and before its start for negative *s*. A part that at `by` = 0 lies round a corner is still given straight; the viewer bends it at every position, 0 too.
+- **Where a point goes.** Let P₀ be the path's first point, **t₀** the first line's direction, **b** the unit normal of the path's plane and **n₀** = **b** × **t₀**. A point X of the part at rest has *s* = (X − P₀) · **t₀**, *n* = (X − P₀) · **n₀** and *h* = (X − P₀) · **b**. With C(*u*) the path's point at length *u* from its first point and **t**(*u*) its direction there, the point goes to C(*s* + `by`) + *n* · (**b** × **t**(*s* + `by`)) + *h* · **b**. So the part keeps its length along the path's line itself, and its cross-sections stay as they are, square to the path. The result is the same for either sign of **b**; for a straight path it is a slide.
+- **With other moves.** The bend comes first, with path and part as they rest; the node's own turns and slides, and those of the nodes around it, then move the bent part. So a band in a sash is given in the sash at rest, and turns and tilts with it. A node follows one path, its own or that of a node around it; every part inside a following node is bent along that path.
+- **How exact.** OpenCascade can't bend a solid. In a drawing a bent part is made of flat faces: what lies on the path's straight lines keeps its flat faces whole, an arc of the path shows as straight pieces within 0.005 mm of the true curve, and the part's own curved faces (a hole) as flat pieces too. A drawing has no true arcs of it to pick or dimension; every other part stays exact. A projection leaves out the edges between the pieces.
+- The viewer doesn't check that the part fits its path: one wider than `round` on the inside of a corner folds through itself there.
 
 **Tracks.** Sliders can form a track: one control whose knob runs along lines, each a slider's, and passes from one line to another only where they join. That is how a mechanism's positions hang together. A tilt-and-turn window's sash swings open only with its handle sideways and tilts only with it up, and the handle turns only while the sash is shut:
 
@@ -364,8 +382,8 @@ Lines, trees of branches and loops cover what a mechanism's positions need; the 
 The viewer (informative):
 
 - shows a slider for each in the panel of every view of the scene, or a track, drawn as its lines and the knob on them, which the person drags along them; each with the value to type in, which on a track puts the knob there, through the joints on the way. Double-clicking one puts it, or a track's knob, back where it starts. All the open windows of a scene share them: moving one in the 3D view moves the parts in its drawings too, and a window opening takes the positions of one already open;
-- moves the parts in the 3D view live, as the slider moves;
-- in a section, cuts the moving parts live from the 3D view's triangles, to within their 0.05 mm, in place of their exact cut, and moves a 2D scene's parts as they are; a projection's moving parts fade. Once the sliders rest (let go, or still for a moment), the exact drawing at their positions replaces it. Annotations stay where the view gives them;
+- moves the parts in the 3D view live, as the slider moves, and bends those that follow a path, to within 0.02 mm;
+- in a section, cuts the moving parts live from the 3D view's triangles, to within their 0.05 mm, in place of their exact cut, and moves a 2D scene's parts as they are; a projection's moving parts fade, and a 2D scene's that follow a path. Once the sliders rest (let go, or still for a moment), the exact drawing at their positions replaces it. Annotations stay where the view gives them;
 - writes the sliders' positions into a sketch file's `tp:view` as `pose`, such as `opening=30 handle=0`, and opens a sketch with the sliders where they were.
 
 `tracepaper render scene.step#view --pose "opening=30 handle=90"` draws a view with the sliders there (the others where they start), and says what is wrong with them.

@@ -82,7 +82,7 @@ export function cutPath(part, m, { origin, normal, xdir }) {
     if (above[0] === above[1] && above[1] === above[2]) continue;
     const ends = [];
     for (let e = 0; e < 3; e++) if (above[e] !== above[(e + 1) % 3]) ends.push(crossing(corners[e], corners[(e + 1) % 3]));
-    pieces.push(ends);
+    if (ends[0][0] !== ends[1][0] || ends[0][1] !== ends[1][1]) pieces.push(ends); // not where only a corner touches the plane
   }
   return chain(pieces);
 }

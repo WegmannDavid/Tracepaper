@@ -6,6 +6,7 @@ import { INK_COLORS, Ink, PenInput, coalesced, pxPerUnit, swatch, toLocal } from
 import { FieldView } from './fieldview.js';
 import { FramePanel } from './frames.js';
 import { cutPath, loadParts } from './livecut.js';
+import { bendable, bent } from './bend.js';
 import { Measure } from './measure.js';
 import { Motion } from './motion.js';
 import { plotOf, readout as plotReadout } from './plot.js';
@@ -318,13 +319,15 @@ async function liveDraw() {
   if (label === state.sheetPose) return;
   const view = root.getElementsByTagNameNS(A.TP_NS, 'view')[0];
   if (!view) return;
-  const kind = view.getAttribute('kind'), own = sliders.motion.own(sliders.values);
+  const kind = view.getAttribute('kind'), own = sliders.motion.own(sliders.values), along = sliders.motion.along(sliders.values);
   const groups = new Map(allNodes(root).map((g) => [pathOf(g, root), g]));
   const drawing = (g) => [...g.children].filter((c) => !isNode(c) && !c.classList.contains('tpv-live')); // its own
   if (kind === '2D') { // in the plane: moved as they are, each node by its own moves, inside those around it
     const { origin: o, normal, xdir: x } = planeOf(view);
     const y = [normal[1] * x[2] - normal[2] * x[1], normal[2] * x[0] - normal[0] * x[2], normal[0] * x[1] - normal[1] * x[0]];
     const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    // What is bent along a path can't be moved as it is: it fades until the exact drawing comes.
+    for (const [key, g] of groups) if (sliders.motion.following(key)) g.classList.add('tpv-stale');
     for (const [key, m] of own) {
       const g = groups.get(key);
       if (!g) continue;
@@ -349,7 +352,7 @@ async function liveDraw() {
     if (!sliders.motion.moved(key)) continue;
     const g = groups.get(key);
     if (g) for (const c of drawing(g)) c.classList.add('tpv-live-off');
-    const d = cutPath(part, Motion.world(own, key), plane);
+    const d = cutPath(shaped(part, key, along), Motion.world(own, key), plane);
     if (!d || (!g && state.layerVis.get(key) === false)) continue;
     if (!g && !layer) layer = liveLayer(root);
     const cut = document.createElementNS(SVG_NS, 'g');
@@ -364,6 +367,15 @@ async function liveDraw() {
     }
     (g ?? layer).append(cut);
   }
+}
+
+// A part of the 3D view as it is at the sliders' positions before it moves: bent along the
+// path it follows (bend.js), if any.
+function shaped(part, key, along) {
+  const follow = sliders.motion.following(key), by = follow ? along.get(follow.move) : null;
+  if (by === null || by === undefined) return part;
+  if (part.bend?.path !== follow.path) part.bend = bendable(part, follow.path);
+  return bent(part.bend, by);
 }
 
 // Where live sections of parts the exact drawing has no group for go: a layer of the

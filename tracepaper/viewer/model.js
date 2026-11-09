@@ -16,6 +16,7 @@ import { ScreenFeed, Tablet } from './pen.js';
 import { renderBlank } from './screen.js';
 import { SVG_NS, growViewBox, inkBounds, inkLayerOf, parseSvg } from './sheetdoc.js';
 import { SliderPanel } from './sliders.js';
+import { split, splitSegments, withMade } from './bend.js';
 import { Slices } from './slices.js';
 import { flatten, hiddenAndShown, renderTree } from './tree.js';
 
@@ -483,8 +484,70 @@ async function loadMotion(mtime) {
   sliders.set(info);
 }
 
+// The parts that follow a path (bend.js): their triangles and edges cut across all along,
+// once, and their points kept as they rest, to be placed anew at every pose. The slice
+// planes' meshes share the geometry, and go along.
+function prepareBends() {
+  state.bends = [];
+  if (!sliders.on) return;
+  for (const node of flatten(state.tree)) {
+    const own = node.obj.userData.own, follow = own && sliders.motion.following(node.key);
+    if (!follow) continue;
+    const { path } = follow;
+    for (const geometry of new Set(own.children.filter((o) => o.isMesh && !o.userData.slice).map((o) => o.geometry))) {
+      const rest = {};
+      if (geometry.attributes.start) { // the edges: segments
+        const a = geometry.attributes.start.array, b = geometry.attributes.end.array, segments = [];
+        for (let i = 0; i < a.length; i += 3) segments.push(a[i], a[i + 1], a[i + 2], b[i], b[i + 1], b[i + 2]);
+        const cut = splitSegments(segments, path, path.cuts(segments)), n = cut.length / 6;
+        rest.start = new Float32Array(3 * n);
+        rest.end = new Float32Array(3 * n);
+        for (let i = 0; i < n; i++) {
+          rest.start.set(cut.slice(6 * i, 6 * i + 3), 3 * i);
+          rest.end.set(cut.slice(6 * i + 3, 6 * i + 6), 3 * i);
+        }
+        geometry.instanceCount = n;
+      } else if (geometry.attributes.position) {
+        const positions = geometry.attributes.position.array, count = positions.length / 3;
+        const { indices, made } = split(positions, geometry.index?.array ?? [...Array(count).keys()], path, path.cuts(positions));
+        for (const [name, attribute] of Object.entries(geometry.attributes)) {
+          const values = withMade(attribute.array, attribute.itemSize, made, Float32Array);
+          if (name === 'position' || name === 'normal') rest[name] = values;
+          else geometry.setAttribute(name, new THREE.BufferAttribute(values, attribute.itemSize));
+        }
+        geometry.setIndex(indices);
+      }
+      for (const [name, values] of Object.entries(rest)) {
+        const Kind = name === 'start' || name === 'end' ? THREE.InstancedBufferAttribute : THREE.BufferAttribute;
+        geometry.setAttribute(name, new Kind(values.slice(), 3));
+      }
+      state.bends.push({ geometry, rest, move: follow.move, path });
+    }
+    for (const o of own.children) o.frustumCulled = false; // its shape changes
+  }
+}
+
+function applyBends() {
+  const along = sliders.on ? sliders.motion.along(sliders.values) : new Map();
+  for (const { geometry, rest, move, path } of state.bends ?? []) {
+    const by = along.get(move) ?? null;
+    for (const [name, values] of Object.entries(rest)) {
+      if (name === 'normal') continue;
+      const attribute = geometry.attributes[name], normals = name === 'position' ? rest.normal : null;
+      if (by === null) { // no value there: as it rests
+        attribute.array.set(values);
+        if (normals) geometry.attributes.normal.array.set(normals);
+      } else path.placeAll(values, by, attribute.array, normals, normals && geometry.attributes.normal.array);
+      attribute.needsUpdate = true;
+      if (normals) geometry.attributes.normal.needsUpdate = true;
+    }
+    geometry.boundingBox = geometry.boundingSphere = null;
+  }
+}
+
 function applyPose() {
   if (!isScene || !state.model) return;
+  applyBends();
   const own = sliders.on ? sliders.motion.own(sliders.values) : new Map();
   for (const node of flatten(state.tree)) {
     const m = own.get(node.key);
@@ -524,6 +587,7 @@ async function load(mtime, { quiet = false } = {}) {
   state.tree = buildTree(gltf);
   applyTree();
   await loadMotion(mtime);
+  prepareBends();
   applyPose();
   setTransparent(state.transparent);
   state.mtime = mtime;

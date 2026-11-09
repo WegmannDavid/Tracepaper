@@ -92,12 +92,15 @@ SNAP = 5  # degrees: outlines within this of the sheet's x and y are hatched at 
 class Node:
     """A named node of a scene. key is its path of names ("Screws / screw 1"); a part has a
     shape, in the scene's coordinates, and a group has children. color is the colour the
-    file gives a part, (r, g, b, opacity) from 0 to 1 in sRGB, as CSS has them, or None."""
+    file gives a part, (r, g, b, opacity) from 0 to 1 in sRGB, as CSS has them, or None.
+    soft: for a part bent along a path, the edges between its flat faces that aren't its
+    own (bend.soft), which a projection leaves out."""
     name: str
     key: str
     shape: Optional[TopoDS_Shape] = None
     children: list = field(default_factory=list)
     color: Optional[tuple] = None
+    soft: Optional[list] = None
 
 
 @dataclass
@@ -204,10 +207,19 @@ def posed(scene: Scene, moves: list) -> Scene:
     """The scene with its nodes moved (SPEC.md §2.13): moves [(keys, kind, axis, through,
     amount)] in order, each turning the nodes keys names about axis through a point by amount
     degrees ("turn") or sliding them along axis by amount mm ("slide"), all given in the
-    scene's coordinates at rest. A node inside a moved one moves with it. The scene itself is
-    left as it is: the moved shapes share its geometry, placed elsewhere."""
-    own = {}
+    scene's coordinates at rest; or, with a motion.Path for axis, bending their parts along
+    it, moved amount mm along it ("follow"): that first, before any turn or slide. A node
+    inside a moved one moves with it. The scene itself is left as it is: the moved shapes
+    share its geometry, placed elsewhere, but for the bent ones, which are made anew.
+    Raises ValueError for a node following two paths."""
+    own, follow = {}, {}
     for keys, kind, axis, through, amount in moves:
+        if kind == "follow":
+            for key in keys:
+                if key in follow:
+                    raise ValueError(f"{key} follows two paths; a node follows one")
+                follow[key] = (axis, amount)
+            continue
         t = gp_Trsf()
         if kind == "turn":
             t.SetRotation(gp_Ax1(gp_Pnt(*through), gp_Dir(*axis)), math.radians(amount))
@@ -216,17 +228,35 @@ def posed(scene: Scene, moves: list) -> Scene:
         for key in keys:
             own[key] = t.Multiplied(own[key]) if key in own else t  # after the moves before it
 
-    def walk(nodes, above: Optional[gp_Trsf]) -> list:
+    def walk(nodes, above: Optional[gp_Trsf], along: Optional[tuple]) -> list:
         out = []
         for n in nodes:
-            at = above
+            at, path = above, along
             if n.key in own:
                 at = own[n.key] if at is None else at.Multiplied(own[n.key])  # its own, then the nodes' around it
-            shape = n.shape.Moved(TopLoc_Location(at)) if at is not None and n.shape is not None else n.shape
-            out.append(Node(n.name, n.key, shape, walk(n.children, at), n.color))
+            if n.key in follow:
+                if path is not None:
+                    raise ValueError(f"{n.key} follows two paths, its own and that of a node around it; "
+                                     f"a node follows one")
+                path = follow[n.key]
+            shape, soft = n.shape, n.soft
+            if shape is not None and path is not None:
+                from . import bend
+                shape = bend.bent(shape, *path)
+                soft = bend.soft(shape)
+            if shape is not None and at is not None:
+                shape = shape.Moved(TopLoc_Location(at))
+                soft = soft and [tuple(_moved(v, at, k < 2) for k, v in enumerate(e)) for e in soft]
+            out.append(Node(n.name, n.key, shape, walk(n.children, at, path), n.color, soft))
         return out
 
-    return Scene(walk(scene.roots, None))
+    return Scene(walk(scene.roots, None, None))
+
+
+def _moved(v: tuple, t: gp_Trsf, point: bool) -> tuple:
+    """A point, or a direction, moved by t."""
+    moved = gp_Pnt(*v).Transformed(t) if point else gp_Vec(*v).Transformed(t)
+    return (moved.X(), moved.Y(), moved.Z())
 
 
 def has_faces(shape: TopoDS_Shape) -> bool:
@@ -630,9 +660,52 @@ def project(scene: Scene, pl: Plane) -> list:
     out = []
     for part in parts:
         visible, smooth, hidden = edges.get(part.key, ([], [], []))
+        if part.soft:
+            visible, hidden = (_own_edges(found, part.soft, pl) for found in (visible, hidden))
         points = [(x, y) for x, y, _ in _points(part.shape, pl)]
         if visible or smooth or hidden or points:
             out.append(Projection(part, visible, smooth, hidden, points))
+    return out
+
+
+def _own_edges(edges: list, soft: list, pl: Plane) -> list:
+    """edges, of a bent part seen along pl's normal, without those that lie on one of soft
+    (bend.soft), the edges between the flat pieces of its curved faces: but for where such a
+    face turns away from view, its outline there."""
+    def flat(p) -> tuple:
+        d = (p[0] - pl.origin[0], p[1] - pl.origin[1], p[2] - pl.origin[2])
+        return (sum(a * b for a, b in zip(d, pl.xdir)), sum(a * b for a, b in zip(d, pl.ydir)))
+
+    def facing(n) -> float:
+        return sum(a * b for a, b in zip(n, pl.normal))
+
+    inner = [(flat(p), flat(q)) for p, q, n1, n2 in soft if facing(n1) * facing(n2) > PLANAR]
+    if not inner:
+        return edges
+    # By where they are, in squares the size of a usual one.
+    size = max(JOIN, sum(math.dist(p, q) for p, q in inner) / len(inner))
+    cells = {}
+    for p, q in inner:
+        for i in range(math.floor(min(p[0], q[0]) / size) - 1, math.floor(max(p[0], q[0]) / size) + 2):
+            for j in range(math.floor(min(p[1], q[1]) / size) - 1, math.floor(max(p[1], q[1]) / size) + 2):
+                cells.setdefault((i, j), []).append((p, q))
+
+    def on(point: tuple, p: tuple, q: tuple) -> bool:
+        d, w = (q[0] - p[0], q[1] - p[1]), (point[0] - p[0], point[1] - p[1])
+        length = math.hypot(*d)
+        if length <= JOIN:
+            return math.hypot(*w) <= JOIN
+        t = (w[0] * d[0] + w[1] * d[1]) / length
+        return -JOIN <= t <= length + JOIN and abs(w[0] * d[1] - w[1] * d[0]) / length <= JOIN
+
+    out = []
+    for edge in edges:
+        c = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
+        u0, u1 = c.FirstParameter(), c.LastParameter()
+        a, m, b = ((v.X(), v.Y()) for v in (c.Value(u0), c.Value((u0 + u1) / 2), c.Value(u1)))
+        near = cells.get((math.floor(m[0] / size), math.floor(m[1] / size)), [])
+        if not any(on(a, p, q) and on(m, p, q) and on(b, p, q) for p, q in near):
+            out.append(edge)
     return out
 
 

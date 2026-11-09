@@ -44,7 +44,29 @@ class FormulaTest(unittest.TestCase):
         self.assertEqual(M.parse(42), ("n", 42.0))
 
 
+class PathTest(unittest.TestCase):
+    def test_the_cases_both_sides_share(self):
+        cases = json.loads((HERE / "paths.json").read_text())
+        for points, round_, by, point, want in cases["places"]:
+            with self.subTest(points=points, by=by, point=point):
+                got = M.Path(points, round_).place(point, by)
+                for a, b in zip(got, want):
+                    self.assertAlmostEqual(a, b, delta=1e-8)
+        for points, round_, want in cases["errors"]:
+            with self.subTest(want), self.assertRaisesRegex(ValueError, "^" + re.escape(want)):
+                M.Path(points, round_)
+
+    def test_lines_and_arcs(self):
+        path = M.Path([[0, 0, 0], [100, 0, 0], [100, 0, 60]], 10)
+        self.assertEqual([p[0] for p in path.pieces], ["line", "arc", "line"])
+        self.assertAlmostEqual(path.length, 90 + 5 * math.pi + 50)
+        self.assertEqual(path.arcs[0][0], 90)
+        (x, y, z), t = path.frame(90 + 5 * math.pi)  # where the arc ends: on the second line, along it
+        self.assertEqual([round(v, 9) for v in (x, y, z, *t)], [100, 0, 10, 0, 0, 1])
+
+
 SASH = json.loads((GEOMETRY / "sash.tp.json").read_text())
+BAND = json.loads((GEOMETRY / "band.tp.json").read_text())
 
 
 class MotionTest(unittest.TestCase):
@@ -66,6 +88,14 @@ class MotionTest(unittest.TestCase):
                          "moves": [{"node": "x", "slide": {"along": [1, 0, 0], "by": "sqrt(a)"}}]})
         self.assertEqual(broken.amounts({"a": -1}), [None])
         self.assertEqual(broken.sliders[0].start, 0)  # 0 when in range, else the lowest
+
+    def test_a_part_following_a_path(self):
+        motion = M.read(BAND)
+        move = motion.moves[0]
+        self.assertEqual((move.kind, move.node, move.path.round, len(move.path.points)), ("follow", "Carrier / band", 10, 3))
+        self.assertEqual(motion.amounts({"rod": 12.5}), [12.5, 0])
+        self.assertEqual(motion.to_json()["moves"][0], {"node": "Carrier / band", "follow": {
+            "path": [[0, 0, 0], [100, 0, 0], [100, 0, 60]], "round": 10, "by": "rod"}})
 
     def test_what_is_wrong(self):
         def wrong(meta, message):
@@ -98,6 +128,14 @@ class MotionTest(unittest.TestCase):
         wrong({"sliders": [{"name": "a", "range": [0, 1], "draw": [[0, 0]]}]}, r"draw must be two points or more")
         wrong({"sliders": [{"name": "a", "range": [0, 1], "draw": [[1, 1], [1, 1]]}]}, r"must not all be the same")
         wrong({"sliders": [{"name": "a", "range": [0, 1], "closed": "yes"}]}, r"closed must be true or false")
+        follow = {"path": [[0, 0, 0], [10, 0, 0], [10, 0, 10]], "round": 2, "by": "a"}
+        wrong({"sliders": [slider], "moves": [{"node": "x", "follow": {**follow, "round": 0}}]},
+              r"moves\[0\]\.follow\.path: a path with corners needs \"round\"")
+        wrong({"sliders": [slider], "moves": [{"node": "x", "follow": {**follow, "path": [[0, 0, 0]]}}]},
+              r"moves\[0\]\.follow\.path must be two points or more")
+        wrong({"sliders": [slider], "moves": [{"node": "x", "follow": {**follow, "round": -1}}]}, r"round must be the radius")
+        wrong({"sliders": [slider], "moves": [{"node": "x", "follow": follow}, {"node": "x", "follow": follow}]},
+              r"moves\[1\]\.follow: x follows a path already")
         with self.assertRaisesRegex(ValueError, "no slider 'opning'; the sliders are handle, tilt, opening"):
             M.read(SASH).pose("opning=3")
         with self.assertRaisesRegex(ValueError, "handle: 'x' is not a number"):
@@ -131,13 +169,101 @@ class PosedTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_OCP, "needs OCP")
+class BentTest(unittest.TestCase):
+    """A part bent along a path: the band of band.step, 70 x 6 x 1 mm from x = 20, round a corner of
+    radius 10 that starts at x = 90."""
+
+    def setUp(self):
+        from tracepaper import scene as S
+        self.S = S
+        self.scene = S.read_step(GEOMETRY / "band.step")
+        self.motion = M.read(BAND)
+
+    def pose(self, given):
+        S = self.S
+        keys = [S.find_nodes(self.scene, [m.node]) for m in self.motion.moves]
+        return S.posed(self.scene, [(k, m.kind, m.path or m.axis, m.through, a)
+                                    for m, k, a in zip(self.motion.moves, keys, self.motion.amounts(given))])
+
+    def band(self, scene):
+        return next(n for n in scene.nodes() if n.key == "Carrier / band")
+
+    def volume(self, shape) -> float:
+        from OCP.BRepGProp import BRepGProp
+        from OCP.GProp import GProp_GProps
+        props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(shape, props)
+        return props.Mass()
+
+    def test_bent_round_the_corner(self):
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        S = self.S
+        rest = self.band(self.scene)
+        for rod, box in ((0, [20, -3, -0.5, 90, 3, 0.5]),  # all of it on the first line still
+                         (40, [60, -3, -0.5, 100.5, 3, 10 + 40 - 5 * math.pi])):  # round the corner and up
+            with self.subTest(rod=rod):
+                bent = self.band(self.pose({"rod": rod}))
+                self.assertTrue(BRepCheck_Analyzer(bent.shape).IsValid())
+                for got, want in zip(S.Scene([bent]).box(), box):
+                    self.assertAlmostEqual(got, want, delta=0.01)
+                # As much of it as there was, to within the flat pieces of its bend and its hole.
+                self.assertAlmostEqual(self.volume(bent.shape), self.volume(rest.shape), delta=0.1)
+        self.assertIsNone(rest.soft)
+        self.assertEqual(S.Scene([rest]).box()[3], S.Scene([self.band(self.scene)]).box()[3])  # the scene as it was
+        # With the carrier it is on, turned a quarter about z: its first line along y now.
+        swung = S.Scene([self.band(self.pose({"rod": 40, "swing": 90}))]).box()
+        for got, want in zip(swung, [-3, 60, -0.5, 3, 100.5, 10 + 40 - 5 * math.pi]):
+            self.assertAlmostEqual(got, want, delta=0.01)
+
+    def test_drawn_without_the_edges_of_its_flat_pieces(self):
+        S = self.S
+        posed = self.pose({"rod": 40})
+        band = self.band(posed)
+        self.assertGreater(len(band.soft), 20)  # between the pieces of the bend, and of the hole
+        # From above: its outline, the hole, and the line where it turns out of sight, not a line for each piece.
+        top = next(p for p in S.project(posed, S.plane((0, 0, 0), (0, 0, 1), (1, 0, 0))) if p.node.key == band.key)
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.TopoDS import TopoDS
+
+        def across(edges) -> int:  # lines across the band where it bends, x from 90 to 100
+            found = 0
+            for e in edges:
+                c = BRepAdaptor_Curve(TopoDS.Edge_s(e))
+                p, q = c.Value(c.FirstParameter()), c.Value(c.LastParameter())
+                found += 90.5 < p.X() < 99 and 90.5 < q.X() < 99 and abs(p.Y() - q.Y()) > 1
+            return found
+
+        self.assertEqual(across(top.visible), 0)
+        band.soft = None
+        unfiltered = next(p for p in S.project(posed, S.plane((0, 0, 0), (0, 0, 1), (1, 0, 0))) if p.node.key == band.key)
+        self.assertGreater(across(unfiltered.visible), 10)
+        # Cut along its middle: 1 mm thick all the way round, to either side of its hole, 3 across.
+        cut = next(c for c in S.cut(posed, S.plane((0, 0, 0), (0, -1, 0), (1, 0, 0))) if c.node.key == band.key)
+        self.assertEqual(len(cut.regions), 2)
+        from OCP.BRepGProp import BRepGProp
+        from OCP.GProp import GProp_GProps
+        area = 0
+        for region in cut.regions:
+            props = GProp_GProps()
+            BRepGProp.SurfaceProperties_s(region, props)
+            area += props.Mass()
+        self.assertAlmostEqual(area, 67, delta=0.05)
+
+    def test_a_node_following_two_paths(self):
+        S = self.S
+        path = self.motion.moves[0].path
+        with self.assertRaisesRegex(ValueError, "Carrier / band follows two paths"):
+            S.posed(self.scene, [({"Carrier"}, "follow", path, None, 0), ({"Carrier / band"}, "follow", path, None, 0)])
+
+
+@unittest.skipUnless(HAVE_OCP, "needs OCP")
 class ServerTest(unittest.TestCase):
     def setUp(self):
         from tracepaper.server import make_server
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
-        for name in ("sash.step", "sash.tp.json"):
+        for name in ("sash.step", "sash.tp.json", "band.step", "band.tp.json"):
             (self.dir / name).write_bytes((GEOMETRY / name).read_bytes())
         self.server = make_server(self.dir, 0)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -175,6 +301,20 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((status, json.loads(data)), (422, {"error": "no slider 'opning'; the sliders are handle, tilt, opening"}))
         # The 3D view comes at rest: the page moves the parts itself.
         self.assertEqual(self.get("/api/file/sash.step?pose=" + quote("opening=90"))[1][:4], b"glTF")
+
+    def test_a_bent_part_drawn(self):
+        status, data = self.get("/api/motion/band.step")
+        self.assertEqual(json.loads(data)["moves"][0]["keys"], ["Carrier / band"])
+
+        def band(query=""):
+            status, data = self.get(f"/api/file/band.step%23side{query}")
+            self.assertEqual(status, 200, data)
+            root = ET.fromstring(data)
+            return next(e.get("d") for e in root.iter(f"{SVG}path") if "band" in (e.get("id") or "") and "-cut-" in e.get("id"))
+
+        rest, moved = band(), band("?pose=" + quote("rod=40"))
+        self.assertLess(rest.count("L"), 12)  # straight still: as few lines as it has
+        self.assertGreater(moved.count("L"), 30)  # round the corner: in short pieces
 
     def test_a_move_naming_no_node(self):
         meta = {**SASH, "moves": [{"node": "Sahs", "turn": {"axis": [0, 0, 1], "by": "opening"}}]}

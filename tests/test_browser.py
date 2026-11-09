@@ -1368,6 +1368,90 @@ class ViewerInFirefox(unittest.TestCase):
             shutil.rmtree(scenes)
 
     @unittest.skipUnless(HAVE_OCP, "needs OCP")
+    def test_a_part_following_a_path(self):
+        bending = self.dir / "bending"
+        bending.mkdir()
+        for name in ("band.step", "band.tp.json"):
+            shutil.copy(GEOMETRY / name, bending / name)
+        base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        try:
+            # In the 3D view the band bends round the corner as its slider moves, faces and edges, and
+            # goes along with the carrier it is on.
+            self.m.call("WebDriver:Navigate", {"url": f"{base}/view/{quote('bending/band.step')}"})
+            cases = (Path(__file__).resolve().parent / "paths.json").read_text()
+            got = self.m.run(f"""
+                until(() => window.tracepaper3d?.state.model && window.tracepaper3d.sliders.on && window.tracepaper3d, (t) => {{
+                  const own = t.flatten(t.state.tree).find((n) => n.key === 'Carrier / band').obj.userData.own;
+                  const box = (attribute) => {{  // of its faces, or of its edges' starts, in CAD's coordinates
+                    t.state.model.updateMatrixWorld(true);
+                    const b = new t.THREE.Box3();
+                    for (const o of own.children) {{
+                      const a = o.geometry?.attributes[attribute];
+                      if (!a || o.userData.slice || (attribute === 'position' && (o.geometry.attributes.start || !o.layers.isEnabled(0)))) continue;
+                      b.union(new t.THREE.Box3().setFromBufferAttribute(a).applyMatrix4(o.matrixWorld));
+                    }}
+                    return [b.min.x, -b.max.z, b.min.y, b.max.x, -b.min.z, b.max.y].map((v) => Math.round(v * 100) / 100);
+                  }};
+                  const out = {{ rest: box('position') }};
+                  t.sliders.setValues({{ rod: 40 }});
+                  out.bent = box('position');
+                  out.edges = box('start');
+                  t.sliders.setValues({{ rod: 40, swing: 90 }});
+                  out.swung = box('position');
+                  t.sliders.setValues({{ rod: 0, swing: 0 }});
+                  out.back = box('position');
+                  import('/viewer/bend.js').then((B) => {{
+                    const cases = {cases}, bad = [];
+                    for (const [points, round, by, point, want] of cases.places) {{
+                      const got = new B.Path(points, round).place(point, by);
+                      if (got.some((v, i) => Math.abs(v - want[i]) > 1e-8)) bad.push([points, by, point, got]);
+                    }}
+                    for (const [points, round, want] of cases.errors) {{
+                      try {{ new B.Path(points, round); bad.push([want, 'no error']); }} catch (e) {{ if (!e.message.startsWith(want)) bad.push([want, e.message]); }}
+                    }}
+                    out.bad = bad;
+                    done(out);
+                  }});
+                }});
+            """)
+            up = round(10 + 40 - 5 * math.pi, 2)
+            self.assertEqual(got["rest"], [20, -3, -0.5, 90, 3, 0.5])
+            for name, want in (("bent", [60, -3, -0.5, 100.5, 3, up]), ("edges", [60, -3, -0.5, 100.5, 3, up]),
+                               ("swung", [-3, 60, -0.5, 3, 100.5, up]), ("back", [20, -3, -0.5, 90, 3, 0.5])):
+                for a, b in zip(got[name], want):
+                    self.assertAlmostEqual(a, b, delta=0.02, msg=(name, got[name]))
+            self.assertEqual(got["bad"], [])
+
+            # In its section, the band is cut live, bent, while the slider moves, and exactly once it rests.
+            self.open_viewer("bending/band.step#side")
+            got = self.m.run("""
+                until(() => tp.sliders.on && tp.state.sheetPose === 'rod=0 swing=0', () => {
+                  const band = () => [...tp.state.root.querySelectorAll('g')].find((g) =>
+                    g.getAttributeNS('http://www.inkscape.org/namespaces/inkscape', 'label') === 'band');
+                  tp.sliders.setValues({ rod: 40 }, false);  // dragging
+                  until(() => tp.state.root.querySelector('.tpv-live path'), () => {
+                    const live = band().querySelector('.tpv-live path:last-child'), liveBox = live.getBBox();
+                    const out = { pose: tp.state.sheetPose, closed: (live.getAttribute('d').match(/Z/g) ?? []).length,
+                                  lines: (live.getAttribute('d').match(/M/g) ?? []).length };
+                    until(() => tp.state.sheetPose === 'rod=40 swing=0', () => {
+                      const cuts = [...band().querySelectorAll(':scope > path[id*="-cut-"]')].map((c) => c.getBBox());
+                      const exact = { x: Math.min(...cuts.map((b) => b.x)), y: Math.min(...cuts.map((b) => b.y)) };
+                      exact.width = Math.max(...cuts.map((b) => b.x + b.width)) - exact.x;
+                      exact.height = Math.max(...cuts.map((b) => b.y + b.height)) - exact.y;
+                      out.exact = exact;
+                      out.off = Math.max(...['x', 'y', 'width', 'height'].map((k) => Math.abs(exact[k] - liveBox[k])));
+                      done(out);
+                    });
+                  });
+                });
+            """)
+            self.assertEqual((got["pose"], got["closed"], got["lines"]), ("rod=0 swing=0", 2, 2))  # either side of its hole
+            self.assertLess(got["off"], 0.05)
+            self.assertAlmostEqual(got["exact"]["width"], 40.5, delta=0.01)
+        finally:
+            shutil.rmtree(bending)
+
+    @unittest.skipUnless(HAVE_OCP, "needs OCP")
     def test_sliders(self):
         moving = self.dir / "moving"
         moving.mkdir()

@@ -279,9 +279,9 @@ class Scenes:
                 raise ValueError("the scene has no sliders")
             return sc, None
         given = found.pose(pose) if pose else {}
-        moves = [(keys, m.kind, m.axis, m.through, amount)
+        moves = [(keys, m.kind, m.path or m.axis, m.through, amount)
                  for m, keys, amount in zip(found.moves, self._keys(found, sc), found.amounts(given))
-                 if amount is not None and amount != 0]
+                 if amount is not None and (amount != 0 or m.kind == "follow")]  # at 0 too: on its path
         return (S.posed(sc, moves) if moves else sc), found.label(given)
 
     def scene(self, view: View, frame: Optional[int] = None):

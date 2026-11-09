@@ -1,11 +1,12 @@
-// A scene's motion (SPEC.md §2.13): its sliders, and its nodes turned and slid by formulas of
-// them, worked out here, live, as the person moves a slider. tracepaper/motion.py reads and
+// A scene's motion (SPEC.md §2.13): its sliders, and its nodes turned, slid and bent along a
+// path (bend.js) by formulas of them, worked out here, live, as the person moves a slider. tracepaper/motion.py reads and
 // works out the same language the same way, for the exact drawings: tests/formulas.json
 // holds cases both must pass. Nothing here checks the result: parts go where the formulas
 // put them, through each other or apart.
 //
 // Matrices are 4 × 4, row by row, in CAD coordinates (mm, z up), as three.js's Matrix4.set
 // takes them: [m00, m01, m02, m03, m10, ...].
+import { Path } from './bend.js';
 
 const DEG = Math.PI / 180;
 const TOKEN = /\s*(?:((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][A-Za-z0-9_]*)|(\S))/y;
@@ -193,11 +194,15 @@ export const apply = (m, [x, y, z]) => [0, 1, 2].map((r) => m[4 * r] * x + m[4 *
 
 export class Motion {
   // info: as /api/motion gives it: {sliders: [{name, unit, range, start}], define: [[name,
-  // formula]], moves: [{node, keys, turn: {axis, through, by}} or {node, keys, slide: {along, by}}]}.
+  // formula]], moves: [{node, keys, turn: {axis, through, by}}, {node, keys, slide: {along, by}}
+  // or {node, keys, follow: {path, round, by}}]}.
   constructor(info) {
     this.sliders = info.sliders ?? [];
     this.define = (info.define ?? []).map(([name, text]) => [name, parse(text)]);
-    this.moves = (info.moves ?? []).map((m) => ({ ...m, formula: parse((m.turn ?? m.slide).by) }));
+    this.moves = (info.moves ?? []).map((m) => ({
+      ...m, formula: parse((m.turn ?? m.slide ?? m.follow).by),
+      path: m.follow ? new Path(m.follow.path, m.follow.round ?? 0) : null,
+    }));
     // The nodes that move, with every node inside them: a key, or the start of one ("Sash / ").
     this.keys = [...new Set(this.moves.flatMap((m) => m.keys))];
   }
@@ -219,12 +224,32 @@ export class Motion {
     return this.sliders.map((s) => `${s.name}=${num(values[s.name])}`).join(' ');
   }
 
-  // Each moved node's own move at given, Map key -> matrix: its moves one after another, in
-  // the scene's coordinates at rest. A move whose formula has no value there is left out,
-  // and named in skipped.
+  // The path a node's parts follow, its own or that of a node around it: {path, move (its
+  // number)}, or null.
+  following(key) {
+    const i = this.moves.findIndex((m) => m.path && m.keys.some((k) => key === k || key.startsWith(`${k} / `)));
+    return i < 0 ? null : { path: this.moves[i].path, move: i };
+  }
+
+  // How far along its path each "follow" move is at given, by its number: null where its
+  // formula has no value, and its parts stay as they rest.
+  along(given = {}) {
+    const values = this.values(given), out = new Map();
+    this.moves.forEach((m, i) => {
+      if (!m.path) return;
+      const v = evaluate(m.formula, values);
+      out.set(i, Number.isFinite(v) ? v : null);
+    });
+    return out;
+  }
+
+  // Each moved node's own move at given, Map key -> matrix: its turns and slides one after
+  // another, in the scene's coordinates at rest; a part bent along a path is bent first
+  // (following, along). A move whose formula has no value there is left out, and named in skipped.
   own(given = {}) {
     const values = this.values(given), out = new Map(), skipped = [];
     this.moves.forEach((m, i) => {
+      if (m.path) return;
       const v = evaluate(m.formula, values);
       if (!Number.isFinite(v)) { skipped.push(i); return; }
       const t = m.turn ? turn(m.turn.axis, m.turn.through ?? [0, 0, 0], v) : slide(m.slide.along, v);

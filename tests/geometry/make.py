@@ -37,6 +37,8 @@ something the viewer has to get right when it shows, slices or projects them:
 - corner.step: a window's corner in the colours the CAD gives it, as CadQuery writes
   them: a steel frame, a glass pane that is see-through, two brass screws, and a seal
   left without one.
+- band.step: a steel band in a guide round a corner, on a carrier; band.tp.json slides the band
+  along the guide, bent round the corner (a "follow" move, SPEC.md §2.13), and turns the carrier.
 - sash.step: a tilt-and-turn window: a fixed frame and a sash in it, with a handle on the
   sash and a bolt the handle drives; sash.tp.json moves them on one track of sliders (SPEC.md
   §2.13), drawn as the handle turns: an arc from the handle down (shut) through sideways to
@@ -719,6 +721,34 @@ def sash_meta() -> dict:
     }
 
 
+def band() -> cq.Assembly:
+    """A carrier with a guide along x and up z round a corner of radius 10 about (90, 0, 10), and
+    a band 70 x 6 x 1 mm lying in it straight, from x = 20, with a hole 3 across at x = 30."""
+    guide = cq.Workplane("XY").box(104, 10, 4, centered=False).translate((0, -5, -4.5)).union(
+        cq.Workplane("XY").box(3.5, 10, 64.5, centered=False).translate((100.5, -5, -4.5)))
+    strip = cq.Workplane("XY").box(70, 6, 1, centered=(False, True, True)).translate((20, 0, 0)).cut(
+        cq.Workplane("XY").cylinder(1, 1.5).translate((30, 0, 0)))
+    carrier = cq.Assembly(name="Carrier")
+    carrier.add(guide, name="guide", color=cq.Color(0.85, 0.85, 0.82))
+    carrier.add(strip, name="band", color=cq.Color(0.35, 0.45, 0.6))
+    return cq.Assembly(name="drive").add(carrier)
+
+
+def band_meta() -> dict:
+    return {
+        "title": "Band round a corner",
+        "sliders": [{"name": "rod", "unit": "mm", "range": [0, 40]},
+                    {"name": "swing", "unit": "°", "range": [0, 90]}],
+        "moves": [
+            {"node": "Carrier / band", "follow": {"path": [[0, 0, 0], [100, 0, 0], [100, 0, 60]], "round": 10,
+                                                  "by": "rod"}},
+            {"node": "Carrier", "turn": {"axis": [0, 0, 1], "through": [0, 0, 0], "by": "swing"}},
+        ],
+        "views": [{"name": "side", "title": "section along the band", "origin": [0, 0, 0], "normal": [0, -1, 0],
+                   "xdir": [1, 0, 0]}],
+    }
+
+
 def duct_section(t: float) -> cq.Wire:
     """The duct's section a share t of the way up: a rounded rectangle, 411 x 73 mm with
     1 mm corners at the bottom, growing round and moving aside, until at the top it is a
@@ -760,7 +790,7 @@ if __name__ == "__main__":
     only = set(sys.argv[1:])
     for name, make in [("primitives", primitives), ("bracket", bracket), ("freeform", freeform),
                        ("hinge", hinge), ("profile", profile), ("grid", grid), ("corner", corner), ("beam", beam),
-                       ("duct", duct), ("sash", sash)]:
+                       ("duct", duct), ("sash", sash), ("band", band)]:
         if not only or name in only:
             save(make(), f"{name}.step")
     if not only or "profile" in only:
@@ -781,12 +811,13 @@ if __name__ == "__main__":
             (HERE / name).write_text(text)
         (HERE / "beam.tp.json").write_text(json.dumps(beam_meta(), indent=2) + "\n")
         print("beam.tp.json")
-    if not only or "sash" in only:
-        text = json.dumps(sash_meta(), indent=2, ensure_ascii=False)
-        text = re.sub(r"\[\s*(-?[\d.]+),\s*(-?[\d.]+)(?:,\s*(-?[\d.]+))?\s*\]",  # numbers on one line
-                      lambda m: "[" + ", ".join(g for g in m.groups() if g is not None) + "]", text)
-        (HERE / "sash.tp.json").write_text(text + "\n")
-        print("sash.tp.json")
+    for name, meta in (("sash", sash_meta), ("band", band_meta)):
+        if not only or name in only:
+            text = json.dumps(meta(), indent=2, ensure_ascii=False)
+            text = re.sub(r"\[\s*(-?[\d.]+),\s*(-?[\d.]+)(?:,\s*(-?[\d.]+))?\s*\]",  # numbers on one line
+                          lambda m: "[" + ", ".join(g for g in m.groups() if g is not None) + "]", text)
+            (HERE / f"{name}.tp.json").write_text(text + "\n")
+            print(f"{name}.tp.json")
     if not only or "plots" in only:
         from tracepaper.views import save_plot
         for name, plot in (("beam", beam_plot()), ("glazing", glazing_plot())):

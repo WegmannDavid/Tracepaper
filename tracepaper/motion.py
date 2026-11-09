@@ -1,5 +1,5 @@
-"""Motion (SPEC.md §2.13): sliders the person moves, and the scene's nodes turned and slid by
-formulas of them. The browser works them out live (viewer/motion.js); this module the same,
+"""Motion (SPEC.md §2.13): sliders the person moves, and the scene's nodes turned, slid and
+bent along a path by formulas of them. The browser works them out live (viewer/motion.js); this module the same,
 for the exact drawings at a pose. Tracepaper never checks the result: parts may pass through
 each other, or come apart, as the formulas put them. Standard library only.
 
@@ -246,16 +246,142 @@ class Slider:
     closed: bool = False
 
 
+def _sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _add(a, b, k=1.0):
+    return (a[0] + k * b[0], a[1] + k * b[1], a[2] + k * b[2])
+
+
+STRAIGHT = 1e-9  # radians: points of a path turning less than this are on one line
+
+
+class Path:
+    """A path a part follows (SPEC.md §2.13): straight lines through points, each corner
+    rounded by an arc of radius round, all in one plane. Lengths along it count from its
+    first point; before that and past its end it runs on straight.
+
+    The frame at a length u is the point c there, the direction t and n = b × t, with b the
+    plane's normal: towards the reader of a plane in which the path's first turn is to the
+    left. place() puts a point of a part lying straight along the first line onto the path.
+    viewer/bend.js is the same; tests/paths.json holds cases both must pass.
+
+    Raises ValueError for a path that can't be: points on each other, a turn right back, a
+    corner with no radius, arcs longer than the lines between them, points off one plane."""
+
+    def __init__(self, points, round_: float = 0.0):
+        pts = [tuple(float(c) for c in p) for p in points]
+        self.points, self.round = pts, float(round_)
+        dirs = []
+        for a, b in zip(pts, pts[1:]):
+            d, n = _sub(b, a), math.dist(a, b)
+            if n == 0:
+                raise ValueError("two of its points are the same")
+            dirs.append((tuple(c / n for c in d), n))
+        self.origin, self.t0 = pts[0], dirs[0][0]
+        turns = [_cross(dirs[i][0], dirs[i + 1][0]) for i in range(len(dirs) - 1)]
+        first = next((t for t in turns if math.hypot(*t) > STRAIGHT), None)
+        if first is None:  # one straight line: any plane through it
+            k = min(range(3), key=lambda i: abs(self.t0[i]))
+            first = _cross(self.t0, tuple(1.0 if i == k else 0.0 for i in range(3)))
+        self.b = tuple(c / math.hypot(*first) for c in first)
+        self.n0 = _cross(self.b, self.t0)
+        size = max(n for _, n in dirs)
+        if any(abs(_dot(_sub(p, pts[0]), self.b)) > 1e-6 * size for p in pts):
+            raise ValueError("its points must lie in one plane")
+        # Each corner's arc: how much of the lines to either side it takes, and its angle.
+        corners = []
+        for i, turn in enumerate(turns):
+            sine, cosine = math.hypot(*turn), _dot(dirs[i][0], dirs[i + 1][0])
+            if sine <= STRAIGHT:
+                if cosine < 0:
+                    raise ValueError(f"it turns right back at its point {i + 2}")
+                corners.append(None)
+                continue
+            if self.round <= 0:
+                raise ValueError("a path with corners needs \"round\", the radius of their arcs, above 0")
+            angle = math.atan2(sine, cosine)
+            corners.append((self.round * math.tan(angle / 2), angle, 1.0 if _dot(turn, self.b) > 0 else -1.0))
+        self.pieces, u, at = [], 0.0, pts[0]  # (kind, u at its start, length, ...)
+        for i, (d, n) in enumerate(dirs):
+            before = corners[i - 1][0] if i > 0 and corners[i - 1] else 0.0
+            corner = corners[i] if i < len(corners) else None
+            length = n - before - (corner[0] if corner else 0.0)
+            if length < -1e-9 * size:
+                raise ValueError(f"the line from its point {i + 1} to {i + 2} is too short for arcs of radius "
+                                 f"{self.round:g} at its ends")
+            if length > 0:
+                self.pieces.append(("line", u, length, at, d))
+                u, at = u + length, _add(at, d, length)
+            if corner:
+                _, angle, sign = corner
+                centre = _add(at, _cross(self.b, d), sign * self.round)
+                self.pieces.append(("arc", u, self.round * angle, centre, _sub(at, centre), d, sign))
+                u += self.round * angle
+                at = _add(centre, self._turned(_sub(at, centre), sign * angle))
+        self.length, self.end, self.t1 = u, at, dirs[-1][0]
+
+    def _turned(self, v, angle: float) -> tuple:
+        """v, square to b, turned about it."""
+        c, s, w = math.cos(angle), math.sin(angle), _cross(self.b, v)
+        return (c * v[0] + s * w[0], c * v[1] + s * w[1], c * v[2] + s * w[2])
+
+    @property
+    def arcs(self) -> list:
+        """Its arcs, [(u at its start, u at its end)]."""
+        return [(p[1], p[1] + p[2]) for p in self.pieces if p[0] == "arc"]
+
+    def frame(self, u: float) -> tuple:
+        """(the point at length u, the direction there)."""
+        if u <= 0:
+            return _add(self.origin, self.t0, u), self.t0
+        if u >= self.length:
+            return _add(self.end, self.t1, u - self.length), self.t1
+        piece = next(p for p in reversed(self.pieces) if p[1] <= u)
+        if piece[0] == "line":
+            _, u0, _, at, d = piece
+            return _add(at, d, u - u0), d
+        _, u0, _, centre, arm, d, sign = piece
+        angle = sign * (u - u0) / self.round
+        return _add(centre, self._turned(arm, angle)), self._turned(d, angle)
+
+    def place(self, p, by: float) -> tuple:
+        """Where a point p of the part at rest is, the part moved by mm along the path: as
+        far along the path as p is along the first line, and by, and as far to its sides."""
+        d = _sub(p, self.origin)
+        c, t = self.frame(_dot(d, self.t0) + by)
+        return _add(_add(c, _cross(self.b, t), _dot(d, self.n0)), self.b, _dot(d, self.b))
+
+    def along(self, p) -> float:
+        """How far along the first line a point at rest is."""
+        return _dot(_sub(p, self.origin), self.t0)
+
+    def aside(self, p) -> float:
+        """How far a point at rest is from the first line, in the path's plane, to the left."""
+        return _dot(_sub(p, self.origin), self.n0)
+
+
 @dataclass
 class Move:
-    """A move of the nodes node names: a turn about axis through a point (degrees), or a
-    slide along axis (mm), by a formula, given as text and parsed."""
+    """A move of the nodes node names: a turn about axis through a point (degrees), a slide
+    along axis (mm), or a bend along path, moved along it (mm; "follow"), by a formula,
+    given as text and parsed."""
     node: str
     kind: str
-    axis: tuple
+    axis: Optional[tuple]
     through: Optional[tuple]
     by: object
     formula: tuple
+    path: Optional[Path] = None
 
 
 @dataclass
@@ -305,8 +431,12 @@ class Motion:
         """As the pages read it (motion.js): with each move's nodes' keys, if given."""
         moves = []
         for i, m in enumerate(self.moves):
-            spec = {"axis": list(m.axis), "through": list(m.through), "by": m.by} if m.kind == "turn" \
-                else {"along": list(m.axis), "by": m.by}
+            if m.kind == "turn":
+                spec = {"axis": list(m.axis), "through": list(m.through), "by": m.by}
+            elif m.kind == "slide":
+                spec = {"along": list(m.axis), "by": m.by}
+            else:
+                spec = {"path": [list(p) for p in m.path.points], "round": m.path.round, "by": m.by}
             moves.append({"node": m.node, m.kind: spec, **({"keys": sorted(keys[i])} if keys else {})})
         def slider(s: Slider) -> dict:
             out = {"name": s.name, "unit": s.unit, "range": [s.lo, s.hi], "start": s.start}
@@ -360,26 +490,45 @@ def read(meta: dict) -> Optional[Motion]:
         known.append(name)
         taken.add(name)
     if not isinstance(given_moves or [], list):
-        raise ValueError("moves must be a list of {\"node\": ..., \"turn\" or \"slide\": {...}}")
-    moves = []
+        raise ValueError("moves must be a list of {\"node\": ..., \"turn\", \"slide\" or \"follow\": {...}}")
+    moves, following = [], set()
     for i, m in enumerate(given_moves or []):
         what = f"moves[{i}]"
         if not isinstance(m, dict) or not isinstance(m.get("node"), str) or not m["node"]:
             raise ValueError(f"{what}: node must name a node of the scene, such as \"Sash\" or \"Sash / handle\"")
-        kinds = [k for k in ("turn", "slide") if k in m]
+        kinds = [k for k in ("turn", "slide", "follow") if k in m]
         if len(kinds) != 1 or not isinstance(m[kinds[0]], dict):
-            raise ValueError(f"{what} ({m['node']}): give either \"turn\": {{axis, through, by}} "
-                             f"or \"slide\": {{along, by}}")
+            raise ValueError(f"{what} ({m['node']}): give either \"turn\": {{axis, through, by}}, "
+                             f"\"slide\": {{along, by}} or \"follow\": {{path, round, by}}")
         kind, spec = kinds[0], m[kinds[0]]
         what = f"{what}.{kind}"
-        axis = _vector(spec.get("axis" if kind == "turn" else "along"), f"{what}.{'axis' if kind == 'turn' else 'along'}")
-        if math.hypot(*axis) == 0:
-            raise ValueError(f"{what}: its direction must not be [0, 0, 0]")
-        through = _vector(spec.get("through", [0, 0, 0]), f"{what}.through") if kind == "turn" else None
+        axis = through = path = None
+        if kind == "follow":
+            if m["node"] in following:
+                raise ValueError(f"{what}: {m['node']} follows a path already; a node follows one")
+            following.add(m["node"])
+            path = _path(spec.get("path"), spec.get("round", 0), what)
+        else:
+            axis = _vector(spec.get("axis" if kind == "turn" else "along"), f"{what}.{'axis' if kind == 'turn' else 'along'}")
+            if math.hypot(*axis) == 0:
+                raise ValueError(f"{what}: its direction must not be [0, 0, 0]")
+            through = _vector(spec.get("through", [0, 0, 0]), f"{what}.through") if kind == "turn" else None
         if "by" not in spec:
             raise ValueError(f"{what}: by must say how far, a formula of the sliders, such as \"opening\"")
-        moves.append(Move(m["node"], kind, axis, through, spec["by"], _formula(spec["by"], f"{what}.by", known)))
+        moves.append(Move(m["node"], kind, axis, through, spec["by"], _formula(spec["by"], f"{what}.by", known), path))
     return Motion(sliders, define, moves)
+
+
+def _path(points, round_, what: str) -> Path:
+    if not (isinstance(points, list) and len(points) >= 2):
+        raise ValueError(f"{what}.path must be two points or more, [[x, y, z], ...]")
+    points = [_vector(p, f"{what}.path[{i}]") for i, p in enumerate(points)]
+    if not _number(round_) or round_ < 0:
+        raise ValueError(f"{what}.round must be the radius of the path's corners, a number from 0")
+    try:
+        return Path(points, round_)
+    except ValueError as e:
+        raise ValueError(f"{what}.path: {e}") from None
 
 
 def _on(on, what: str, before: list) -> Optional[tuple]:

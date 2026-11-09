@@ -1,0 +1,46 @@
+{
+  "title": "Band round a corner",
+  "sliders": [
+    {
+      "name": "rod",
+      "unit": "mm",
+      "range": [0, 40]
+    },
+    {
+      "name": "swing",
+      "unit": "°",
+      "range": [0, 90]
+    }
+  ],
+  "moves": [
+    {
+      "node": "Carrier / band",
+      "follow": {
+        "path": [
+          [0, 0, 0],
+          [100, 0, 0],
+          [100, 0, 60]
+        ],
+        "round": 10,
+        "by": "rod"
+      }
+    },
+    {
+      "node": "Carrier",
+      "turn": {
+        "axis": [0, 0, 1],
+        "through": [0, 0, 0],
+        "by": "swing"
+      }
+    }
+  ],
+  "views": [
+    {
+      "name": "side",
+      "title": "section along the band",
+      "origin": [0, 0, 0],
+      "normal": [0, -1, 0],
+      "xdir": [1, 0, 0]
+    }
+  ]
+}
