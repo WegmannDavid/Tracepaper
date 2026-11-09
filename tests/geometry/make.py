@@ -37,10 +37,11 @@ something the viewer has to get right when it shows, slices or projects them:
 - corner.step: a window's corner in the colours the CAD gives it, as CadQuery writes
   them: a steel frame, a glass pane that is see-through, two brass screws, and a seal
   left without one.
-- sash.step: a window: a fixed frame and a sash hinged in it, with a handle on the sash and
-  a bolt the handle drives; sash.tp.json moves them by two sliders (SPEC.md §2.13): the sash
-  turning about its hinge, the handle about its spindle, and the bolt sliding up as the
-  handle turns, by a definition.
+- sash.step: a tilt-and-turn window: a fixed frame and a sash in it, with a handle on the
+  sash and a bolt the handle drives; sash.tp.json moves them on one track of sliders (SPEC.md
+  §2.13), drawn as the handle turns: an arc from the handle down (shut) through sideways to
+  up, a branch off its middle that swings the sash open about its hinge, and one off its top
+  end that tilts it in about its foot. The bolt slides up as the handle turns, by a definition.
 - duct.step: the air in a duct going from a flat rounded rectangle to a round one off to
   the side, a loft through 25 sections of lines and arcs: rational B-spline faces whose
   outlines OpenCascade's exact hidden-line removal draws kilometres long from above.
@@ -50,6 +51,7 @@ Coordinates are millimetres, z up. Only corner.step sets colours.
 import json
 import math
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -686,7 +688,7 @@ def sash() -> cq.Assembly:
     profile = cq.Workplane("XY").box(596, 50, 796, centered=False).translate((2, 5, 2)).cut(
         cq.Workplane("XY").box(476, 50, 676, centered=False).translate((62, 5, 62)))
     glass = cq.Workplane("XY").box(476, 8, 676, centered=False).translate((62, 26, 62))
-    handle = cq.Workplane("XY").box(20, 20, 130, centered=False).translate((560, -15, 330))
+    handle = cq.Workplane("XY").box(20, 20, 130, centered=False).translate((560, -15, 275))  # hanging from z = 395
     bolt = cq.Workplane("XY").box(8, 20, 40, centered=False).translate((590, 20, 600))
     moving = cq.Assembly(name="Sash")
     moving.add(profile, name="profile", color=cq.Color(0.85, 0.85, 0.82))
@@ -697,18 +699,23 @@ def sash() -> cq.Assembly:
 
 
 def sash_meta() -> dict:
+    arc = [[round(math.sin(math.radians(a)), 4), round(-math.cos(math.radians(a)), 4)] for a in range(0, 181, 10)]
     return {
-        "title": "Window sash",
-        "sliders": [{"name": "opening", "unit": "°", "range": [0, 90]},
-                    {"name": "handle", "unit": "°", "range": [0, 180]}],
+        "title": "Tilt-and-turn window",
+        "sliders": [{"name": "handle", "unit": "°", "range": [0, 180], "draw": arc},
+                    {"name": "tilt", "unit": "°", "range": [0, 12], "on": {"handle": 180}, "draw": [[0, 0], [0, 0.8]]},
+                    {"name": "opening", "unit": "°", "range": [0, 90], "on": {"handle": 90}, "draw": [[0, 0], [1.2, 0]]}],
         "define": {"lift": "12 * min(handle, 90) / 90"},
         "moves": [
-            {"node": "Sash", "turn": {"axis": [0, 0, 1], "through": [2, 55, 0], "by": "opening"}},
             {"node": "Sash / handle", "turn": {"axis": [0, -1, 0], "through": [570, 0, 395], "by": "handle"}},
             {"node": "Sash / bolt", "slide": {"along": [0, 0, 1], "by": "lift"}},
+            {"node": "Sash", "turn": {"axis": [-1, 0, 0], "through": [0, 55, 2], "by": "tilt"}},
+            {"node": "Sash", "turn": {"axis": [0, 0, 1], "through": [2, 55, 0], "by": "opening"}},
         ],
         "views": [{"name": "plan", "title": "plan at handle height", "origin": [0, 0, 395], "normal": [0, 0, 1],
-                   "xdir": [1, 0, 0]}],
+                   "xdir": [1, 0, 0]},
+                  {"name": "side", "title": "section through the middle", "origin": [300, 0, 0], "normal": [1, 0, 0],
+                   "xdir": [0, 1, 0]}],
     }
 
 
@@ -775,7 +782,10 @@ if __name__ == "__main__":
         (HERE / "beam.tp.json").write_text(json.dumps(beam_meta(), indent=2) + "\n")
         print("beam.tp.json")
     if not only or "sash" in only:
-        (HERE / "sash.tp.json").write_text(json.dumps(sash_meta(), indent=2) + "\n")
+        text = json.dumps(sash_meta(), indent=2, ensure_ascii=False)
+        text = re.sub(r"\[\s*(-?[\d.]+),\s*(-?[\d.]+)(?:,\s*(-?[\d.]+))?\s*\]",  # numbers on one line
+                      lambda m: "[" + ", ".join(g for g in m.groups() if g is not None) + "]", text)
+        (HERE / "sash.tp.json").write_text(text + "\n")
         print("sash.tp.json")
     if not only or "plots" in only:
         from tracepaper.views import save_plot

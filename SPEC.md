@@ -335,7 +335,7 @@ A scene's parts MAY move: the `.tp.json` gives **sliders**, which the person mov
 
 | Key | Meaning |
 |---|---|
-| `sliders` | Each with a `name` to use in formulas (letters, digits and `_`, not starting with a digit), its `range`, `[lowest, highest]`, a `unit` to show, and `start`, where it starts: 0 if that is in its range, else its lowest. |
+| `sliders` | Each with a `name` to use in formulas (letters, digits and `_`, not starting with a digit), its `range`, `[lowest, highest]`, a `unit` to show, and `start`, where it starts: 0 if that is in its range, else its lowest. A slider MAY be part of a track (below): `on`, `draw` and `closed`. |
 | `define` | Names for formulas, `{name: formula}`, each of the sliders and the names before it: for a value several moves use. |
 | `moves` | In order. Each moves `node`, a path or a plain name as in `hidden` (§2.3), with every node inside it. A `turn` is by `by` degrees about `axis` through the point `through` ([0, 0, 0] if left out), counter-clockwise looking against the axis; a `slide` is by `by` mm along `along`. Axes and points are where they are at rest, in the STEP file's coordinates. |
 
@@ -343,9 +343,27 @@ A scene's parts MAY move: the `.tp.json` gives **sliders**, which the person mov
 - **Formulas** are numbers, the sliders' and definitions' names, `+ - * /`, `^` (power, from the right), parentheses, `pi`, and the functions `sin cos tan asin acos atan atan2(y, x) sqrt abs min max clamp(x, lo, hi) floor ceil round exp ln`. Angles are degrees, in and out: `asin(0.5)` is 30. `round` rounds halves up. A formula MAY be just a number. A move whose formula has no value at a position (`sqrt` of a negative number, a division by 0) is left out there.
 - **Frames and moves** go together: the moves move the parts of whichever frame is shown.
 
+**Tracks.** Sliders can form a track: one control whose knob runs along lines, each a slider's, and passes from one line to another only where they join. That is how a mechanism's positions hang together. A tilt-and-turn window's sash swings open only with its handle sideways and tilts only with it up, and the handle turns only while the sash is shut:
+
+```json
+"sliders": [
+  {"name": "handle", "unit": "°", "range": [0, 180], "draw": [[0, -1], [0.17, -0.98], ..., [0, 1]]},
+  {"name": "tilt", "unit": "°", "range": [0, 12], "on": {"handle": 180}, "draw": [[0, 0], [0, 0.8]]},
+  {"name": "opening", "unit": "°", "range": [0, 90], "on": {"handle": 90}, "draw": [[0, 0], [1.2, 0]]}
+]
+```
+
+| Key | Meaning |
+|---|---|
+| `on` | `{slider: value}`: this slider branches off that one, which comes before it, at that value. The knob passes onto it there only, and while it is on it, that one stays there; the other sliders of the track stay where they start. A branch can have branches of its own. |
+| `draw` | The slider's line in the control, as points `[[x, y], ...]` in units of its own, y up, as many as its curve needs: its value runs along it by length, from its lowest at the first point to its highest at the last. A branch's line is placed so that its point at its `start` lies where it joins: so its points are its own shape, and it can run out to both sides of the joint. Without `draw`, a slider is a straight line, and a branch one square to where it joins. |
+| `closed` | `true` joins its line's ends: the knob goes round, as for a part that turns all the way. |
+
+Lines, trees of branches and loops cover what a mechanism's positions need; the AI that writes the moves draws the track to look like what it moves, such as an arc for a handle that turns. Sliders that no `on`, `draw` or `closed` joins into a track stay plain sliders. The sliders' values are what formulas use, as for plain ones; the viewer keeps them to the track, but a pose given to `tracepaper render` needn't be on it.
+
 The viewer (informative):
 
-- shows a slider for each in the panel of every view of the scene, with the value to type in; double-clicking one puts it back where it starts. All the open windows of a scene share them: moving one in the 3D view moves the parts in its drawings too, and a window opening takes the positions of one already open;
+- shows a slider for each in the panel of every view of the scene, or a track, drawn as its lines and the knob on them, which the person drags along them; each with the value to type in, which on a track puts the knob there, through the joints on the way. Double-clicking one puts it, or a track's knob, back where it starts. All the open windows of a scene share them: moving one in the 3D view moves the parts in its drawings too, and a window opening takes the positions of one already open;
 - moves the parts in the 3D view live, as the slider moves;
 - in a section, cuts the moving parts live from the 3D view's triangles, to within their 0.05 mm, in place of their exact cut, and moves a 2D scene's parts as they are; a projection's moving parts fade. Once the sliders rest (let go, or still for a moment), the exact drawing at their positions replaces it. Annotations stay where the view gives them;
 - writes the sliders' positions into a sketch file's `tp:view` as `pose`, such as `opening=30 handle=0`, and opens a sketch with the sliders where they were.

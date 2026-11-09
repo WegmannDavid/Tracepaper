@@ -1379,8 +1379,8 @@ class ViewerInFirefox(unittest.TestCase):
         (moving / "profile.tp.json").write_text(json.dumps(meta))
         base = f"http://127.0.0.1:{self.server.server_address[1]}"
         try:
-            # In the 3D view, a slider for each, moving the parts live: the sash about its hinge, the
-            # bolt up as the handle turns.
+            # In the 3D view, the window's track and a value for each slider on it, moving the parts
+            # live: the sash about its hinge, the bolt up as the handle turns.
             self.m.call("WebDriver:Navigate", {"url": f"{base}/view/{quote('moving/sash.step')}"})
             got = self.m.run("""
                 until(() => window.tracepaper3d?.state.model && window.tracepaper3d.sliders.on && window.tracepaper3d, (t) => {
@@ -1395,20 +1395,47 @@ class ViewerInFirefox(unittest.TestCase):
                     return [b.min.x, -b.max.z, b.min.y, b.max.x, -b.min.z, b.max.y].map((v) => Math.round(v)); // CAD's
                   };
                   const out = { sliders: [...document.querySelectorAll('#tpv-motion .tpv-slider')].map((r) => r.dataset.slider),
+                                lines: document.querySelectorAll('#tpv-motion .tpv-track-line').length,
                                 rest: box('Sash / profile') };
-                  t.sliders.setValues({ opening: 90 });
+                  t.sliders.setValues({ handle: 90, opening: 90 });
                   out.open = box('Sash / profile');
-                  t.sliders.setValues({ opening: 0, handle: 90 });
+                  t.sliders.setValues({ handle: 90, opening: 0 });
                   out.bolt = box('Sash / bolt');
                   out.label = t.sliders.label;
+                  // Dragging the knob: it stays on the track, and passes onto a branch only at its
+                  // joint, putting the handle there; typing a branch's value does the same.
+                  const svg = document.querySelector('.tpv-track-svg'), { track } = t.sliders.tracks[0];
+                  const screen = (name, v) => {
+                    const [x, y] = track.point(name, v);
+                    return new DOMPoint(x, -y).matrixTransform(svg.getScreenCTM());
+                  };
+                  const drag = (to) => {
+                    const p = screen(...to), opts = (type) => ({ bubbles: true, pointerId: 3, clientX: p.x, clientY: p.y, buttons: type === 'pointerup' ? 0 : 1 });
+                    svg.setPointerCapture = () => {};
+                    svg.hasPointerCapture = () => true;
+                    for (const type of ['pointerdown', 'pointermove', 'pointerup']) svg.dispatchEvent(new PointerEvent(type, opts(type)));
+                    return { ...t.sliders.values };
+                  };
+                  t.sliders.setValues({ handle: 0, opening: 0 });
+                  out.dragged = [drag(['opening', 60]), drag(['tilt', 12]), drag(['handle', 30])];
+                  const typed = document.querySelector('.tpv-slider[data-slider="opening"] input');
+                  typed.value = '45';
+                  typed.dispatchEvent(new Event('change'));
+                  out.typed = { ...t.sliders.values };
+                  t.sliders.setValues({ handle: 90, opening: 0, tilt: 0 });
                   done(out);
                 });
             """)
-            self.assertEqual(got["sliders"], ["opening", "handle"])
+            self.assertEqual((got["sliders"], got["lines"]), (["handle", "tilt", "opening"], 3))
             self.assertEqual(got["rest"], [2, 5, 2, 598, 55, 798])
             self.assertEqual(got["open"], [2, 55, 2, 52, 651, 798])  # turned a quarter about (2, 55)
             self.assertEqual(got["bolt"], [590, 20, 612, 598, 40, 652])  # 12 mm up
-            self.assertEqual(got["label"], "opening=0 handle=90")
+            self.assertEqual(got["label"], "handle=90 tilt=0 opening=0")
+            rounded = [{k: round(v, 3) for k, v in d.items()} for d in got["dragged"]]
+            self.assertEqual(rounded, [{"handle": 90, "tilt": 0, "opening": 60},  # round the handle, then out
+                                       {"handle": 180, "tilt": 12, "opening": 0},  # back, on round, and up
+                                       {"handle": 30, "tilt": 0, "opening": 0}])
+            self.assertEqual(got["typed"], {"handle": 90, "tilt": 0, "opening": 45})
 
             # The formulas work out here as in Python: tests/formulas.json.
             cases = (Path(__file__).resolve().parent / "formulas.json").read_text()
@@ -1433,17 +1460,17 @@ class ViewerInFirefox(unittest.TestCase):
             # triangles; once it rests, the exact drawing comes.
             self.open_viewer("moving/sash.step#plan")
             got = self.m.run("""
-                until(() => tp.sliders.on && tp.state.sheetPose === 'opening=0 handle=0', () => {
+                until(() => tp.sliders.on && tp.state.sheetPose === 'handle=0 tilt=0 opening=0', () => {
                   const groups = () => Object.fromEntries(tp.state.root.querySelectorAll('g').values()
                     .filter((g) => g.getAttributeNS('http://www.inkscape.org/namespaces/inkscape', 'label'))
                     .map((g) => [g.getAttributeNS('http://www.inkscape.org/namespaces/inkscape', 'label'), g]));
-                  tp.sliders.setValues({ opening: 60 }, false);  // dragging
+                  tp.sliders.setValues({ handle: 90, opening: 60 }, false);  // dragging
                   until(() => tp.state.root.querySelector('.tpv-live path'), () => {
                     const profile = groups().profile, live = profile.querySelector('.tpv-live path:last-child');
                     const liveBox = live.getBBox();
                     const out = { hidden: [...profile.querySelectorAll(':scope > path')].every((p) => p.classList.contains('tpv-live-off')),
                                   frameLive: !!groups().frame.querySelector('.tpv-live'), pose: tp.state.sheetPose };
-                    until(() => tp.state.sheetPose === 'opening=60 handle=0', () => {
+                    until(() => tp.state.sheetPose === 'handle=90 tilt=0 opening=60', () => {
                       const cuts = [...groups().profile.querySelectorAll(':scope > path[id*="-cut-"]')].map((c) => c.getBBox());
                       const exact = { x: Math.min(...cuts.map((b) => b.x)), y: Math.min(...cuts.map((b) => b.y)) };  // both stiles
                       exact.width = Math.max(...cuts.map((b) => b.x + b.width)) - exact.x;
@@ -1453,8 +1480,8 @@ class ViewerInFirefox(unittest.TestCase):
                       out.view = tp.state.root.querySelector('metadata').innerHTML.match(/pose="([^"]*)"/)[1];
                       // Another window moving the sliders moves them here too.
                       new BroadcastChannel('tracepaper-motion').postMessage(
-                        { scene: 'moving/sash.step', values: { opening: 30, handle: 0 }, settled: true });
-                      until(() => tp.state.sheetPose === 'opening=30 handle=0', () => {
+                        { scene: 'moving/sash.step', values: { handle: 90, tilt: 0, opening: 30 }, settled: true });
+                      until(() => tp.state.sheetPose === 'handle=90 tilt=0 opening=30', () => {
                         out.heard = tp.sliders.values;
                         stroke([[100, 100], [140, 120]]);
                         tp.save().then(() => done(out));
@@ -1463,12 +1490,12 @@ class ViewerInFirefox(unittest.TestCase):
                   });
                 });
             """)
-            self.assertEqual((got["hidden"], got["frameLive"], got["pose"]), (True, False, "opening=0 handle=0"))
+            self.assertEqual((got["hidden"], got["frameLive"], got["pose"]), (True, False, "handle=0 tilt=0 opening=0"))
             self.assertLess(got["off"], 0.2)  # the live section, to within the 3D view's triangles
-            self.assertEqual((got["left"], got["view"]), (0, "opening=60 handle=0"))
-            self.assertEqual(got["heard"], {"opening": 30, "handle": 0})
+            self.assertEqual((got["left"], got["view"]), (0, "handle=90 tilt=0 opening=60"))
+            self.assertEqual(got["heard"], {"handle": 90, "tilt": 0, "opening": 30})
             view = ET.parse(moving / "sash.step#plan.sketch.svg").getroot().find(f"{SVG}metadata/{TP}view")
-            self.assertEqual(view.get("pose"), "opening=30 handle=0")
+            self.assertEqual(view.get("pose"), "handle=90 tilt=0 opening=30")
 
             # A 2D scene's parts move in the drawing as they are.
             self.open_viewer("moving/profile.step")

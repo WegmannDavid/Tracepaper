@@ -363,6 +363,13 @@ main.tpv-project { display: block; overflow: auto; }
 .tpv-slider-value { width: 5.5em; font: inherit; font-variant-numeric: tabular-nums; text-align: right;
   padding: 0 2px; border: 1px solid var(--line, #d0d7de); border-radius: 3px; background: transparent; color: inherit; }
 .tpv-slider-unit { margin-left: 3px; color: var(--muted); }
+.tpv-track { display: grid; gap: 6px; }
+.tpv-track-svg { display: block; width: 100%; height: auto; max-height: 280px; cursor: pointer; touch-action: none;
+  user-select: none; }
+.tpv-track-line { fill: none; stroke: var(--muted); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round;
+  vector-effect: non-scaling-stroke; opacity: 0.6; }
+.tpv-track-name { fill: var(--muted); }
+.tpv-track-knob { fill: var(--accent); stroke: #fff; stroke-width: 2; vector-effect: non-scaling-stroke; }
 /* A drawing while a slider moves: the moving parts' exact cut hidden, a live one in its place;
    a projection's moving parts faded until the exact drawing comes. */
 .tpv-live-off { display: none; }

@@ -1,20 +1,54 @@
 {
-  "title": "Window sash",
+  "title": "Tilt-and-turn window",
   "sliders": [
     {
-      "name": "opening",
-      "unit": "\u00b0",
-      "range": [
-        0,
-        90
+      "name": "handle",
+      "unit": "°",
+      "range": [0, 180],
+      "draw": [
+        [0.0, -1.0],
+        [0.1736, -0.9848],
+        [0.342, -0.9397],
+        [0.5, -0.866],
+        [0.6428, -0.766],
+        [0.766, -0.6428],
+        [0.866, -0.5],
+        [0.9397, -0.342],
+        [0.9848, -0.1736],
+        [1.0, -0.0],
+        [0.9848, 0.1736],
+        [0.9397, 0.342],
+        [0.866, 0.5],
+        [0.766, 0.6428],
+        [0.6428, 0.766],
+        [0.5, 0.866],
+        [0.342, 0.9397],
+        [0.1736, 0.9848],
+        [0.0, 1.0]
       ]
     },
     {
-      "name": "handle",
-      "unit": "\u00b0",
-      "range": [
-        0,
-        180
+      "name": "tilt",
+      "unit": "°",
+      "range": [0, 12],
+      "on": {
+        "handle": 180
+      },
+      "draw": [
+        [0, 0],
+        [0, 0.8]
+      ]
+    },
+    {
+      "name": "opening",
+      "unit": "°",
+      "range": [0, 90],
+      "on": {
+        "handle": 90
+      },
+      "draw": [
+        [0, 0],
+        [1.2, 0]
       ]
     }
   ],
@@ -23,46 +57,34 @@
   },
   "moves": [
     {
-      "node": "Sash",
-      "turn": {
-        "axis": [
-          0,
-          0,
-          1
-        ],
-        "through": [
-          2,
-          55,
-          0
-        ],
-        "by": "opening"
-      }
-    },
-    {
       "node": "Sash / handle",
       "turn": {
-        "axis": [
-          0,
-          -1,
-          0
-        ],
-        "through": [
-          570,
-          0,
-          395
-        ],
+        "axis": [0, -1, 0],
+        "through": [570, 0, 395],
         "by": "handle"
       }
     },
     {
       "node": "Sash / bolt",
       "slide": {
-        "along": [
-          0,
-          0,
-          1
-        ],
+        "along": [0, 0, 1],
         "by": "lift"
+      }
+    },
+    {
+      "node": "Sash",
+      "turn": {
+        "axis": [-1, 0, 0],
+        "through": [0, 55, 2],
+        "by": "tilt"
+      }
+    },
+    {
+      "node": "Sash",
+      "turn": {
+        "axis": [0, 0, 1],
+        "through": [2, 55, 0],
+        "by": "opening"
       }
     }
   ],
@@ -70,21 +92,16 @@
     {
       "name": "plan",
       "title": "plan at handle height",
-      "origin": [
-        0,
-        0,
-        395
-      ],
-      "normal": [
-        0,
-        0,
-        1
-      ],
-      "xdir": [
-        1,
-        0,
-        0
-      ]
+      "origin": [0, 0, 395],
+      "normal": [0, 0, 1],
+      "xdir": [1, 0, 0]
+    },
+    {
+      "name": "side",
+      "title": "section through the middle",
+      "origin": [300, 0, 0],
+      "normal": [1, 0, 0],
+      "xdir": [0, 1, 0]
     }
   ]
 }

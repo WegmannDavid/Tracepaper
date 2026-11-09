@@ -50,11 +50,15 @@ SASH = json.loads((GEOMETRY / "sash.tp.json").read_text())
 class MotionTest(unittest.TestCase):
     def test_sliders_definitions_and_moves(self):
         motion = M.read(SASH)
-        self.assertEqual([(s.name, s.unit, s.lo, s.hi, s.start) for s in motion.sliders],
-                         [("opening", "°", 0, 90, 0), ("handle", "°", 0, 180, 0)])
-        self.assertEqual(motion.values({"handle": 135}), {"opening": 0, "handle": 135, "lift": 12})
-        self.assertEqual(motion.amounts({"opening": 30, "handle": 45}), [30, 45, 6])
-        self.assertEqual(motion.label({"opening": 30}), "opening=30 handle=0")
+        self.assertEqual([(s.name, s.unit, s.lo, s.hi, s.start, s.on) for s in motion.sliders],
+                         [("handle", "°", 0, 180, 0, None), ("tilt", "°", 0, 12, 0, ("handle", 180)),
+                          ("opening", "°", 0, 90, 0, ("handle", 90))])
+        self.assertEqual(len(motion.sliders[0].draw), 19)  # the handle's track: an arc
+        self.assertEqual(motion.values({"handle": 135}), {"handle": 135, "tilt": 0, "opening": 0, "lift": 12})
+        self.assertEqual(motion.amounts({"opening": 30, "handle": 45}), [45, 6, 0, 30])
+        self.assertEqual(motion.label({"opening": 30}), "handle=0 tilt=0 opening=30")
+        self.assertEqual(motion.to_json()["sliders"][1], {"name": "tilt", "unit": "°", "range": [0, 12], "start": 0,
+                                                           "on": {"handle": 180}, "draw": [[0, 0], [0, 0.8]]})
         self.assertEqual(motion.pose("opening=30, handle=1e1"), {"opening": 30, "handle": 10})
         self.assertIsNone(M.read({"title": "no motion"}))
         # A move whose formula has no value there is left out.
@@ -86,7 +90,15 @@ class MotionTest(unittest.TestCase):
         wrong({"sliders": [slider], "moves": [{"node": "x", "slide": {"along": [1, 0, 0]}}]}, r"by must say how far")
         wrong({"sliders": [slider], "moves": [{"node": "x", "slide": {"along": [1, 0, 0], "by": "hadle"}}]},
               r"moves\[0\]\.slide\.by: unknown name 'hadle'")
-        with self.assertRaisesRegex(ValueError, "no slider 'opning'"):
+        wrong({"sliders": [slider, {"name": "b", "range": [0, 1], "on": {"c": 0}}]},
+              r"sliders\[1\] \(b\): on: 'c' is not a slider before it; they are a")
+        wrong({"sliders": [slider, {"name": "b", "range": [0, 1], "on": {"a": 2}}]},
+              r"on: a branches at a number in its range, 0 to 1")
+        wrong({"sliders": [slider, {"name": "b", "range": [0, 1], "on": {"a": 0, "c": 1}}]}, r"on must be \{slider: value\}")
+        wrong({"sliders": [{"name": "a", "range": [0, 1], "draw": [[0, 0]]}]}, r"draw must be two points or more")
+        wrong({"sliders": [{"name": "a", "range": [0, 1], "draw": [[1, 1], [1, 1]]}]}, r"must not all be the same")
+        wrong({"sliders": [{"name": "a", "range": [0, 1], "closed": "yes"}]}, r"closed must be true or false")
+        with self.assertRaisesRegex(ValueError, "no slider 'opning'; the sliders are handle, tilt, opening"):
             M.read(SASH).pose("opning=3")
         with self.assertRaisesRegex(ValueError, "handle: 'x' is not a number"):
             M.read(SASH).pose("handle=x")
@@ -114,6 +126,8 @@ class PosedTest(unittest.TestCase):
         self.assertEqual(box(turned, "Sash / bolt"), [17, 643, 612, 37, 651, 652])  # with the sash, and 12 up
         self.assertEqual(box(turned, "frame"), box(sash, "frame"))
         self.assertEqual(box(sash, "Sash / bolt"), [590, 20, 600, 598, 40, 640])  # the scene itself as it was
+        tilted = box(pose({"handle": 180, "tilt": 12}), "Sash / profile")  # in, about its foot
+        self.assertEqual((tilted[2], tilted[4] > 55 + 150, tilted[5] < 798), (2, True, True))
 
 
 @unittest.skipUnless(HAVE_OCP, "needs OCP")
@@ -142,7 +156,8 @@ class ServerTest(unittest.TestCase):
         status, data = self.get("/api/motion/sash.step%23plan")
         self.assertEqual(status, 200)
         info = json.loads(data)
-        self.assertEqual([m["keys"] for m in info["moves"]], [["Sash"], ["Sash / handle"], ["Sash / bolt"]])
+        self.assertEqual([m["keys"] for m in info["moves"]], [["Sash / handle"], ["Sash / bolt"], ["Sash"], ["Sash"]])
+        self.assertEqual(info["sliders"][2]["on"], {"handle": 90})
         self.assertEqual(info["define"], [["lift", "12 * min(handle, 90) / 90"]])
 
         def view(query=""):
@@ -152,12 +167,12 @@ class ServerTest(unittest.TestCase):
             return root.find(f"{SVG}metadata/{TP}view").get("pose"), root.get("viewBox")
 
         rest, opened = view(), view("?pose=" + quote("opening=90"))
-        self.assertEqual(rest[0], "opening=0 handle=0")
-        self.assertEqual(opened[0], "opening=90 handle=0")
+        self.assertEqual(rest[0], "handle=0 tilt=0 opening=0")
+        self.assertEqual(opened[0], "handle=0 tilt=0 opening=90")
         self.assertNotEqual(rest[1], opened[1])  # the sash swung out
         self.assertEqual(view("?pose=" + quote("opening=0, handle=0")), rest)  # where they start: the same
         status, data = self.get("/api/file/sash.step%23plan?pose=" + quote("opning=90"))
-        self.assertEqual((status, json.loads(data)), (422, {"error": "no slider 'opning'; the sliders are opening, handle"}))
+        self.assertEqual((status, json.loads(data)), (422, {"error": "no slider 'opning'; the sliders are handle, tilt, opening"}))
         # The 3D view comes at rest: the page moves the parts itself.
         self.assertEqual(self.get("/api/file/sash.step?pose=" + quote("opening=90"))[1][:4], b"glTF")
 
@@ -172,9 +187,9 @@ class ServerTest(unittest.TestCase):
         from tracepaper.render import render
         out = self.dir / "out" / "plan.png"
         report = render(str(self.dir / "sash.step#plan"), out=out, pose="opening=30")
-        self.assertIn("\n  sliders: opening=30 handle=0\n", report)
+        self.assertIn("\n  sliders: handle=0 tilt=0 opening=30\n", report)
         view = ET.parse(out.with_suffix(".svg")).getroot().find(f"{SVG}metadata/{TP}view")
-        self.assertEqual(view.get("pose"), "opening=30 handle=0")
+        self.assertEqual(view.get("pose"), "handle=0 tilt=0 opening=30")
         with self.assertRaisesRegex(SystemExit, "no slider 'shut'"):
             render(str(self.dir / "sash.step#plan"), out=out, pose="shut=1")
 

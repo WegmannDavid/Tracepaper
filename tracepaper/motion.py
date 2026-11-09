@@ -232,11 +232,18 @@ def _num(v: float) -> str:
 
 @dataclass
 class Slider:
+    """A slider: a value to use in formulas, from lo to hi, at start at rest. on: (the name of
+    the slider it branches off, that one's value where), for a track of several (SPEC.md
+    §2.13); draw: its track's points, [(x, y)], or None for the viewer's; closed: whether its
+    track's ends meet, so that it goes round."""
     name: str
     unit: str
     lo: float
     hi: float
     start: float
+    on: Optional[tuple] = None
+    draw: Optional[list] = None
+    closed: bool = False
 
 
 @dataclass
@@ -281,7 +288,7 @@ class Motion:
     def pose(self, text: str) -> dict:
         """The positions a label gives, "opening=30 handle=0" (or with commas): {name: value}.
         Raises ValueError for a name that isn't a slider's, or a value that isn't a number."""
-        out, known = {}, {s.name for s in self.sliders}
+        out, known = {}, [s.name for s in self.sliders]
         for item in filter(None, re.split(r"[\s,]+", text.strip())):
             name, _, value = item.partition("=")
             if name not in known:
@@ -301,8 +308,17 @@ class Motion:
             spec = {"axis": list(m.axis), "through": list(m.through), "by": m.by} if m.kind == "turn" \
                 else {"along": list(m.axis), "by": m.by}
             moves.append({"node": m.node, m.kind: spec, **({"keys": sorted(keys[i])} if keys else {})})
-        return {"sliders": [{"name": s.name, "unit": s.unit, "range": [s.lo, s.hi], "start": s.start}
-                            for s in self.sliders],
+        def slider(s: Slider) -> dict:
+            out = {"name": s.name, "unit": s.unit, "range": [s.lo, s.hi], "start": s.start}
+            if s.on:
+                out["on"] = {s.on[0]: s.on[1]}
+            if s.draw:
+                out["draw"] = [list(p) for p in s.draw]
+            if s.closed:
+                out["closed"] = True
+            return out
+
+        return {"sliders": [slider(s) for s in self.sliders],
                 "define": [[name, text] for name, text, _ in self.define], "moves": moves}
 
 
@@ -329,7 +345,9 @@ def read(meta: dict) -> Optional[Motion]:
         start = s.get("start", 0 if rng[0] <= 0 <= rng[1] else rng[0])
         if not _number(start) or not rng[0] <= start <= rng[1]:
             raise ValueError(f"{what} ({name}): start must be a number in its range, {rng[0]:g} to {rng[1]:g}")
-        sliders.append(Slider(name, unit, float(rng[0]), float(rng[1]), float(start)))
+        sliders.append(Slider(name, unit, float(rng[0]), float(rng[1]), float(start),
+                              _on(s.get("on"), f"{what} ({name})", sliders),
+                              _draw(s.get("draw"), f"{what} ({name})"), _closed(s.get("closed"), f"{what} ({name})")))
         taken.add(name)
     known = [s.name for s in sliders]
     if not isinstance(given_define or {}, dict):
@@ -362,6 +380,41 @@ def read(meta: dict) -> Optional[Motion]:
             raise ValueError(f"{what}: by must say how far, a formula of the sliders, such as \"opening\"")
         moves.append(Move(m["node"], kind, axis, through, spec["by"], _formula(spec["by"], f"{what}.by", known)))
     return Motion(sliders, define, moves)
+
+
+def _on(on, what: str, before: list) -> Optional[tuple]:
+    """Where a slider branches off another: {name: value} -> (name, value)."""
+    if on is None:
+        return None
+    if not (isinstance(on, dict) and len(on) == 1):
+        raise ValueError(f"{what}: on must be {{slider: value}}, the slider before it it branches off and where, "
+                         f"such as {{\"handle\": 90}}")
+    (name, value), = on.items()
+    found = next((s for s in before if s.name == name), None)
+    if found is None:
+        raise ValueError(f"{what}: on: {name!r} is not a slider before it; they are "
+                         f"{', '.join(s.name for s in before) or 'none'}")
+    if not _number(value) or not found.lo <= value <= found.hi:
+        raise ValueError(f"{what}: on: {name} branches at a number in its range, {found.lo:g} to {found.hi:g}")
+    return name, float(value)
+
+
+def _draw(points, what: str) -> Optional[list]:
+    """A slider's track as the panel draws it: [(x, y)], two points or more, not all the same."""
+    if points is None:
+        return None
+    if not (isinstance(points, list) and len(points) >= 2
+            and all(isinstance(p, list) and len(p) == 2 and all(_number(c) for c in p) for p in points)):
+        raise ValueError(f"{what}: draw must be two points or more, [[x, y], ...], as many as its curve needs")
+    if all(p == points[0] for p in points):
+        raise ValueError(f"{what}: draw's points must not all be the same")
+    return [(float(x), float(y)) for x, y in points]
+
+
+def _closed(closed, what: str) -> bool:
+    if closed is not None and not isinstance(closed, bool):
+        raise ValueError(f"{what}: closed must be true or false")
+    return bool(closed)
 
 
 def _number(v) -> bool:
