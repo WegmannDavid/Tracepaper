@@ -37,6 +37,10 @@ something the viewer has to get right when it shows, slices or projects them:
 - corner.step: a window's corner in the colours the CAD gives it, as CadQuery writes
   them: a steel frame, a glass pane that is see-through, two brass screws, and a seal
   left without one.
+- sash.step: a window: a fixed frame and a sash hinged in it, with a handle on the sash and
+  a bolt the handle drives; sash.tp.json moves them by two sliders (SPEC.md §2.13): the sash
+  turning about its hinge, the handle about its spindle, and the bolt sliding up as the
+  handle turns, by a definition.
 - duct.step: the air in a duct going from a flat rounded rectangle to a round one off to
   the side, a loft through 25 sections of lines and arcs: rational B-spline faces whose
   outlines OpenCascade's exact hidden-line removal draws kilometres long from above.
@@ -674,6 +678,40 @@ def corner() -> cq.Assembly:
     return a
 
 
+def sash() -> cq.Assembly:
+    """A window 700 x 900 mm and 60 deep, its opening 600 x 800 from (0, 0, 0), front at y = 0;
+    the sash hinged on the left, along z through (2, 55, 0)."""
+    frame = cq.Workplane("XY").box(700, 60, 900, centered=False).translate((-50, 0, -50)).cut(
+        cq.Workplane("XY").box(600, 60, 800, centered=False))
+    profile = cq.Workplane("XY").box(596, 50, 796, centered=False).translate((2, 5, 2)).cut(
+        cq.Workplane("XY").box(476, 50, 676, centered=False).translate((62, 5, 62)))
+    glass = cq.Workplane("XY").box(476, 8, 676, centered=False).translate((62, 26, 62))
+    handle = cq.Workplane("XY").box(20, 20, 130, centered=False).translate((560, -15, 330))
+    bolt = cq.Workplane("XY").box(8, 20, 40, centered=False).translate((590, 20, 600))
+    moving = cq.Assembly(name="Sash")
+    moving.add(profile, name="profile", color=cq.Color(0.85, 0.85, 0.82))
+    moving.add(glass, name="glass", color=cq.Color(0.65, 0.82, 0.95, 0.35))
+    moving.add(handle, name="handle", color=cq.Color(0.6, 0.6, 0.62))
+    moving.add(bolt, name="bolt", color=cq.Color(0.8, 0.65, 0.3))
+    return cq.Assembly(name="window").add(frame, name="frame", color=cq.Color(0.55, 0.42, 0.3)).add(moving)
+
+
+def sash_meta() -> dict:
+    return {
+        "title": "Window sash",
+        "sliders": [{"name": "opening", "unit": "°", "range": [0, 90]},
+                    {"name": "handle", "unit": "°", "range": [0, 180]}],
+        "define": {"lift": "12 * min(handle, 90) / 90"},
+        "moves": [
+            {"node": "Sash", "turn": {"axis": [0, 0, 1], "through": [2, 55, 0], "by": "opening"}},
+            {"node": "Sash / handle", "turn": {"axis": [0, -1, 0], "through": [570, 0, 395], "by": "handle"}},
+            {"node": "Sash / bolt", "slide": {"along": [0, 0, 1], "by": "lift"}},
+        ],
+        "views": [{"name": "plan", "title": "plan at handle height", "origin": [0, 0, 395], "normal": [0, 0, 1],
+                   "xdir": [1, 0, 0]}],
+    }
+
+
 def duct_section(t: float) -> cq.Wire:
     """The duct's section a share t of the way up: a rounded rectangle, 411 x 73 mm with
     1 mm corners at the bottom, growing round and moving aside, until at the top it is a
@@ -715,7 +753,7 @@ if __name__ == "__main__":
     only = set(sys.argv[1:])
     for name, make in [("primitives", primitives), ("bracket", bracket), ("freeform", freeform),
                        ("hinge", hinge), ("profile", profile), ("grid", grid), ("corner", corner), ("beam", beam),
-                       ("duct", duct)]:
+                       ("duct", duct), ("sash", sash)]:
         if not only or name in only:
             save(make(), f"{name}.step")
     if not only or "profile" in only:
@@ -736,6 +774,9 @@ if __name__ == "__main__":
             (HERE / name).write_text(text)
         (HERE / "beam.tp.json").write_text(json.dumps(beam_meta(), indent=2) + "\n")
         print("beam.tp.json")
+    if not only or "sash" in only:
+        (HERE / "sash.tp.json").write_text(json.dumps(sash_meta(), indent=2) + "\n")
+        print("sash.tp.json")
     if not only or "plots" in only:
         from tracepaper.views import save_plot
         for name, plot in (("beam", beam_plot()), ("glazing", glazing_plot())):

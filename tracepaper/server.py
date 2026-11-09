@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import plate, plots
+from . import motion, plate, plots
 from . import views as scenes
 from .pen import PenHub
 
@@ -214,11 +214,14 @@ class Scenes:
             self._read.popitem(last=False)
         return sc
 
-    def output(self, view: View, frame: Optional[int] = None) -> bytes:
-        """The view's file for its page: a .glb for the 3D view, a sheet's SVG otherwise; of
-        one of the scene's frames, if given. Raises ValueError with what is wrong."""
-        key = (view.name, view.mtime(), frame)
+    def output(self, view: View, frame: Optional[int] = None, pose: Optional[str] = None) -> bytes:
+        """The view's file for its page: a .glb for the 3D view, at rest, which the page moves
+        itself; a sheet's SVG otherwise, with the scene's parts where its sliders put them:
+        at pose ("opening=30 handle=0"), else where they start. Of one of the scene's frames,
+        if given. Raises ValueError with what is wrong."""
         with self._lock:
+            pose = self._normal(view, pose) if pose and view.kind != "model" else None
+            key = (view.name, view.mtime(), frame, pose)
             if key in self._drawn:
                 self._drawn.move_to_end(key)
                 return self._drawn[key]
@@ -228,14 +231,58 @@ class Scenes:
                 colors = {k: D.rgb(c) for k, c in D.colors(sc).items()}
                 data = S.glb(sc, colors, S.find_nodes(sc, meta.get("hidden") or []))
             else:
-                data = self._sheet(view, frame).tostring().encode("utf-8")
+                data = self._sheet(view, frame, pose).tostring().encode("utf-8")
             self._keep(key, data)
             return data
 
-    def sheet(self, view: View, frame: Optional[int] = None):
+    def sheet(self, view: View, frame: Optional[int] = None, pose: Optional[str] = None):
         """The sheet of a view of a scene, or of one of its frames, as its page shows it."""
         with self._lock:
-            return self._sheet(view, frame)
+            return self._sheet(view, frame, pose)
+
+    def motion(self, view: View) -> dict:
+        """The scene's sliders and moves as the pages read them (motion.Motion.to_json), with
+        the keys of the nodes each move moves, or {} if it has none. Raises ValueError for
+        malformed ones, or one naming a node the scene hasn't."""
+        with self._lock:
+            found = motion.read(scenes.read_meta(view.path))
+            if found is None:
+                return {}
+            return found.to_json(self._keys(found, self._frame(view, None)[0]))
+
+    @staticmethod
+    def _normal(view: View, pose: str) -> Optional[str]:
+        """pose as the scene's sliders write it, with each of them, or None where they start."""
+        found = motion.read(scenes.read_meta(view.path))
+        if found is None:
+            raise ValueError("the scene has no sliders")
+        label = found.label(found.pose(pose))
+        return None if label == found.label() else label
+
+    def _keys(self, found, sc) -> list:
+        from . import scene as S
+        out = []
+        for i, m in enumerate(found.moves):
+            try:
+                out.append(S.find_nodes(sc, [m.node]))
+            except ValueError as e:
+                raise ValueError(f"moves[{i}]: {e}") from None
+        return out
+
+    def _posed(self, sc, meta: dict, pose: Optional[str]):
+        """sc with its parts where the sliders put them, at pose or where they start, and the
+        sliders' positions as text; or sc and None if the scene has no motion."""
+        from . import scene as S
+        found = motion.read(meta)
+        if found is None:
+            if pose:
+                raise ValueError("the scene has no sliders")
+            return sc, None
+        given = found.pose(pose) if pose else {}
+        moves = [(keys, m.kind, m.axis, m.through, amount)
+                 for m, keys, amount in zip(found.moves, self._keys(found, sc), found.amounts(given))
+                 if amount is not None and amount != 0]
+        return (S.posed(sc, moves) if moves else sc), found.label(given)
 
     def scene(self, view: View, frame: Optional[int] = None):
         """The scene a view shows, or one of its frames."""
@@ -263,7 +310,7 @@ class Scenes:
             entry = framed[frame]
         return self._scene(entry["step"] if entry else view.path), meta, entry
 
-    def _sheet(self, view: View, frame: Optional[int]):
+    def _sheet(self, view: View, frame: Optional[int], pose: Optional[str] = None):
         from . import drawing as D, scene as S
         sc, meta, entry = self._frame(view, frame)
         spec, own = None, scenes.frame_meta(meta, entry)  # with the frame's own annotations
@@ -271,18 +318,21 @@ class Scenes:
             spec = scenes.view_spec(own, view.view)
             if spec is None:
                 raise ValueError(f"{view.path.name} has no view {view.view!r}")
+        sc, label = self._posed(sc, meta, pose)
         text = None
-        if entry is not None:  # the scene's own, so that it stays the same over the frames
+        if entry is not None or pose:  # the scene's own, so that it stays the same over frames and poses
             key = ("text", view.name, view.mtime())
             if key not in self._drawn:
                 self._sheet(view, None)
             text = self._drawn[key]
         sheet = D.draw(sc, spec, own, view.name, hidden=S.find_nodes(sc, meta.get("hidden") or []),
                        fields=scenes.fields(view.path, meta, entry), ranges=self._ranges(view, meta), text=text)
-        if entry is None:
+        if entry is None and not pose:
             self._keep(("text", view.name, view.mtime()), sheet.font_size)
-        else:
+        if entry is not None:
             sheet.view["frame"] = scenes.frame_label(entry["at"])
+        if label is not None:
+            sheet.view["pose"] = label
         return sheet
 
     def _ranges(self, view: View, meta: dict) -> dict:
@@ -322,13 +372,13 @@ class ViewerServer(ThreadingHTTPServer):
         self._models_lock = threading.Lock()
         self.scenes = Scenes()
 
-    def view_file(self, view: View, frame: Optional[int] = None) -> bytes:
+    def view_file(self, view: View, frame: Optional[int] = None, pose: Optional[str] = None) -> bytes:
         """A view's file as its page reads it. A slicer project becomes a model, a .glb
         (plate.py), and a plot a sheet (plots.py), once for each version of it, and a scene
-        its 3D view or a sheet drawn from it, of one of its frames if given. Raises
-        ValueError if that fails."""
+        its 3D view or a sheet drawn from it, of one of its frames and at a pose of its
+        sliders if given. Raises ValueError if that fails."""
         if view.scene:
-            return self.scenes.output(view, frame)
+            return self.scenes.output(view, frame, pose)
         path = view.path
         if path.suffix.lower() != ".3mf" and not view.plot:
             return path.read_bytes()
@@ -452,6 +502,16 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(url.query)
             client = query.get("client", [""])[0][:64] or uuid.uuid4().hex
             return self._stream_pen(self.server.pen_hub, client, query.get("draws", ["1"])[0] == "1")
+        if path.startswith("/api/motion/"):
+            view = self._view(unquote(path[len("/api/motion/"):]))
+            if view is None:
+                return self._error(404, "no such view")
+            if not view.scene:
+                return self._json({})
+            try:
+                return self._json(self.server.scenes.motion(view))
+            except ValueError as e:
+                return self._error(422, str(e))
         if path.startswith("/api/frames/"):
             view = self._view(unquote(path[len("/api/frames/"):]))
             if view is None:
@@ -470,10 +530,11 @@ class Handler(BaseHTTPRequestHandler):
                 view = self._view(unquote(path[len(prefix):]))
                 if view is None:
                     return self._error(404, "no such view")
-                frame = parse_qs(url.query).get("frame", [None])[0]
+                query = parse_qs(url.query)
+                frame, pose = query.get("frame", [None])[0], query.get("pose", [None])[0]
                 try:
                     frame = None if frame is None else int(frame)
-                    data = view.sketch().read_bytes() if sketch else self.server.view_file(view, frame)
+                    data = view.sketch().read_bytes() if sketch else self.server.view_file(view, frame, pose)
                 except FileNotFoundError:
                     return self._error(404, "no sketch for this view" if sketch else "the view's file is gone")
                 except ValueError as e:

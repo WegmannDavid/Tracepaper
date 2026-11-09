@@ -46,7 +46,7 @@ from OCP.GeomAbs import (GeomAbs_BezierCurve, GeomAbs_BSplineCurve, GeomAbs_C1, 
                          GeomAbs_Cylinder, GeomAbs_Ellipse, GeomAbs_Line, GeomAbs_Plane, GeomAbs_Sphere,
                          GeomAbs_Torus)
 from OCP.GeomConvert import GeomConvert_ApproxCurve, GeomConvert_BSplineCurveToBezierCurve
-from OCP.gp import gp_Ax2, gp_Ax3, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
 from OCP.GProp import GProp_GProps
 from OCP.HLRAlgo import HLRAlgo_Projector
 from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape, HLRBRep_PolyAlgo, HLRBRep_PolyHLRToShape
@@ -198,6 +198,35 @@ def find_nodes(scene: Scene, entries) -> set:
             raise ValueError(f"no node {entry!r}; the scene's nodes are: {', '.join(n.key for n in nodes)}")
         out |= found
     return out
+
+
+def posed(scene: Scene, moves: list) -> Scene:
+    """The scene with its nodes moved (SPEC.md §2.13): moves [(keys, kind, axis, through,
+    amount)] in order, each turning the nodes keys names about axis through a point by amount
+    degrees ("turn") or sliding them along axis by amount mm ("slide"), all given in the
+    scene's coordinates at rest. A node inside a moved one moves with it. The scene itself is
+    left as it is: the moved shapes share its geometry, placed elsewhere."""
+    own = {}
+    for keys, kind, axis, through, amount in moves:
+        t = gp_Trsf()
+        if kind == "turn":
+            t.SetRotation(gp_Ax1(gp_Pnt(*through), gp_Dir(*axis)), math.radians(amount))
+        else:
+            t.SetTranslation(gp_Vec(*(amount * c for c in _unit(axis))))
+        for key in keys:
+            own[key] = t.Multiplied(own[key]) if key in own else t  # after the moves before it
+
+    def walk(nodes, above: Optional[gp_Trsf]) -> list:
+        out = []
+        for n in nodes:
+            at = above
+            if n.key in own:
+                at = own[n.key] if at is None else at.Multiplied(own[n.key])  # its own, then the nodes' around it
+            shape = n.shape.Moved(TopLoc_Location(at)) if at is not None and n.shape is not None else n.shape
+            out.append(Node(n.name, n.key, shape, walk(n.children, at), n.color))
+        return out
+
+    return Scene(walk(scene.roots, None))
 
 
 def has_faces(shape: TopoDS_Shape) -> bool:

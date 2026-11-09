@@ -360,6 +360,13 @@ main.tpv-project { display: block; overflow: auto; }
 .tpv-frame-buttons button:hover { background: var(--hover); }
 .tpv-frame-buttons .tpv-frame-play[aria-pressed="true"] { background: var(--accent); color: #fff; }
 .tpv-frame-axis input[type="range"] { width: 100%; margin: 2px 0 0; }
+.tpv-slider-value { width: 5.5em; font: inherit; font-variant-numeric: tabular-nums; text-align: right;
+  padding: 0 2px; border: 1px solid var(--line, #d0d7de); border-radius: 3px; background: transparent; color: inherit; }
+.tpv-slider-unit { margin-left: 3px; color: var(--muted); }
+/* A drawing while a slider moves: the moving parts' exact cut hidden, a live one in its place;
+   a projection's moving parts faded until the exact drawing comes. */
+.tpv-live-off { display: none; }
+.tpv-stale { opacity: 0.3; }
 /* A tick under the slider for each frame, red where a value is over its limit. */
 .tpv-frame-ticks { display: block; width: calc(100% - 16px); height: 6px; margin: 0 8px; overflow: visible; }
 .tpv-frame-ticks line { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }

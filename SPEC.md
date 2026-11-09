@@ -74,7 +74,8 @@ Next to `<name>.step`, `<name>.tp.json` MAY say what the STEP file can't. Every 
 | `annotations` | A 2D scene's annotations (§2.6), in its plane's coordinates. |
 | `notes` | Text for the person: a key to the letters in the dimensions, what changed since the last version. One text with line breaks, or a list of lines. Every drawing of the scene shows it, under the drawing. |
 | `views` | Named views (§2.4), each with its own `annotations` and `notes`. |
-| `axes`, `quantities`, `frames` | The scene's frames (§2.10). |
+| `sliders`, `define`, `moves` | The scene's moving parts: sliders the person moves, and formulas of them that turn and slide nodes (§2.13). |
+| `axes`, `quantities`, `frames` | The scene's frames (§2.10), for parts that change shape. |
 | `fields` | Fields on the scene (§2.11). |
 
 A malformed `.tp.json` makes the scene's views show what is wrong instead of a drawing; `tracepaper render` says the same (§4).
@@ -215,7 +216,7 @@ A slicer project is a 3MF file (`.3mf`) as OrcaSlicer or Bambu Studio saves it: 
 
 ### 2.10 Frames
 
-A scene MAY come in **frames**: the whole scene at several values of one or more **axes**, such as an insertion depth, an angle, or a design variant. Each frame is a STEP file of its own, with the whole scene in it (a bent part, not just a moved one). The person steps through them, plays them, and sees per-frame values plotted along an axis.
+A scene MAY come in **frames**: the whole scene at several values of one or more **axes**, such as an insertion depth, an angle, or a design variant. Each frame is a STEP file of its own, with the whole scene in it (a bent part, not just a moved one). Parts that only move, turning and sliding as they are, are better given as sliders and moves (§2.13): the person moves them live, on any number of sliders, without a file for each position. The person steps through them, plays them, and sees per-frame values plotted along an axis.
 
 ```json
 {
@@ -315,12 +316,48 @@ A **mark** is a line across a panel at `x`, or along it at `y`, with a `label`, 
 - **The viewer (informative)** gives each series its colour (Okabe and Ito's, which colour-blind eyes tell apart), its dashes and its markers, the same in every panel by name, so that series stay apart on a screen without colour too; and each a line in the legend under its panel, with its `summary`. Limits are dashed and red; values beyond them are ringed in red, and a curve beyond them drawn over in red. A series' tree node holds its details and its legend line, so hiding it hides those too. The pointer reads the axes' values, and the value of the nearest point of a series shown, with its spread.
 - **The sheet** a plot is drawn as is a drawing as in §2.5, with `tp:view kind="plot"`. Its `tp:view` holds a `tp:panel` for each panel: its `name`, and `x-axis` and `y-axis`, each `"<scale> <lowest> <highest> <from> <to>"`, the axis's range and where it lies on the sheet in mm, with `x-label`, `x-unit`, `y-label` and `y-unit`. Each series' group has `tp:series` (its name), `tp:panel` (its panel's index), `tp:kind`, and its numbers in `tp:xs`, `tp:ys`, `tp:low` and `tp:high`, separated by spaces, `-` for none. So a sketch file over a plot (§3), `<name>.plot.json.sketch.svg`, gives the strokes in the data's terms, and `tracepaper inspect` says so: the panel, the values along each axis, and the series nearest them.
 
+### 2.13 Moving parts
+
+A scene's parts MAY move: the `.tp.json` gives **sliders**, which the person moves, and **moves**, which turn and slide nodes of the tree by **formulas** of the sliders. The STEP file has the parts at rest, where every move is 0. The viewer works the formulas out as the slider moves and places the parts; it never checks the result. Parts go where the formulas put them, through each other or apart: making the motion right, such as working out a linkage, is the AI's.
+
+```json
+{
+  "sliders": [{"name": "opening", "unit": "°", "range": [0, 90]},
+              {"name": "handle", "unit": "°", "range": [0, 180], "start": 0}],
+  "define": {"lift": "12 * min(handle, 90) / 90"},
+  "moves": [
+    {"node": "Sash", "turn": {"axis": [0, 0, 1], "through": [2, 55, 0], "by": "opening"}},
+    {"node": "Sash / handle", "turn": {"axis": [0, -1, 0], "through": [570, 0, 395], "by": "handle"}},
+    {"node": "Sash / bolt", "slide": {"along": [0, 0, 1], "by": "lift"}}
+  ]
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `sliders` | Each with a `name` to use in formulas (letters, digits and `_`, not starting with a digit), its `range`, `[lowest, highest]`, a `unit` to show, and `start`, where it starts: 0 if that is in its range, else its lowest. |
+| `define` | Names for formulas, `{name: formula}`, each of the sliders and the names before it: for a value several moves use. |
+| `moves` | In order. Each moves `node`, a path or a plain name as in `hidden` (§2.3), with every node inside it. A `turn` is by `by` degrees about `axis` through the point `through` ([0, 0, 0] if left out), counter-clockwise looking against the axis; a `slide` is by `by` mm along `along`. Axes and points are where they are at rest, in the STEP file's coordinates. |
+
+- **Nested moves.** A node inside a moved one moves with it: its own moves come first, then those of the nodes around it. So a handle turning on a sash is given about its spindle at rest, and goes along as the sash opens. A node with several moves makes them one after another.
+- **Formulas** are numbers, the sliders' and definitions' names, `+ - * /`, `^` (power, from the right), parentheses, `pi`, and the functions `sin cos tan asin acos atan atan2(y, x) sqrt abs min max clamp(x, lo, hi) floor ceil round exp ln`. Angles are degrees, in and out: `asin(0.5)` is 30. `round` rounds halves up. A formula MAY be just a number. A move whose formula has no value at a position (`sqrt` of a negative number, a division by 0) is left out there.
+- **Frames and moves** go together: the moves move the parts of whichever frame is shown.
+
+The viewer (informative):
+
+- shows a slider for each in the panel of every view of the scene, with the value to type in; double-clicking one puts it back where it starts. All the open windows of a scene share them: moving one in the 3D view moves the parts in its drawings too, and a window opening takes the positions of one already open;
+- moves the parts in the 3D view live, as the slider moves;
+- in a section, cuts the moving parts live from the 3D view's triangles, to within their 0.05 mm, in place of their exact cut, and moves a 2D scene's parts as they are; a projection's moving parts fade. Once the sliders rest (let go, or still for a moment), the exact drawing at their positions replaces it. Annotations stay where the view gives them;
+- writes the sliders' positions into a sketch file's `tp:view` as `pose`, such as `opening=30 handle=0`, and opens a sketch with the sliders where they were.
+
+`tracepaper render scene.step#view --pose "opening=30 handle=90"` draws a view with the sliders there (the others where they start), and says what is wrong with them.
+
 ## 3. Sketch files
 
 When the person presses Save on a view, the viewer writes `<view>.sketch.svg` next to the scene: `bracket.step#section-a.sketch.svg` on a named view, `bracket.step#x=12.5.sketch.svg` on a section opened from the 3D view, `profile.step.sketch.svg` on a 2D scene, and `bracket.step.sketch.svg` over a scene's 3D view (§3.1).
 
 - **The drawing as it was on screen**, as an SVG sheet (SPEC-v0.md §2): nodes the person hid have `visibility="hidden"`, which the nodes inside them inherit, and a node they showed again inside a hidden one has `visibility="visible"`. Annotations they dragged carry new placement attributes (`tp:offset`, `tp:text-at`, `tp:angle`) and redrawn graphics. Fields are as the person showed them.
-- **What it is of.** The root gets `tp:sketch-of="<view>"` and `tp:saved="<ISO 8601 time>"`. `tp:view` in its metadata gives the drawing's plane (`origin`, `normal`, `xdir`: a point (x, y) is origin + x·xdir + y·(normal × xdir)), its `kind`, the `scene` and `view`, and the `frame` shown, as `insertion=2.5` (axes separated by spaces).
+- **What it is of.** The root gets `tp:sketch-of="<view>"` and `tp:saved="<ISO 8601 time>"`. `tp:view` in its metadata gives the drawing's plane (`origin`, `normal`, `xdir`: a point (x, y) is origin + x·xdir + y·(normal × xdir)), its `kind`, the `scene` and `view`, the `frame` shown, as `insertion=2.5` (axes separated by spaces), and for a scene with sliders, their `pose`, as `opening=30 handle=0` (§2.13).
 - **Size.** The viewer MAY enlarge `viewBox`, `width` and `height` so that ink drawn past the edge of the drawing is kept.
 - **Ink layer.** The ink is the last layer:
 
@@ -343,7 +380,7 @@ Strokes are rough by design. They show the general shape of a change and where i
 The person can also draw over a scene's 3D view, or a slicer project's. Save then writes `<name>.step.sketch.svg` (or `<name>.3mf.sketch.svg`). It is a sheet whose plane is the one the camera looked at:
 
 - **Coordinates.** Millimetres on that plane, x to the right on screen and y up. `tp:view` places them in the model as in §3: a stroke point (x, y) is the model point origin + x·xdir + y·(normal × xdir), give or take a depth along `normal`, which a drawing over a 3D view doesn't say. The plane is through the middle of the view, or, when the view looks straight at a section (Section only), the section's plane, where the depth is exact. From a standard direction the coordinates are CAD's own: from the right, x is CAD y and y is CAD z.
-- **`tp:view`** also says what was on screen: `kind="model view"`; `title`, the scene and the direction looked from; `area`, the part of the plane in view (`"x0 y0 x1 y1"`); `hidden`, the tree's nodes that were hidden (paths, separated by `; `), not counting those inside them; `shown`, nodes shown again inside a hidden one; `transparent="true"` for the transparent view; `slices`, what the slice planes left of the model, in words, such as `kept: x ≤ 412.5` or `section at x = 412.5`; and `frame`.
+- **`tp:view`** also says what was on screen: `kind="model view"`; `title`, the scene and the direction looked from; `pose`, where its sliders were (§2.13); `area`, the part of the plane in view (`"x0 y0 x1 y1"`); `hidden`, the tree's nodes that were hidden (paths, separated by `; `), not counting those inside them; `shown`, nodes shown again inside a hidden one; `transparent="true"` for the transparent view; `slices`, what the slice planes left of the model, in words, such as `kept: x ≤ 412.5` or `section at x = 412.5`; and `frame`.
 - **The View layer** holds a picture of the view as it was, an `image` covering `area`. The Sketch layer holds the ink, as in §3.
 - **The root** gets `tp:sketch-of="<name>.step"` (or `"<name>.3mf"`).
 
@@ -354,7 +391,7 @@ Ink belongs to the direction it was drawn from, so the viewer doesn't turn the v
 **Making scenes**
 
 1. Write the part of the model that matters as a STEP file into the build folder (§1), with the parts named and grouped as the person thinks of them. For a 2D view of something the model doesn't hold as faces, such as a profile, write a 2D scene (§2.2).
-2. Write the `.tp.json` beside it: where it comes from, what starts hidden, the sections and projections worth naming, and their dimensions. Which ones to show is worked out in conversation.
+2. Write the `.tp.json` beside it: where it comes from, what starts hidden, the sections and projections worth naming, and their dimensions; for parts that move, sliders and moves (§2.13). Which ones to show is worked out in conversation.
 3. Check each view with `tracepaper render build/part.step#section-a`, which draws it as the viewer does (SVG and PNG) and says what is wrong in the `.tp.json`, if anything, and each slicer project with `tracepaper render build/print/plate.3mf` (§2.9). Look at the PNG.
 
 **Acting on a sketch**
@@ -377,6 +414,7 @@ If the result isn't right, the person sketches again or says so, and the loop re
 - lets the person drag annotations' labels, and provides a pen with a few colours, on drawings and over 3D views, where the view only pans and zooms while there is ink;
 - measures on drawings: the person picks points, which snap to vertices (the ends of lines, arcs and curves), the centres of circles and arcs, points and the points annotations measure from, or else to the nearest point on a line or curve, and reads the distance between two, with Δx and Δy, and the angle at the middle one of three. The measurement is drawn over the drawing, not saved;
 - makes the annotations' text smaller or larger on drawings, through the ISO heights (*A−*, *A+*); the browser remembers it for each view, and a sketch file saved meanwhile has the annotations at that size;
+- moves a scene's parts by its sliders (§2.13), live in 3D and in sections, the same in every window of the scene;
 - steps through a scene's frames (§2.10) and shows its fields (§2.11), in the panel;
 - draws plots (§2.12), and reads their values under the pointer;
 - can take ink from a drawing tablet, such as a reMarkable 2, which the person connects and disconnects in a view's window; connecting takes the tablet from any other viewer that has it. The tablet covers the current view of the window the person used last with the mouse, fitted at one scale for both axes. A tablet with a screen shows a drawing, lined up with the pen; over a 3D view it shows only the frame of where the pen draws;

@@ -15,6 +15,7 @@ import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, 
 import { ScreenFeed, Tablet } from './pen.js';
 import { renderBlank } from './screen.js';
 import { SVG_NS, growViewBox, inkBounds, inkLayerOf, parseSvg } from './sheetdoc.js';
+import { SliderPanel } from './sliders.js';
 import { Slices } from './slices.js';
 import { flatten, hiddenAndShown, renderTree } from './tree.js';
 
@@ -37,7 +38,7 @@ const ui = {
   bar: $('tpv-bar'), ink: $('tpv-ink'), inkLayer: $('tp-sketch'), sketch: $('tpv-sketch'), swatches: $('tpv-swatches'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), save: $('tpv-save'), hint: $('tpv-hint'),
   transparent: $('tpv-transparent'), perspective: $('tpv-perspective'), drawing: $('tpv-drawing'),
-  frames: $('tpv-frames'), framesHead: $('tpv-frames-head'),
+  frames: $('tpv-frames'), framesHead: $('tpv-frames-head'), motion: $('tpv-motion'), motionHead: $('tpv-motion-head'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
 const toast = toaster(ui.toast);
@@ -466,6 +467,35 @@ async function showFrame() {
   }
 }
 
+// ---- A scene's sliders (SPEC.md §2.13): its parts moved here, live, by formulas of them.
+// The model comes at rest; each node moved is placed by its own moves, in CAD coordinates,
+// under the root that turns them into the scene's y up: a node inside a moved one moves
+// with it, as three.js places children.
+
+const sliders = new SliderPanel({ container: ui.motion, head: ui.motionHead, scene: viewName, onPose: () => applyPose() });
+const motionData = { for: null };
+
+async function loadMotion(mtime) {
+  if (!isScene || motionData.for === mtime) return;
+  motionData.for = mtime;
+  let info = {};
+  try { info = await (await fetchOk(`/api/motion/${encodeURIComponent(viewName)}`)).json(); } catch (err) { toast(err.message, true); }
+  sliders.set(info);
+}
+
+function applyPose() {
+  if (!isScene || !state.model) return;
+  const own = sliders.on ? sliders.motion.own(sliders.values) : new Map();
+  for (const node of flatten(state.tree)) {
+    const m = own.get(node.key);
+    node.obj.matrixAutoUpdate = false;
+    if (m) node.obj.matrix.set(...m);
+    else node.obj.matrix.identity();
+    node.obj.matrixWorldNeedsUpdate = true;
+  }
+  render();
+}
+
 // quiet: another frame, which says nothing.
 async function load(mtime, { quiet = false } = {}) {
   await loadFrames(mtime);
@@ -493,6 +523,8 @@ async function load(mtime, { quiet = false } = {}) {
   scene.add(state.model);
   state.tree = buildTree(gltf);
   applyTree();
+  await loadMotion(mtime);
+  applyPose();
   setTransparent(state.transparent);
   state.mtime = mtime;
   state.loads += 1;
@@ -752,7 +784,7 @@ function sketchDocument() {
     title: `${name}, ${lookName(back)}`, kind: 'model view',
     origin: vector(back.clone().multiplyScalar(inkPlanePoint(back).dot(back))), normal: vector(back), xdir: vector(right),
     area: [a.x0, a.y0, a.x1, a.y1].map((v) => fmt(v)).join(' '), hidden: hidden.length ? hidden.join('; ') : null,
-    shown: shown.length ? shown.join('; ') : null, slices: describeSlices(), frame: frames.label,
+    shown: shown.length ? shown.join('; ') : null, slices: describeSlices(), frame: frames.label, pose: sliders.label,
     transparent: state.transparent ? 'true' : null,
   });
   const layer = (id, label) => add(svg, 'g', { id, 'inkscape:groupmode': 'layer', 'inkscape:label': label, transform: 'scale(1,-1)' });
@@ -961,4 +993,4 @@ tablet.connect();
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten,
   showEdges, setTransparent, setPerspective, viewCamera, slices, ink, pen, save, undo, setDrawing, viewArea,
-  drawingView, frames };
+  drawingView, frames, sliders };

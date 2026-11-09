@@ -31,6 +31,8 @@ def main(argv=None) -> None:
                                      "a 3D scene without one is drawn isometric; or a plot, name.plot.json; or a "
                                      "slicer project, plate.3mf, whose pieces it checks against the plate")
     render.add_argument("--frame", type=int, help="draw this frame of the scene's frames (0 is the first)")
+    render.add_argument("--pose", help="where the scene's sliders are, such as \"opening=30 handle=90\"; the others "
+                                       "where they start")
     render.add_argument("--out", type=Path, help="the PNG to write (default: next to the scene, in a "
                                                  "temporary folder); the SVG goes next to it")
     look = commands.add_parser("inspect", help="report on a sketch file and render images of it")
@@ -42,7 +44,7 @@ def main(argv=None) -> None:
         serve(Path(args.path), args.port, not args.no_browser, RemarkablePen(args.tablet_host, args.rotate))
     elif args.command == "render":
         from .render import render
-        print(render(args.view, args.frame, args.out))
+        print(render(args.view, args.frame, args.out, args.pose))
     elif args.command == "inspect":
         from .report import inspect
         print(inspect(Path(args.path), args.out))

@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from . import plate, plots
+from . import motion, plate, plots
 from . import views as scenes
 from .report import _render
 
@@ -61,14 +61,15 @@ def render_plate(path: Path, out: Optional[Path] = None) -> str:
     return _write(sheet, out, lines + [f"  {line}" for line in plate.check(layout)])
 
 
-def render(target: str, frame: Optional[int] = None, out: Optional[Path] = None) -> str:
+def render(target: str, frame: Optional[int] = None, out: Optional[Path] = None, pose: Optional[str] = None) -> str:
     """Draw target ("dir/scene.step", "dir/scene.step#view", "dir/name.plot.json" or
-    "dir/plate.3mf") and return a short report."""
+    "dir/plate.3mf") and return a short report. pose: where a scene's sliders are,
+    "opening=30 handle=90", the others where they start."""
     from .server import Scenes, View
     if plots.is_plot(Path(target)) or Path(target).suffix.lower() == ".3mf":
-        if frame is not None:
+        if frame is not None or pose is not None:
             raise SystemExit(f"tracepaper: a {'plot' if plots.is_plot(Path(target)) else 'slicer project'} "
-                             "has no frames")
+                             f"has no {'frames' if frame is not None else 'sliders'}")
         return (render_plot if plots.is_plot(Path(target)) else render_plate)(Path(target), out)
     name, view = scenes.split_name(target)
     path = Path(name)
@@ -88,9 +89,15 @@ def render(target: str, frame: Optional[int] = None, out: Optional[Path] = None)
             raise ValueError(f"no view {view!r}: its named views are {names}; or x=…, y=…, z=…, "
                              f"or {', '.join(scenes.DIRECTIONS)}")
         it = View(path.name + (f"#{view}" if view else ""), "sheet", path, view)
-        scene, sheet = drawn.scene(it, frame), drawn.sheet(it, frame)
+        moving = motion.read(meta)
+        if moving is not None:
+            drawn.motion(it)  # says what is wrong with the moves, also when not posed
+        scene, sheet = drawn.scene(it, frame), drawn.sheet(it, frame, pose)
     except ValueError as err:
         raise SystemExit(f"tracepaper: {err}") from None
     out = Path(out) if out else Path(tempfile.mkdtemp(prefix="tracepaper-")) / (
         f"{path.stem}{'-' + view if view else ''}{f'-{frame}' if frame is not None else ''}.png")
-    return _write(sheet, out, [f"{sheet.view.get('title')}: {len(scene.parts())} parts, {sheet.view.get('kind')}"])
+    lines = [f"{sheet.view.get('title')}: {len(scene.parts())} parts, {sheet.view.get('kind')}"]
+    if sheet.view.get("pose"):
+        lines.append(f"  sliders: {sheet.view['pose']}")
+    return _write(sheet, out, lines)

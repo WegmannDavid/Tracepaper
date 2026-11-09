@@ -5,14 +5,17 @@ import * as A from './annotations.js';
 import { INK_COLORS, Ink, PenInput, coalesced, pxPerUnit, swatch, toLocal } from './ink.js';
 import { FieldView } from './fieldview.js';
 import { FramePanel } from './frames.js';
+import { cutPath, loadParts } from './livecut.js';
 import { Measure } from './measure.js';
+import { Motion } from './motion.js';
 import { plotOf, readout as plotReadout } from './plot.js';
 import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import * as Pen from './pen.js';
 import { renderView } from './screen.js';
+import { SliderPanel } from './sliders.js';
 import {
   SVG_NS, allNodes, buildTree, colourAt, ensureInkLayer, fontSizeOf as fontSizeIn, growViewBox, inkBounds,
-  hideByVisibility, inkLayerOf, isHidden, labelOf, parseSvg, pathOf, setHidden,
+  hideByVisibility, inkLayerOf, isHidden, isNode, labelOf, parseSvg, pathOf, setHidden,
 } from './sheetdoc.js';
 import { renderTree } from './tree.js';
 
@@ -33,6 +36,7 @@ const ui = {
   pen: $('tpv-pen'), penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), pickBox: $('tpv-pick-box'),
   frames: $('tpv-frames'), framesHead: $('tpv-frames-head'), fields: $('tpv-fields'), fieldsHead: $('tpv-fields-head'),
   textSmaller: $('tpv-text-smaller'), textLarger: $('tpv-text-larger'), textSize: $('tpv-text'),
+  motion: $('tpv-motion'), motionHead: $('tpv-motion-head'),
 };
 
 const state = {
@@ -45,8 +49,12 @@ const state = {
   picked: null,    // the last picked colour: {color, from}
   gen: 0, busy: false, offline: false,
   textStep: 0, // the dimensions' text, in steps from the drawing's own (TEXT_KEY)
-  // A scene's frames (frames.js): each one's drawing, as fetched, for the view's mtime.
-  frameTexts: new Map(), framesFor: null, frameWanted: false,
+  // A scene's frames (frames.js): each one's drawing at a pose of its sliders, as fetched,
+  // for the view's mtime, by "frame|pose".
+  frameTexts: new Map(), framesFor: null, redrawWanted: false,
+  // Its sliders (sliders.js): the pose the drawing shown is exact for, its label or null; the
+  // timer that fetches the exact one once they rest; the 3D view's parts, for live sections.
+  motionFor: null, sheetPose: null, poseTimer: null, cut: { for: null, parts: null },
 };
 
 let gesture = null;
@@ -172,14 +180,21 @@ const partKeys = () => (state.root ? allNodes(state.root).filter((g) => {
   return g !== state.ink;
 }).map((g) => pathOf(g, state.root)) : []);
 
-// The drawing of a frame of the view: fetched once for each version of the view.
-async function frameText(name, k) {
-  if (!state.frameTexts.has(k)) {
-    const text = (await fetchOk(`${api('file', name)}?frame=${k}`)).text();
-    state.frameTexts.set(k, text);
-    text.catch(() => state.frameTexts.delete(k));
+// The drawing of a frame of the view (k, or null for a scene without frames), at a pose of its
+// sliders (their label, or null): fetched once for each version of the view.
+const TEXTS_KEPT = 64;
+async function frameText(name, k, pose = posed()) {
+  const key = `${k}|${pose}`;
+  if (!state.frameTexts.has(key)) {
+    const query = new URLSearchParams();
+    if (k !== null) query.set('frame', k);
+    if (pose) query.set('pose', pose);
+    const text = (await fetchOk(`${api('file', name)}?${query}`)).text();
+    state.frameTexts.set(key, text);
+    text.catch(() => state.frameTexts.delete(key));
+    while (state.frameTexts.size > TEXTS_KEPT) state.frameTexts.delete(state.frameTexts.keys().next().value);
   }
-  return state.frameTexts.get(k);
+  return state.frameTexts.get(key);
 }
 
 // The view's frames, when it opens or its files change: then every frame's drawing, one
@@ -204,12 +219,178 @@ async function loadFrames(name, mtime, start = null) {
 }
 
 // Show the frame the panel is at, keeping the ink, the moved labels and what is hidden.
-async function showFrame() {
-  if (state.busy) { state.frameWanted = true; return; }
-  do {
-    state.frameWanted = false;
-    if (frames.index >= 0 && state.name) await openSheet(state.name, { reload: true, keep: true });
-  } while (state.frameWanted);
+function showFrame() {
+  if (frames.index >= 0) redraw();
+}
+
+// Draw the view again for the frame and the sliders where they are, keeping the ink, the moved
+// labels and what is hidden. Resolves once it shows them, however often it is asked meanwhile.
+let redrawing = null;
+function redraw() {
+  if (redrawing) { state.redrawWanted = true; return redrawing; }
+  redrawing = (async () => {
+    try {
+      do {
+        state.redrawWanted = false;
+        while (state.busy) await new Promise((r) => setTimeout(r, 30)); // a sheet opening otherwise
+        if (state.name && !(frames.on && frames.index < 0)) await openSheet(state.name, { reload: true, keep: true });
+      } while (state.redrawWanted);
+    } finally {
+      redrawing = null;
+    }
+  })();
+  return redrawing;
+}
+
+// ---- A scene's sliders (SPEC.md §2.13) ---------------------------------------------------
+// Moving one moves the scene's parts. In a section, the moving ones are cut live from the 3D
+// view's triangles (livecut.js), in place of their exact cut; a 2D scene's are moved as they
+// are; a projection's fade. The exact drawing at the sliders' positions follows from the
+// server once they rest: let go, or held still for POSE_REST_MS.
+
+const POSE_REST_MS = 300;
+const sceneOf = (name) => name.split('#')[0];
+const isSceneView = (name) => /\.(step|stp)(#|$)/i.test(name ?? '');
+const posed = () => (sliders.on ? sliders.label : null); // the pose the drawing should be exact for
+
+const sliders = new SliderPanel({ container: ui.motion, head: ui.motionHead, scene: null,
+                                  onPose: (_, settled) => onPose(settled) });
+
+async function loadMotion(name, mtime) {
+  if (state.motionFor === `${name} ${mtime}`) return;
+  state.motionFor = `${name} ${mtime}`;
+  sliders.scene = isSceneView(name) ? sceneOf(name) : null;
+  let info = {};
+  if (isSceneView(name)) {
+    try { info = await (await fetchOk(api('motion', name))).json(); } catch (err) { toast(err.message, true); }
+  }
+  sliders.set(info);
+}
+
+function onPose(settled) {
+  if (!state.root) return;
+  liveDraw();
+  clearTimeout(state.poseTimer);
+  state.poseTimer = setTimeout(redraw, settled ? 0 : POSE_REST_MS);
+}
+
+// The drawing's plane, from its tp:view: unit vectors, xdir square to the normal.
+function planeOf(view) {
+  const vec = (a) => (view.getAttribute(a) ?? '').trim().split(/[\s,]+/).map(Number);
+  const unit = (v) => { const n = Math.hypot(...v); return v.map((c) => c / n); };
+  const origin = vec('origin'), normal = unit(vec('normal')), x = vec('xdir');
+  const along = x[0] * normal[0] + x[1] * normal[1] + x[2] * normal[2];
+  return { origin, normal, xdir: unit(x.map((c, i) => c - along * normal[i])) };
+}
+
+// The 3D view's parts of the scene the drawing is of, at its frame (livecut.js), or null.
+function cutParts() {
+  const scene = sceneOf(state.name), k = frames.on ? Math.max(0, frames.index) : null;
+  const key = `${scene} ${state.sheetMtime} ${k}`;
+  if (state.cut.for !== key) {
+    const url = `${api('file', scene)}${k === null ? '' : `?frame=${k}`}`;
+    state.cut = { for: key, parts: loadParts(url).catch((err) => { toast(`Can't cut live: ${err.message}`, true); return null; }) };
+  }
+  return state.cut.parts;
+}
+
+// Undo what liveDraw did to the drawing.
+function clearLive(root) {
+  for (const el of root.querySelectorAll('.tpv-live')) el.remove();
+  for (const el of root.querySelectorAll('.tpv-live-off, .tpv-stale')) el.classList.remove('tpv-live-off', 'tpv-stale');
+  for (const g of root.querySelectorAll('[data-rest-transform]')) {
+    const rest = g.getAttribute('data-rest-transform');
+    if (rest) g.setAttribute('transform', rest);
+    else g.removeAttribute('transform');
+    g.removeAttribute('data-rest-transform');
+  }
+}
+
+const mix = (rgb, white) => `#${rgb.map((c) => Math.round(c * 255 * (1 - white) + 255 * white).toString(16).padStart(2, '0')).join('')}`;
+const TINT = 0.55; // of white in a part's colour, as drawing.py tints its regions
+
+// Draw the moving parts where the sliders put them, until the exact drawing comes.
+async function liveDraw() {
+  const root = state.root;
+  if (!root || !sliders.on) return;
+  clearLive(root);
+  const label = sliders.label;
+  if (label === state.sheetPose) return;
+  const view = root.getElementsByTagNameNS(A.TP_NS, 'view')[0];
+  if (!view) return;
+  const kind = view.getAttribute('kind'), own = sliders.motion.own(sliders.values);
+  const groups = new Map(allNodes(root).map((g) => [pathOf(g, root), g]));
+  const drawing = (g) => [...g.children].filter((c) => !isNode(c) && !c.classList.contains('tpv-live')); // its own
+  if (kind === '2D') { // in the plane: moved as they are, each node by its own moves, inside those around it
+    const { origin: o, normal, xdir: x } = planeOf(view);
+    const y = [normal[1] * x[2] - normal[2] * x[1], normal[2] * x[0] - normal[0] * x[2], normal[0] * x[1] - normal[1] * x[0]];
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    for (const [key, m] of own) {
+      const g = groups.get(key);
+      if (!g) continue;
+      const R = (v) => [0, 1, 2].map((r) => m[4 * r] * v[0] + m[4 * r + 1] * v[1] + m[4 * r + 2] * v[2]);
+      const shift = R(o).map((c, i) => c + m[4 * i + 3] - o[i]), rx = R(x), ry = R(y);
+      const affine = [dot(x, rx), dot(y, rx), dot(x, ry), dot(y, ry), dot(x, shift), dot(y, shift)].map((v) => A.fmt(v, 6));
+      g.setAttribute('data-rest-transform', g.getAttribute('transform') ?? '');
+      g.setAttribute('transform', `${g.getAttribute('transform') ?? ''} matrix(${affine.join(' ')})`.trim());
+    }
+    return;
+  }
+  const moving = [...groups.keys()].filter((key) => sliders.motion.moved(key));
+  if (kind !== 'section') { // a projection: exact once the sliders rest
+    for (const key of moving) groups.get(key).classList.add('tpv-stale');
+    return;
+  }
+  const parts = await cutParts();
+  if (state.root !== root || !parts || sliders.label !== label) return; // a newer one draws
+  const plane = planeOf(view);
+  let layer = null;
+  for (const [key, part] of parts) {
+    if (!sliders.motion.moved(key)) continue;
+    const g = groups.get(key);
+    if (g) for (const c of drawing(g)) c.classList.add('tpv-live-off');
+    const d = cutPath(part, Motion.world(own, key), plane);
+    if (!d || (!g && state.layerVis.get(key) === false)) continue;
+    if (!g && !layer) layer = liveLayer(root);
+    const cut = document.createElementNS(SVG_NS, 'g');
+    cut.setAttribute('class', 'tpv-live');
+    cut.setAttribute('data-live', key);
+    const fill = g?.querySelector(':scope > path[id*="-cut-"]')?.getAttribute('fill') ?? liveHatch(root);
+    for (const attrs of [{ d, stroke: 'none', fill: mix(part.color, TINT), 'fill-rule': 'evenodd' },
+                         { d, fill, 'fill-rule': 'evenodd', 'vector-effect': 'non-scaling-stroke' }]) {
+      const path = document.createElementNS(SVG_NS, 'path');
+      for (const [k, v] of Object.entries(attrs)) path.setAttribute(k, v);
+      cut.append(path);
+    }
+    (g ?? layer).append(cut);
+  }
+}
+
+// Where live sections of parts the exact drawing has no group for go: a layer of the
+// viewer's own under the annotations, which the tree doesn't list.
+function liveLayer(root) {
+  let layer = root.querySelector(':scope > g.tpv-live');
+  if (!layer) {
+    layer = document.createElementNS(SVG_NS, 'g');
+    layer.setAttribute('class', 'tpv-live');
+    for (const [k, v] of Object.entries({ transform: 'scale(1,-1)', stroke: '#1a1a1a', 'stroke-width': '1.5',
+                                          fill: 'none', 'stroke-linejoin': 'round' })) layer.setAttribute(k, v);
+    const above = [...root.children].find((c) => c.getAttributeNS?.(A.TP_NS, 'role') || c === state.ink);
+    root.insertBefore(layer, above ?? null);
+  }
+  return layer;
+}
+
+// A hatching for live sections, as the drawing's own: at 45°, as far apart as its text sizes it.
+function liveHatch(root) {
+  if (!root.querySelector('#tpv-live-hatch')) {
+    const s = A.fmt(fontSizeIn(root, root) * 0.6);
+    const defs = root.querySelector(':scope > defs') ?? root.insertBefore(document.createElementNS(SVG_NS, 'defs'), root.firstChild);
+    defs.insertAdjacentHTML('beforeend', `<pattern xmlns="${SVG_NS}" id="tpv-live-hatch" patternUnits="userSpaceOnUse" `
+      + `width="${s}" height="${s}" patternTransform="rotate(45)"><path d="M${A.fmt(s / 2)} 0 V${s}" stroke="#1a1a1a" `
+      + 'stroke-width="0.75" vector-effect="non-scaling-stroke"/></pattern>');
+  }
+  return 'url(#tpv-live-hatch)';
 }
 
 // Every frame along the first axis, the others where they are, faint behind this one: what
@@ -277,13 +458,23 @@ async function openSheet(name, { reload = false, keep = false } = {}) {
     if (sketchMtime && !carry) sketch = await fetchOk(api('sketch', name)).then((r) => r.text(), () => null);
     const fresh = sketch && BigInt(sketchMtime) >= BigInt(info.mtime); // still what was on screen
     if (!keep) await loadFrames(name, info.mtime, fresh ? sketchFrame(sketch) : null);
-    let base = frames.on ? await frameText(name, Math.max(0, frames.index))
-      : await (await fetchOk(api('file', name))).text();
+    await loadMotion(name, info.mtime);
+    const drawnAt = fresh ? sketchPose(sketch) : null; // the sliders where the person sketched
+    if (drawnAt) sliders.adopt(drawnAt);
+    const pose = posed(), k = frames.on ? Math.max(0, frames.index) : null;
+    let base = k !== null || pose ? await frameText(name, k, pose) : await (await fetchOk(api('file', name))).text();
     let inkFrom = null;
     if (fresh) base = sketch;
     else if (sketch) inkFrom = sketch; // the sheet changed since: show it, with the unhandled ink on top
     const root = parseSvg(base);
+    const was = reload && state.root ? state.root.viewBox.baseVal : null;
+    const wasAt = was && { x: was.x, y: was.y };
     mount(root);
+    if (wasAt) { // the same model point where it was on screen, though the drawing's extent changed
+      const vb = root.viewBox.baseVal, k = state.cam.s * root.width.baseVal.value / vb.width;
+      state.cam = { ...state.cam, x: state.cam.x + (vb.x - wasAt.x) * k, y: state.cam.y + (vb.y - wasAt.y) * k };
+      applyCamera();
+    }
     if (inkFrom) {
       try {
         const old = inkLayerOf(parseSvg(inkFrom));
@@ -306,7 +497,7 @@ async function openSheet(name, { reload = false, keep = false } = {}) {
       const visible = state.layerVis.get(pathOf(g, root));
       if (visible !== undefined) setHidden(g, !visible);
     }
-    Object.assign(state, { name, sheetMtime: info.mtime, sketchMtime });
+    Object.assign(state, { name, sheetMtime: info.mtime, sketchMtime, sheetPose: pose });
     document.title = `${name} · Tracepaper`;
     if (viewInUrl() !== name) history.replaceState(null, '', viewUrl(name));
     fieldView.attach(root);
@@ -315,6 +506,7 @@ async function openSheet(name, { reload = false, keep = false } = {}) {
     if (!reload) fit();
     updateStatus();
     drawTrail();
+    if (posed() !== pose) liveDraw(); // the sliders moved on meanwhile
     resolveReady();
   } catch (err) {
     toast(`Could not open ${name}: ${err.message}`, true);
@@ -326,6 +518,13 @@ async function openSheet(name, { reload = false, keep = false } = {}) {
     state.busy = false;
     state.gen++;
   }
+}
+
+// Where a sketch file's scene had its sliders, {name: value}, or null.
+function sketchPose(text) {
+  const label = /<tp:view\b[^>]*\spose="([^"]*)"/.exec(text)?.[1];
+  if (!label) return null;
+  return Object.fromEntries(label.split(' ').map((kv) => kv.split('=')).map(([k, v]) => [k, Number(v)]));
 }
 
 // The frame a sketch file was saved at: its index in the panel's frames, or null.
@@ -710,6 +909,10 @@ function sheetCopy() {
 
 async function save() {
   if (!state.root || state.busy) return;
+  if (posed() !== state.sheetPose) { // the exact drawing at the sliders, not the live one
+    clearTimeout(state.poseTimer);
+    await redraw();
+  }
   const name = state.name;
   const copy = sheetCopy();
   copy.setAttributeNS(A.TP_NS, 'tp:sketch-of', name.split('/').pop()); // next to it
@@ -923,4 +1126,4 @@ tablet.connect();
 
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper = { state, ready, A, Pen, pen, tablet, CLIENT, fontSizeOf, setTool, setColor, setLayerVisible, save, undo, fit,
-  renderScreen, frames, fieldView, measure };
+  renderScreen, frames, fieldView, measure, sliders };

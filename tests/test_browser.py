@@ -1367,6 +1367,124 @@ class ViewerInFirefox(unittest.TestCase):
         finally:
             shutil.rmtree(scenes)
 
+    @unittest.skipUnless(HAVE_OCP, "needs OCP")
+    def test_sliders(self):
+        moving = self.dir / "moving"
+        moving.mkdir()
+        for name in ("sash.step", "sash.tp.json", "profile.step", "profile.stress.vtu"):
+            shutil.copy(GEOMETRY / name, moving / name)
+        meta = json.loads((GEOMETRY / "profile.tp.json").read_text())
+        meta.update({"sliders": [{"name": "shift", "unit": "mm", "range": [0, 20]}],
+                     "moves": [{"node": "pin", "slide": {"along": [1, 0, 0], "by": "shift"}}]})
+        (moving / "profile.tp.json").write_text(json.dumps(meta))
+        base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        try:
+            # In the 3D view, a slider for each, moving the parts live: the sash about its hinge, the
+            # bolt up as the handle turns.
+            self.m.call("WebDriver:Navigate", {"url": f"{base}/view/{quote('moving/sash.step')}"})
+            got = self.m.run("""
+                until(() => window.tracepaper3d?.state.model && window.tracepaper3d.sliders.on && window.tracepaper3d, (t) => {
+                  const box = (key) => {  // of its faces, not its slice planes' meshes
+                    t.state.model.updateMatrixWorld(true);
+                    const b = new t.THREE.Box3();
+                    t.flatten(t.state.tree).find((n) => n.key === key).obj.traverse((o) => {
+                      if (!o.isMesh || o.userData.slice || !o.layers.isEnabled(0) || !o.geometry.attributes.position) return;
+                      o.geometry.computeBoundingBox();
+                      b.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));
+                    });
+                    return [b.min.x, -b.max.z, b.min.y, b.max.x, -b.min.z, b.max.y].map((v) => Math.round(v)); // CAD's
+                  };
+                  const out = { sliders: [...document.querySelectorAll('#tpv-motion .tpv-slider')].map((r) => r.dataset.slider),
+                                rest: box('Sash / profile') };
+                  t.sliders.setValues({ opening: 90 });
+                  out.open = box('Sash / profile');
+                  t.sliders.setValues({ opening: 0, handle: 90 });
+                  out.bolt = box('Sash / bolt');
+                  out.label = t.sliders.label;
+                  done(out);
+                });
+            """)
+            self.assertEqual(got["sliders"], ["opening", "handle"])
+            self.assertEqual(got["rest"], [2, 5, 2, 598, 55, 798])
+            self.assertEqual(got["open"], [2, 55, 2, 52, 651, 798])  # turned a quarter about (2, 55)
+            self.assertEqual(got["bolt"], [590, 20, 612, 598, 40, 652])  # 12 mm up
+            self.assertEqual(got["label"], "opening=0 handle=90")
+
+            # The formulas work out here as in Python: tests/formulas.json.
+            cases = (Path(__file__).resolve().parent / "formulas.json").read_text()
+            bad = self.m.run(f"""
+                import('/viewer/motion.js').then((M) => {{
+                  const cases = {cases}, bad = [];
+                  for (const [text, values, want] of cases.values) {{
+                    const v = M.evaluate(M.parse(text), values), got = Number.isFinite(v) ? v : null;
+                    if ((got === null) !== (want === null)
+                        || (want !== null && Math.abs(got - want) > 1e-9 * Math.max(1, Math.abs(want)))) bad.push([text, got, want]);
+                  }}
+                  for (const [text, want] of cases.errors) {{
+                    try {{ M.parse(text); bad.push([text, 'no error']); }} catch (e) {{ if (!e.message.includes(want)) bad.push([text, e.message]); }}
+                  }}
+                  done(bad);
+                }});
+            """)
+            self.assertEqual(bad, [])
+
+            # The plan, with the sliders where they start: no other window of the scene is open to say
+            # where they are. While one moves, the moving parts are cut live from the 3D view's
+            # triangles; once it rests, the exact drawing comes.
+            self.open_viewer("moving/sash.step#plan")
+            got = self.m.run("""
+                until(() => tp.sliders.on && tp.state.sheetPose === 'opening=0 handle=0', () => {
+                  const groups = () => Object.fromEntries(tp.state.root.querySelectorAll('g').values()
+                    .filter((g) => g.getAttributeNS('http://www.inkscape.org/namespaces/inkscape', 'label'))
+                    .map((g) => [g.getAttributeNS('http://www.inkscape.org/namespaces/inkscape', 'label'), g]));
+                  tp.sliders.setValues({ opening: 60 }, false);  // dragging
+                  until(() => tp.state.root.querySelector('.tpv-live path'), () => {
+                    const profile = groups().profile, live = profile.querySelector('.tpv-live path:last-child');
+                    const liveBox = live.getBBox();
+                    const out = { hidden: [...profile.querySelectorAll(':scope > path')].every((p) => p.classList.contains('tpv-live-off')),
+                                  frameLive: !!groups().frame.querySelector('.tpv-live'), pose: tp.state.sheetPose };
+                    until(() => tp.state.sheetPose === 'opening=60 handle=0', () => {
+                      const cuts = [...groups().profile.querySelectorAll(':scope > path[id*="-cut-"]')].map((c) => c.getBBox());
+                      const exact = { x: Math.min(...cuts.map((b) => b.x)), y: Math.min(...cuts.map((b) => b.y)) };  // both stiles
+                      exact.width = Math.max(...cuts.map((b) => b.x + b.width)) - exact.x;
+                      exact.height = Math.max(...cuts.map((b) => b.y + b.height)) - exact.y;
+                      out.off = Math.max(...['x', 'y', 'width', 'height'].map((k) => Math.abs(exact[k] - liveBox[k])));
+                      out.left = tp.state.root.querySelectorAll('.tpv-live, .tpv-live-off').length;
+                      out.view = tp.state.root.querySelector('metadata').innerHTML.match(/pose="([^"]*)"/)[1];
+                      // Another window moving the sliders moves them here too.
+                      new BroadcastChannel('tracepaper-motion').postMessage(
+                        { scene: 'moving/sash.step', values: { opening: 30, handle: 0 }, settled: true });
+                      until(() => tp.state.sheetPose === 'opening=30 handle=0', () => {
+                        out.heard = tp.sliders.values;
+                        stroke([[100, 100], [140, 120]]);
+                        tp.save().then(() => done(out));
+                      });
+                    });
+                  });
+                });
+            """)
+            self.assertEqual((got["hidden"], got["frameLive"], got["pose"]), (True, False, "opening=0 handle=0"))
+            self.assertLess(got["off"], 0.2)  # the live section, to within the 3D view's triangles
+            self.assertEqual((got["left"], got["view"]), (0, "opening=60 handle=0"))
+            self.assertEqual(got["heard"], {"opening": 30, "handle": 0})
+            view = ET.parse(moving / "sash.step#plan.sketch.svg").getroot().find(f"{SVG}metadata/{TP}view")
+            self.assertEqual(view.get("pose"), "opening=30 handle=0")
+
+            # A 2D scene's parts move in the drawing as they are.
+            self.open_viewer("moving/profile.step")
+            moved = self.m.run("""
+                until(() => tp.sliders.on, () => {
+                  tp.sliders.setValues({ shift: 10 }, false);
+                  const pin = [...tp.state.root.querySelectorAll('g')].find((g) => g.getAttributeNS(
+                    'http://www.inkscape.org/namespaces/inkscape', 'label') === 'pin');
+                  done(pin.getAttribute('transform'));
+                });
+            """)
+            self.assertEqual(moved, "scale(1,-1) matrix(1 0 0 1 10 0)")
+        finally:
+            self.m.run("for (const t of [window.tracepaper, window.tracepaper3d]) if (t) t.state.dirty = false; done();")
+            shutil.rmtree(moving)
+
     def test_fields_arrows_and_mesh(self):
         scenes = self.dir / "fields"
         shutil.copytree(GEOMETRY, scenes, ignore=shutil.ignore_patterns("*.py", "*.sketch.svg"))
