@@ -12,7 +12,10 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shutil
 import signal
+import subprocess
+import sys
 import tempfile
 import threading
 import uuid
@@ -613,11 +616,26 @@ def make_server(target: Path, port: int = 0, pen=None) -> ViewerServer:
         return ViewerServer(("127.0.0.1", 0), directory, initial, pen)
 
 
+def open_page(url: str) -> None:
+    """Open url in the person's browser, in a tab of the one running if there is one, keeping
+    what the browser writes (such as Chromium's "zygote ... Broken pipe") out of the viewer's
+    output. $BROWSER, or outside Linux, as Python's webbrowser does."""
+    opener = shutil.which("xdg-open") if sys.platform.startswith("linux") and not os.environ.get("BROWSER") else None
+    if opener:
+        try:
+            subprocess.Popen([opener, url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+            return
+        except OSError:
+            pass
+    threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
+
+
 def serve(target: Path, port: int, open_browser: bool, pen=None) -> None:
     server = make_server(target, port, pen)
     print(f"Tracepaper: {server.directory}\n  {server.url}  (Ctrl+C to stop)", flush=True)
     if open_browser:
-        threading.Thread(target=webbrowser.open, args=(server.url,), daemon=True).start()
+        open_page(server.url)
     signal.signal(signal.SIGTERM, signal.default_int_handler)  # stop the same way when killed
     try:
         server.serve_forever()

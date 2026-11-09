@@ -1,4 +1,5 @@
-"""Slicer projects as models for the 3D view (SPEC.md §2.9): ``to_glb(path)``.
+"""Slicer projects as models for the 3D view (SPEC.md §2.9): ``to_glb(path)``, and seen
+from above, to check one without a browser: ``draw(read(path), name)``, ``check(read(path))``.
 
 OrcaSlicer and Bambu Studio save a project as a 3MF file: the pieces' meshes where
 the slicer put them, and under Metadata/ the printer's settings and each piece's name
@@ -11,14 +12,17 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sys
 import xml.etree.ElementTree as ET
 import zipfile
 from array import array
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional, Union
 
 from .model import glb_bytes
+from .sheet import Sheet, fmt, font_size
 
 CORE = "{http://schemas.microsoft.com/3dmanufacturing/core/2015/02}"
 PRODUCTION = "{http://schemas.microsoft.com/3dmanufacturing/production/2015/06}"
@@ -35,41 +39,88 @@ FOLD = math.cos(math.radians(25))  # triangles folding sharper than the 3D view'
 NOT_PRINTED = {"modifier_part", "negative_part", "support_blocker", "support_enforcer"}
 MESH_SUFFIXES = (".stl", ".obj", ".step", ".stp", ".3mf", ".amf")
 IDENTITY = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+UP = 1e-6  # a triangle faces up, seen from above, if its normal's z is more than this
+PLATE_FILL = "#eef0f2"  # the plate seen from above
+SLACK = 0.01  # mm: how far a piece may reach past where it must stay
 
 
 def to_glb(path: Union[str, Path]) -> bytes:
     """The .glb file showing the 3MF file at path. Raises ValueError if it can't be read."""
+    layout = read(path)
+    glb = _Glb()
+    for plate in layout.plates:
+        x0, y0, x1, y1 = plate.area
+        parts = [(_box(x0, y0, -BED, x1, y1, 0), COLORS["bed"])]
+        if plate.excluded:
+            ex0, ey0, ex1, ey1 = plate.excluded
+            parts.append((_box(ex0, ey0, 0, ex1, ey1, EXCLUDED), COLORS["excluded"]))
+        glb.node(plate.name, [f for mesh, colour in parts for f in glb.faces(*mesh, glb.material(colour))])
+    for piece in layout.pieces:
+        glb.node(piece.name, [f for positions, indices, colour in piece.meshes
+                              for f in glb.faces(positions, indices, glb.material(colour))])
+    if layout.plates and layout.height:
+        volumes = [_box(*p.area[:2], 0, *p.area[2:], layout.height) for p in layout.plates]
+        glb.node("Build volume", [f for mesh in volumes
+                                  for f in glb.faces(*mesh, glb.material(COLORS["volume"], VOLUME_OPACITY))],
+                 hidden=True)
+    return glb.bytes()
+
+
+@dataclass
+class Plate:
+    """A plate, where the slicer shows it: its printable area (x0, y0, x1, y1), mm, and the
+    part of it the printer keeps for itself, or None."""
+    name: str
+    area: tuple
+    excluded: Optional[tuple]
+
+
+@dataclass
+class Piece:
+    """A piece where the slicer put it: its printed meshes, [(positions, indices, colour)],
+    positions in mm, three to a vertex, and indices three to a triangle."""
+    name: str
+    meshes: list
+
+
+@dataclass
+class Layout:
+    """A slicer project: its plates, side by side as the slicer shows them (none for a 3MF
+    file without a printer's settings), the printable height, if it says, and the pieces."""
+    plates: list
+    height: Optional[float]
+    pieces: list
+
+
+def read(path: Union[str, Path]) -> Layout:
+    """The slicer project at path. Raises ValueError if it can't be read."""
     try:
         with zipfile.ZipFile(path) as zf:
-            return _convert(zf)
+            return _layout(zf)
     except (zipfile.BadZipFile, KeyError, ET.ParseError, TypeError) as e:
         raise ValueError(f"{Path(path).name} is not a 3MF file this viewer can read: {e}") from e
 
 
-def _convert(zf: zipfile.ZipFile) -> bytes:
+def _layout(zf: zipfile.ZipFile) -> Layout:
     package = _Package(zf)
     settings = _json(zf, "Metadata/project_settings.config")
-    objects, plates = _slicer_objects(zf)
+    objects, count = _slicer_objects(zf)
     colours = settings.get("filament_colour") or []
-    glb = _Glb()
+    plates, height = [], None
 
     bed = _bounds(_points(settings.get("printable_area")))
     if bed:
         excluded = _bounds(_points(settings.get("bed_exclude_area")))
         height = _number(settings.get("printable_height"))
         x0, y0, x1, y1 = bed
-        cols = _columns(plates)
-        offsets = [((i % cols) * (x1 - x0) * (1 + PLATE_GAP), -(i // cols) * (y1 - y0) * (1 + PLATE_GAP))
-                   for i in range(plates)]
-        for i, (dx, dy) in enumerate(offsets):
-            parts = [(_box(x0 + dx, y0 + dy, -BED, x1 + dx, y1 + dy, 0), COLORS["bed"])]
-            if excluded:
-                ex0, ey0, ex1, ey1 = excluded
-                parts.append((_box(ex0 + dx, ey0 + dy, 0, ex1 + dx, ey1 + dy, EXCLUDED), COLORS["excluded"]))
-            glb.node("Plate" if plates == 1 else f"Plate {i + 1}",
-                     [f for mesh, colour in parts for f in glb.faces(*mesh, glb.material(colour))])
+        cols = _columns(count)
+        for i in range(count):
+            dx, dy = (i % cols) * (x1 - x0) * (1 + PLATE_GAP), -(i // cols) * (y1 - y0) * (1 + PLATE_GAP)
+            plates.append(Plate("Plate" if count == 1 else f"Plate {i + 1}", (x0 + dx, y0 + dy, x1 + dx, y1 + dy),
+                                (excluded[0] + dx, excluded[1] + dy, excluded[2] + dx, excluded[3] + dy)
+                                if excluded else None))
 
-    names = {}
+    pieces, names = [], {}
     root, _, scale = package.model(package.start)
     for item in root.iterfind(f"{CORE}build/{CORE}item"):
         oid = item.get("objectid")
@@ -81,23 +132,171 @@ def _convert(zf: zipfile.ZipFile) -> bytes:
         names[name] = names.get(name, 0) + 1
         if names[name] > 1:
             name = f"{name} ({names[name]})"
-        primitives = []
+        meshes = []
         for part_id, positions, indices in package.meshes(package.start, oid, _transform(item.get("transform"), scale)):
             part = about.get("parts", {}).get(part_id, {})
             if part.get("subtype") in NOT_PRINTED or not indices:
                 continue
             extruder = int(part.get("extruder") or about.get("extruder") or 1)
-            colour = colours[extruder - 1] if 0 < extruder <= len(colours) else COLORS["piece"]
-            primitives += glb.faces(positions, indices, glb.material(colour))
-        if primitives:
-            glb.node(name, primitives)
+            meshes.append((positions, indices, colours[extruder - 1] if 0 < extruder <= len(colours)
+                           else COLORS["piece"]))
+        if meshes:
+            pieces.append(Piece(name, meshes))
+    return Layout(plates, height, pieces)
 
-    if bed and height:
-        volumes = [_box(x0 + dx, y0 + dy, 0, x1 + dx, y1 + dy, height) for dx, dy in offsets]
-        glb.node("Build volume", [f for mesh in volumes
-                                  for f in glb.faces(*mesh, glb.material(COLORS["volume"], VOLUME_OPACITY))],
-                 hidden=True)
-    return glb.bytes()
+
+# ---- Seen from above: tracepaper render's drawing, and what it says is wrong ------------
+
+def draw(layout: Layout, name: str) -> Sheet:
+    """A slicer project, the file name, seen from above, as a sheet: each plate, with the part
+    the printer keeps for itself in orange, and the pieces on it filled in their filaments'
+    colours (what of them faces up), with their outlines and folds, and their names."""
+    tops = {piece.name: _tops(piece) for piece in layout.pieces}
+    corners = [c for p in layout.plates for c in (p.area[:2], p.area[2:])] + [
+        c for t in tops.values() if t.box for c in (t.box[:2], t.box[2:])]
+    xs, ys = [c[0] for c in corners] or [0, 100], [c[1] for c in corners] or [0, 100]
+    fs = font_size(max(max(xs) - min(xs), max(ys) - min(ys)))
+    sheet = Sheet(f"{name}, from above", kind="plate", origin=(0, 0, 0), normal=(0, 0, 1),
+                  xdir=(1, 0, 0), font_size=fs, margin=3 * fs)
+    sheet._grow(zip(xs, ys))
+    for plate in layout.plates:
+        layer = sheet.layer(plate.name, style={"stroke": COLORS["bed"], "fill": "none"})
+        x0, y0, x1, y1 = plate.area
+        layer.polyline(f"{_slug(plate.name)}-area", [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], closed=True,
+                       fill=PLATE_FILL)
+        if plate.excluded:
+            ex0, ey0, ex1, ey1 = plate.excluded
+            layer.polyline(f"{_slug(plate.name)}-excluded", [(ex0, ey0), (ex1, ey0), (ex1, ey1), (ex0, ey1)],
+                           closed=True, fill=COLORS["excluded"], fill_opacity="0.6", stroke=COLORS["excluded"])
+        if len(layout.plates) > 1:
+            layer.text(f"{_slug(plate.name)}-name", (x0, y1 + fs * 0.6), plate.name, fill=COLORS["bed"],
+                       stroke="none")
+    for piece in layout.pieces:
+        top, slug = tops[piece.name], _slug(piece.name)
+        layer = sheet.layer(piece.name, style={"stroke": "#1a1a1a", "fill": "none"})
+        for k, (colour, triangles) in enumerate(top.fills):
+            d = " ".join(f"M{_xy(a)} L{_xy(b)} L{_xy(c)} Z" for a, b, c in triangles)
+            # Each triangle's own outline too, in its colour: else hairline gaps show between them.
+            layer.path(f"{slug}-top-{k + 1}", d, fill=colour, stroke=colour, stroke_width="0.5",
+                       stroke_linejoin="round")
+        if top.lines:
+            layer.path(f"{slug}-lines", " ".join(f"M{_xy(a)} L{_xy(b)}" for a, b in top.lines),
+                       stroke_width="1.5", stroke_linecap="round")
+        if top.box:
+            x0, y0, x1, y1 = top.box
+            layer.text(f"{slug}-name", ((x0 + x1) / 2, (y0 + y1) / 2 - fs * 0.35), piece.name, anchor="middle",
+                       fill="#1a1a1a", stroke="#ffffff", stroke_width=fmt(fs * 0.25), stroke_linejoin="round",
+                       paint_order="stroke")  # a halo, in mm: text has no non-scaling stroke
+    return sheet
+
+
+def check(layout: Layout) -> list:
+    """What tracepaper render says about each piece of a slicer project: how big it is, which
+    plate it is on, and what is wrong: off its plate, over the part the printer keeps for
+    itself, or taller than the printer prints. [line]"""
+    out = []
+    for piece in layout.pieces:
+        top = _tops(piece)
+        if not top.box:
+            continue
+        x0, y0, x1, y1 = top.box
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        plate = next((p for p in layout.plates if p.area[0] <= cx <= p.area[2] and p.area[1] <= cy <= p.area[3]),
+                     None)
+        line = f"{piece.name}: {_mm(x1 - x0)} × {_mm(y1 - y0)} mm, {_mm(top.high)} mm high"
+        wrong = []
+        if layout.plates:
+            line += f", on {plate.name}" if plate else ""
+            a = plate.area if plate else None
+            if a is None or x0 < a[0] - SLACK or y0 < a[1] - SLACK or x1 > a[2] + SLACK or y1 > a[3] + SLACK:
+                wrong.append("off the plate's printable area")
+            if plate and plate.excluded and any(_overlaps(t, plate.excluded)
+                                                for _, triangles in top.fills for t in triangles):
+                wrong.append("over the part of the plate the printer keeps for itself")
+        if layout.height and top.high > layout.height + SLACK:
+            wrong.append(f"taller than the printer prints, {_mm(layout.height)} mm")
+        out.append(line + "".join(f"; {w}" for w in wrong))
+    return out
+
+
+@dataclass
+class _Top:
+    """A piece seen from above: its triangles that face up, by colour, [(colour, [(a, b, c)])]
+    with (x, y) corners; the lines to draw over them, [(a, b)]: their outlines and folds; its
+    extent (x0, y0, x1, y1) or None; and how high it reaches, mm."""
+    fills: list
+    lines: list
+    box: Optional[tuple]
+    high: float
+
+
+def _tops(piece: Piece) -> _Top:
+    fills, lines, xs, ys, high = [], [], [], [], 0.0
+    for positions, indices, colour in piece.meshes:
+        xs += positions[0::3]
+        ys += positions[1::3]
+        high = max(high, max(positions[2::3], default=0.0))
+        places = {}  # triangles meet where they share a vertex, even as copies
+        place = [places.setdefault((positions[k], positions[k + 1], positions[k + 2]), len(places))
+                 for k in range(0, len(positions), 3)]
+        up, normals, edges = [], {}, {}
+        for t in range(len(indices) // 3):
+            a, b, c = (indices[3 * t + k] for k in range(3))
+            pa, pb, pc = (positions[3 * v: 3 * v + 3] for v in (a, b, c))
+            ux, uy, uz = pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]
+            vx, vy, vz = pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]
+            n = (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
+            length = math.sqrt(n[0] ** 2 + n[1] ** 2 + n[2] ** 2)
+            if length == 0 or n[2] <= UP * length:
+                continue  # on edge or facing down: not seen from above
+            normals[t] = (n[0] / length, n[1] / length, n[2] / length)
+            up.append(((pa[0], pa[1]), (pb[0], pb[1]), (pc[0], pc[1])))
+            for p, q, pp, qq in ((a, b, pa, pb), (b, c, pb, pc), (c, a, pc, pa)):
+                key = (min(place[p], place[q]), max(place[p], place[q]))
+                edges.setdefault(key, []).append((t, (pp[0], pp[1]), (qq[0], qq[1])))
+        fills.append((colour, up))
+        for found in edges.values():
+            # An outline where only one triangle facing up meets the edge; a fold where two do
+            # at an angle sharper than the 3D view's.
+            if len(found) == 1 or (len(found) == 2 and _dot(normals[found[0][0]], normals[found[1][0]]) < FOLD):
+                lines.append(found[0][1:])
+    box = (min(xs), min(ys), max(xs), max(ys)) if xs else None
+    return _Top(fills, lines, box, high)
+
+
+def _dot(n, m) -> float:
+    return n[0] * m[0] + n[1] * m[1] + n[2] * m[2]
+
+
+def _overlaps(triangle, box) -> bool:
+    """Whether a triangle [(x, y)] and a box (x0, y0, x1, y1) overlap by an area: they do unless
+    one of the box's sides or the triangle's has them on either side of it."""
+    x0, y0, x1, y1 = box
+    xs, ys = [p[0] for p in triangle], [p[1] for p in triangle]
+    if max(xs) <= x0 or min(xs) >= x1 or max(ys) <= y0 or min(ys) >= y1:
+        return False
+    corners = ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+    for i in range(3):
+        (ax, ay), (bx, by), (cx, cy) = triangle[i], triangle[(i + 1) % 3], triangle[(i + 2) % 3]
+        nx, ny = by - ay, ax - bx
+        side = nx * (cx - ax) + ny * (cy - ay)
+        if side == 0:
+            continue
+        if all((nx * (px - ax) + ny * (py - ay)) * side <= 0 for px, py in corners):
+            return False
+    return True
+
+
+def _xy(p) -> str:
+    return f"{fmt(p[0], 3)} {fmt(p[1], 3)}"
+
+
+def _mm(v: float) -> str:
+    return fmt(v, 1)
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "piece"
 
 
 class _Package:

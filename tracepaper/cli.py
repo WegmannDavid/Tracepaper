@@ -24,11 +24,12 @@ def main(argv=None) -> None:
                       help="how the tablet is held, in degrees clockwise from upright: "
                            "90 (the default) is landscape with the power button on the right, 270 on the left")
     render = commands.add_parser(
-        "render", help="draw a view of a scene (a .step file) or a plot (.plot.json) as the viewer does, to check "
-                       "it: an SVG and a PNG")
+        "render", help="draw a view of a scene (a .step file) or a plot (.plot.json) as the viewer does, or a "
+                       "slicer project (.3mf) from above, to check it: an SVG and a PNG")
     render.add_argument("view", help="a scene, scene.step, with one of its views after # if wanted: "
                                      "scene.step#section-a, scene.step#x=12.5, scene.step#front; "
-                                     "a 3D scene without one is drawn isometric; or a plot, name.plot.json")
+                                     "a 3D scene without one is drawn isometric; or a plot, name.plot.json; or a "
+                                     "slicer project, plate.3mf, whose pieces it checks against the plate")
     render.add_argument("--frame", type=int, help="draw this frame of the scene's frames (0 is the first)")
     render.add_argument("--out", type=Path, help="the PNG to write (default: next to the scene, in a "
                                                  "temporary folder); the SVG goes next to it")

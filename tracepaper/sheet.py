@@ -128,6 +128,16 @@ def _unit(p):
     return _mul(p, 1 / n) if n > 1e-12 else None
 
 
+def font_size(size: float) -> float:
+    """Text height for a drawing size mm across: about a 60th of it, so that labels are as big
+    on screen with the whole drawing in view, whether it is a detail of a few millimetres or
+    a building. It steps through the ISO 3098 text heights, 2.5, 3.5, 5, 7, 10 mm and so on, a
+    factor √2 apart, halved on below 2.5 (1.75, 1.25, 0.875 ...), so that it stays put while
+    the drawing changes a little."""
+    k = round(2 * math.log2(max(size, 1e-3) / 150))  # 150 mm across: 2.5 mm
+    return (2.5 if k % 2 == 0 else 3.5) * 2.0 ** (k // 2)
+
+
 def text_width(label: str, fs: float) -> float:
     return len(label) * K["charW"] * fs
 

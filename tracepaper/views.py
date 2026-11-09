@@ -80,6 +80,9 @@ def named_views(meta: dict) -> list:
         name = v.get("name") if isinstance(v, dict) else None
         if not isinstance(name, str) or not NAME.match(name):
             raise ValueError(f"views[{i}]: name must be letters, digits, - _ or ., such as \"section-a\"")
+        if name in DIRECTIONS:  # #top would be either
+            raise ValueError(f"views[{i}]: {name} is the name of a standard direction (#{name}, seen from it); "
+                             f"name the view something else, such as \"{name}-section\"")
         kind = v.get("kind", "section")
         if kind not in ("section", "projection"):
             raise ValueError(f"view {name}: kind must be \"section\" or \"projection\"")

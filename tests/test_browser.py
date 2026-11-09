@@ -1137,6 +1137,32 @@ class ViewerInFirefox(unittest.TestCase):
         for c, want in zip(turned["direction"], (-1, -1, -1)):  # isometric: towards -(1, 1, 1) in the scene
             self.assertAlmostEqual(c, want * 3 ** -0.5, places=5)
 
+        # A sketch file holds one direction's ink: once turning the view has wiped the ink of one
+        # still waiting for the AI, saving other ink asks before it replaces the file.
+        replaced = self.m.run(model3d + """
+            drag(at([100, 20, 30]), at([100, 80, 70]));  // from the isometric direction
+            t.save().then(() => {
+              window.confirm = () => true;
+              document.querySelector('[data-look="right"]').click();  // wipes it, the file stays
+              drag(at([100, 20, 30]), at([100, 50, 50]));
+              const d = layer.lastElementChild.getAttribute('d');
+              let asked = '';
+              window.confirm = (text) => { asked = text; return false; };
+              t.save().then(() => {
+                const kept = t.state.dirty;
+                window.confirm = () => true;
+                t.save().then(() => done({ asked, kept, d, dirty: t.state.dirty, wiped: t.state.sketchWiped }));
+              });
+            });
+        """)
+        self.assertIn("core.glb.sketch.svg still waits for the AI, with ink drawn from another direction",
+                      replaced["asked"])
+        self.assertEqual((replaced["kept"], replaced["dirty"], replaced["wiped"]), (True, False, False))
+        root = ET.parse(sketch).getroot()
+        self.assertEqual(root.find(f"{SVG}metadata/{TP}view").get("normal"), "1 0 0")  # from the right
+        self.assertEqual([p.get("d") for p in root.iter(f"{SVG}path")
+                          if p.get("d") and p.get("d").startswith("M")][-1:], [replaced["d"]])
+
     def test_tablet_pen_on_a_model(self):
         hub, pen = self.server.pen_hub, self.server.pen
         self.open_viewer("bracket.glb")

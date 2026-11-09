@@ -4,14 +4,18 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import xml.etree.ElementTree as ET
+
 from tracepaper import model as M
 from tracepaper import plate as P
+from tracepaper.render import render
 
 CORE_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 PROD_NS = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
 RELS = ('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns='
         '"http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" '
         'Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>')
+SVG, INK, TP = "{http://www.w3.org/2000/svg}", "{http://www.inkscape.org/namespaces/inkscape}", "{urn:tracepaper:0}"
 P1S = {"printable_area": ["0x0", "256x0", "256x256", "0x256"], "bed_exclude_area": ["0x0", "18x0", "18x28", "0x28"],
        "printable_height": "250", "filament_colour": ["#00FF00", "#FF0000"]}
 
@@ -147,6 +151,49 @@ class PlateTest(unittest.TestCase):
         bad.write_text("not a zip")
         with self.assertRaisesRegex(ValueError, "bad.3mf is not a 3MF file"):
             P.to_glb(bad)
+        with self.assertRaisesRegex(SystemExit, "bad.3mf is not a 3MF file"):
+            render(str(bad))
+
+    def test_seen_from_above(self):
+        # tracepaper render's drawing: the plate, the part the printer keeps for itself, and each
+        # piece's top, filled in its filament's colour and outlined, with its name.
+        layout = P.read(write_3mf(self.dir / "p.3mf", [("left.stl", (50, 60, 5), 10, 1),
+                                                      ("right.stl", (150, 60, 10), 20, 2)]))
+        root = ET.fromstring(P.draw(layout, "p.3mf").tostring().split("\n", 1)[1])
+        layers = {g.get(f"{INK}label"): g for g in root.findall(f"{SVG}g")}
+        self.assertEqual(list(layers), ["Plate", "left", "right"])
+        self.assertEqual([p.get("id") for p in layers["Plate"].iter(f"{SVG}path")], ["plate-area", "plate-excluded"])
+        top = layers["right"].find(f"{SVG}path[@id='right-top-1']")
+        self.assertEqual((top.get("fill"), top.get("d").count("M")), ("#FF0000", 2))  # its top's two triangles
+        self.assertEqual(top.get("d").split()[:2], ["M140", "50"])
+        lines = layers["right"].find(f"{SVG}path[@id='right-lines']").get("d")
+        self.assertEqual(lines.count("M"), 4)  # the top's outline, not the diagonal between its triangles
+        self.assertEqual(layers["left"].find(f"{SVG}text").text, "left")
+        view = root.find(f"{SVG}metadata/{TP}view")
+        self.assertEqual((view.get("title"), view.get("kind"), view.get("normal")), ("p.3mf, from above", "plate", "0 0 1"))
+
+    def test_what_is_wrong_with_a_layout(self):
+        tall = {**P1S, "printable_height": "15"}
+        layout = P.read(write_3mf(self.dir / "p.3mf", [("fine", (128, 128, 5), 10, 1),
+                                                      ("corner", (10, 10, 4), 8, 1),  # where the printer purges
+                                                      ("over", (252, 128, 5), 10, 1),  # past the plate's edge
+                                                      ("tall", (100, 200, 10), 20, 2)], settings=tall))
+        self.assertEqual(P.check(layout), [
+            "fine: 10 × 10 mm, 10 mm high, on Plate",
+            "corner: 8 × 8 mm, 8 mm high, on Plate; over the part of the plate the printer keeps for itself",
+            "over: 10 × 10 mm, 10 mm high, on Plate; off the plate's printable area",
+            "tall: 20 × 20 mm, 20 mm high, on Plate; taller than the printer prints, 15 mm"])
+        self.assertTrue(P._overlaps([(0, 0), (10, 0), (0, 10)], (4, 4, 8, 8)))
+        self.assertFalse(P._overlaps([(0, 0), (10, 0), (0, 10)], (6, 6, 8, 8)))  # past the long side
+
+    def test_render(self):
+        out = self.dir / "out" / "p.png"
+        report = render(str(write_3mf(self.dir / "p.3mf", [("left.stl", (50, 60, 5), 10, 1)], plates=2)), out=out)
+        self.assertTrue(report.startswith("p.3mf, from above: 1 piece on 2 plates\n  left: 10 × 10 mm, 10 mm high, "
+                                          "on Plate 1\n"), report)
+        self.assertTrue(out.with_suffix(".svg").is_file())
+        with self.assertRaisesRegex(SystemExit, "a slicer project has no frames"):
+            render(str(self.dir / "p.3mf"), frame=1)
 
 
 if __name__ == "__main__":

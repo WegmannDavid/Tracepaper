@@ -12,15 +12,20 @@ surfaces, bounded by exact curves. Its parts are
 
 The server shows a scene in 3D as triangles (glb) and draws exact sections and
 projections of it (cut, project), which drawing.py turns into sheets. Curves come out
-as SVG path data (path_d): lines, circular and elliptical arcs and polynomial splines
-exactly, other curves (hyperbolas, rational splines) within TOLERANCE.
+as SVG path data (region_d, curves_d): lines, circular and elliptical arcs and
+polynomial splines exactly, other curves (hyperbolas, rational splines) within TOLERANCE.
+OpenCascade's hidden-line removal runs in a child process (_in_child), since on some
+freeform faces it never returns.
 
 Needs OCP, OpenCascade's Python binding, which CadQuery and build123d install.
 """
 from __future__ import annotations
 
+import io
 import math
+import multiprocessing
 import struct
+import warnings
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,17 +36,20 @@ from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Section
 from OCP.BRepBndLib import BRepBndLib
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
+from OCP.BRepGProp import BRepGProp
 from OCP.BRepLib import BRepLib, BRepLib_ToolTriangulatedShape
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
-from OCP.BRepTools import BRepTools_WireExplorer
+from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import (GeomAbs_BezierCurve, GeomAbs_BSplineCurve, GeomAbs_C1, GeomAbs_Circle, GeomAbs_Cone,
-                         GeomAbs_Cylinder, GeomAbs_Ellipse, GeomAbs_Line, GeomAbs_Plane, GeomAbs_Sphere)
+                         GeomAbs_Cylinder, GeomAbs_Ellipse, GeomAbs_Line, GeomAbs_Plane, GeomAbs_Sphere,
+                         GeomAbs_Torus)
 from OCP.GeomConvert import GeomConvert_ApproxCurve, GeomConvert_BSplineCurveToBezierCurve
-from OCP.gp import gp_Ax2, gp_Ax3, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf
+from OCP.gp import gp_Ax2, gp_Ax3, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.GProp import GProp_GProps
 from OCP.HLRAlgo import HLRAlgo_Projector
-from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
+from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape, HLRBRep_PolyAlgo, HLRBRep_PolyHLRToShape
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.Quantity import Quantity_Color, Quantity_ColorRGBA
 from OCP.ShapeUpgrade import ShapeUpgrade_ShapeDivideClosed
@@ -65,6 +73,17 @@ MESH_DEFLECTION = 0.05  # mm: how far the 3D view's triangles may be from the fa
 MESH_ANGLE = 0.3  # radians: and how far they may turn from one to the next
 PLANAR = 1e-6  # mm and radians: how close faces must be to one plane to make a 2D scene
 SCALE = 1e4  # fmt(): coordinates in path data to 0.1 µm
+JOIN = 1 / SCALE  # mm: edges whose ends are closer than this are drawn on from one to the next
+HLR_SECONDS = 30  # how long OpenCascade's exact hidden-line removal may take before the mesh's is used
+HLR_MESH = 3e-5  # of the scene's size, and at least HLR_MESH_LEAST mm: how far the mesh it then uses
+HLR_MESH_LEAST = 1e-3  # may be from the faces,
+HLR_ANGLE = 0.1  # radians: and how far its triangles may turn from one to the next
+STRAY = 1e-3  # of a part's size, and at least STRAY_LEAST mm: how far its projected edges may
+STRAY_LEAST = 0.01  # run outside it before the exact hidden-line removal is taken to have failed
+STRAY_SAMPLES = 32  # points along each edge looked at for that
+LENGTH_SLACK = 1e-3  # of a section's length: how far a Boolean's regions may miss the plane's edges
+SPREAD = 0.25  # how much an outline must run in one main direction for hatching to follow it
+SNAP = 5  # degrees: outlines within this of the sheet's x and y are hatched at 45° to them
 
 
 # ---- The tree ---------------------------------------------------------------------------
@@ -404,11 +423,13 @@ def _half_size(scene: Scene) -> float:
 class Cut:
     """What a plane cuts from one part, in plane coordinates (the plane is z = 0): regions
     (faces) from a solid, curves (edges) from a surface, and its points that lie in the plane,
-    [(x, y)]."""
+    [(x, y)]; and outlines, the edges of a solid's section that OpenCascade's Boolean
+    couldn't make regions of (_missed)."""
     node: Node
     regions: list
     curves: list
     points: list = field(default_factory=list)
+    outlines: list = field(default_factory=list)
 
 
 def cut(scene: Scene, pl: Plane) -> list:
@@ -418,20 +439,54 @@ def cut(scene: Scene, pl: Plane) -> list:
     sheet = BRepBuilderAPI_MakeFace(gp_Pln(pl.ax3()), -size, size, -size, size).Face()
     out = []
     for part in scene.parts():
-        regions, curves = [], []
+        regions, curves, outlines = [], [], []
         for solid in _items(part.shape, TopAbs_SOLID):
             common = BRepAlgoAPI_Common(solid, sheet)
-            if common.IsDone():
-                regions += _items(_to_plane(common.Shape(), pl), TopAbs_FACE)
+            found = common.Shape() if common.IsDone() else None
+            if found is not None:
+                regions += _items(_to_plane(found, pl), TopAbs_FACE)
+            if not _analytic(solid):
+                missed = _missed(solid, sheet, found)
+                if missed is not None:
+                    outlines += _items(_to_plane(missed, pl), TopAbs_EDGE)
         loose = _loose_faces(part.shape)
         if loose is not None:
             section = BRepAlgoAPI_Section(loose, sheet)
             if section.IsDone():
                 curves += _items(_to_plane(section.Shape(), pl), TopAbs_EDGE)
         points = [(x, y) for x, y, z in _points(part.shape, pl) if abs(z) <= PLANAR]
-        if regions or curves or points:
-            out.append(Cut(part, regions, curves, points))
+        if regions or curves or points or outlines:
+            out.append(Cut(part, regions, curves, points, outlines))
     return out
+
+
+ANALYTIC = {GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone, GeomAbs_Sphere, GeomAbs_Torus}
+
+
+def _analytic(shape: TopoDS_Shape) -> bool:
+    """Whether all of shape's faces lie on planes, cylinders, cones, spheres and tori."""
+    return all(BRepAdaptor_Surface(TopoDS.Face_s(f)).GetType() in ANALYTIC for f in _items(shape, TopAbs_FACE))
+
+
+def _length(shape: TopoDS_Shape) -> float:
+    """How long shape's edges are together, each counted once."""
+    props = GProp_GProps()
+    BRepGProp.LinearProperties_s(shape, props, True)
+    return props.Mass()
+
+
+def _missed(solid: TopoDS_Shape, sheet: TopoDS_Shape, regions: Optional[TopoDS_Shape]) -> Optional[TopoDS_Shape]:
+    """The edges where sheet cuts solid, if the regions OpenCascade's Boolean gave for that
+    (a shape, or None) don't add up to them, else None. On some freeform faces it leaves part
+    or all of a section out without an error, for a plane along a knot line of a loft, where
+    its section by the same plane is right."""
+    section = BRepAlgoAPI_Section(solid, sheet)
+    if not section.IsDone():
+        return None
+    edges = section.Shape()
+    want = _length(edges)
+    got = _length(regions) if regions is not None else 0.0
+    return edges if abs(want - got) > LENGTH_SLACK * want + JOIN else None
 
 
 def _points(shape: TopoDS_Shape, pl: Plane) -> list:
@@ -526,32 +581,159 @@ def _for_hidden_lines(shape: TopoDS_Shape) -> TopoDS_Shape:
 
 def project(scene: Scene, pl: Plane) -> list:
     """Each part as seen looking at pl along its normal, with hidden lines: [Projection].
-    Exact: OpenCascade's hidden line removal on the faces themselves."""
-    algo = HLRBRep_Algo()
+
+    Exact: OpenCascade's hidden-line removal on the faces themselves. On some freeform faces
+    (lofts through sections of lines and arcs) that goes wrong: outlines kilometres long, or
+    no answer at all. So it runs in a child process, and if its edges run outside their
+    parts, it fails or it takes longer than HLR_SECONDS, the drawing comes from OpenCascade's
+    hidden-line removal on a fine mesh of the faces instead, to within HLR_MESH of the
+    scene's size. Raises ValueError if that fails too."""
     parts = scene.parts()
-    shapes = {}
-    for part in parts:
-        if _items(part.shape, TopAbs_EDGE):  # points only: nothing to hide
-            shapes[part.key] = _for_hidden_lines(part.shape)
-            algo.Add(shapes[part.key])
-    algo.Projector(HLRAlgo_Projector(gp_Ax2(gp_Pnt(*pl.origin), gp_Dir(*pl.normal), gp_Dir(*pl.xdir))))
-    algo.Update()
-    algo.Hide()
-    hlr = HLRBRep_HLRToShape(algo)
+    lined = [p for p in parts if _items(p.shape, TopAbs_EDGE)]  # points only: nothing to hide
+    shapes = [p.shape for p in lined]
+    found = _in_child(_hidden_lines, (shapes, pl, None), HLR_SECONDS) if shapes else []
+    if found is None:
+        mesh = max(HLR_MESH_LEAST, _half_size(scene) * HLR_MESH)
+        found = _in_child(_hidden_lines, (shapes, pl, mesh), HLR_SECONDS)
+    if found is None:
+        raise ValueError("OpenCascade's hidden-line removal failed on this view, exactly and on a mesh")
+    edges = {p.key: e for p, e in zip(lined, found)}
     out = []
-
-    def edges(s: Optional[TopoDS_Shape]) -> list:
-        return [] if s is None or s.IsNull() else _items(s, TopAbs_EDGE)
-
     for part in parts:
-        s = shapes.get(part.key)
-        visible = edges(hlr.VCompound(s)) + edges(hlr.OutLineVCompound(s)) if s else []
-        smooth = edges(hlr.Rg1LineVCompound(s)) if s else []
-        hidden = edges(hlr.HCompound(s)) + edges(hlr.OutLineHCompound(s)) if s else []
+        visible, smooth, hidden = edges.get(part.key, ([], [], []))
         points = [(x, y) for x, y, _ in _points(part.shape, pl)]
         if visible or smooth or hidden or points:
             out.append(Projection(part, visible, smooth, hidden, points))
     return out
+
+
+def _hidden_lines(shapes: list, pl: Plane, mesh: Optional[float]) -> Optional[list]:
+    """The edges of shapes, seen along pl's normal and hiding each other, in pl's coordinates:
+    [(visible, smooth, hidden)] for each. By OpenCascade's exact hidden-line removal if mesh
+    is None, and None if any of its edges run outside their shape; else on a mesh of the
+    faces, within mesh mm."""
+    projector = HLRAlgo_Projector(gp_Ax2(gp_Pnt(*pl.origin), gp_Dir(*pl.normal), gp_Dir(*pl.xdir)))
+    if mesh is None:
+        prepared = [_for_hidden_lines(s) for s in shapes]
+        algo = HLRBRep_Algo()
+        for s in prepared:
+            algo.Add(s)
+        algo.Projector(projector)
+        algo.Update()
+        algo.Hide()
+        hlr = HLRBRep_HLRToShape(algo)
+    else:
+        # A copy of each, so that the mesh doesn't stay on the scene's faces for the 3D view.
+        prepared = [_for_hidden_lines(BRepBuilderAPI_Copy(s, False, False).Shape()) for s in shapes]
+        algo = HLRBRep_PolyAlgo()
+        for s in prepared:
+            BRepMesh_IncrementalMesh(s, mesh, False, HLR_ANGLE, False)  # not in parallel: a fork has no threads
+            algo.Load(s)
+        algo.Projector(projector)
+        algo.Update()
+        hlr = HLRBRep_PolyHLRToShape()
+        hlr.Update(algo)
+
+    def edges(s: Optional[TopoDS_Shape]) -> list:
+        return [] if s is None or s.IsNull() else [e for e in _items(s, TopAbs_EDGE) if _drawable(e)]
+
+    out = [(edges(hlr.VCompound(s)) + edges(hlr.OutLineVCompound(s)), edges(hlr.Rg1LineVCompound(s)),
+            edges(hlr.HCompound(s)) + edges(hlr.OutLineHCompound(s))) for s in prepared]
+    if mesh is None and any(_strays(shape, [e for kind in found for e in kind], pl)
+                            for shape, found in zip(shapes, out)):
+        return None
+    return out
+
+
+def _drawable(edge: TopoDS_Shape) -> bool:
+    """Whether an edge has a length to draw: hidden-line removal leaves bits of none."""
+    c = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
+    u0, u1 = c.FirstParameter(), c.LastParameter()
+    p = c.Value(u0)
+    return any(p.Distance(c.Value(u0 + (u1 - u0) * k / 4)) > JOIN for k in (1, 2, 3, 4))
+
+
+def _strays(shape: TopoDS_Shape, edges: list, pl: Plane) -> bool:
+    """Whether any of edges, of shape seen along pl's normal, runs outside shape there."""
+    if not edges:
+        return False
+    box = Bnd_Box()
+    BRepBndLib.AddOptimal_s(_to_plane(shape, pl), box, False, False)
+    x0, y0, _, x1, y1, _ = box.Get()
+    slack = max(STRAY_LEAST, STRAY * max(x1 - x0, y1 - y0))
+    x0, y0, x1, y1 = x0 - slack, y0 - slack, x1 + slack, y1 + slack
+    for edge in edges:
+        c = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
+        u0, u1 = c.FirstParameter(), c.LastParameter()
+        for k in range(STRAY_SAMPLES + 1):
+            p = c.Value(u0 + (u1 - u0) * k / STRAY_SAMPLES)
+            if not (x0 <= p.X() <= x1 and y0 <= p.Y() <= y1):
+                return True
+    return False
+
+
+def _in_child(work, args: tuple, seconds: float) -> Optional[list]:
+    """work(*args), which gives [(edges, ...)] or None, worked out in a child process: None if
+    it says so, fails, crashes or takes longer than seconds, which in OpenCascade's own code
+    holds up the whole process. Where there is no fork (Windows), in this process."""
+    if "fork" not in multiprocessing.get_all_start_methods():
+        try:
+            return work(*args)
+        except Exception:  # OpenCascade's errors, such as Standard_DomainError
+            return None
+    context = multiprocessing.get_context("fork")
+    receive, send = context.Pipe(duplex=False)
+    with warnings.catch_warnings():  # forking the viewer's server: the child only works this out
+        warnings.simplefilter("ignore", DeprecationWarning)
+        child = context.Process(target=_child, args=(send, work, args), daemon=True)
+        child.start()
+    send.close()
+    try:
+        found = receive.recv() if receive.poll(seconds) else None
+    except (EOFError, OSError):  # it crashed
+        found = None
+    finally:
+        if child.is_alive():
+            child.kill()
+        child.join()
+        receive.close()
+    return None if found is None else [tuple(_items(_unpacked(data), TopAbs_EDGE) for data in kinds)
+                                       for kinds in found]
+
+
+def _child(send, work, args: tuple) -> None:
+    """In the child process: work(*args), sent back as a compound for each list of edges, in
+    OpenCascade's BRep format, or None."""
+    _die_with_parent()
+    try:
+        found = work(*args)
+        send.send(None if found is None else [tuple(_packed(_compound(edges)) for edges in kinds)
+                                              for kinds in found])
+    except BaseException:
+        send.send(None)
+
+
+def _die_with_parent() -> None:
+    """On Linux, have this process killed when the one that forked it ends, however it ends:
+    else one stuck in OpenCascade outlives a viewer that was killed, holding its port."""
+    try:
+        import ctypes
+        import signal
+        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        pass
+
+
+def _packed(shape: TopoDS_Shape) -> bytes:
+    out = io.BytesIO()
+    BRepTools.Write_s(shape, out)  # to 17 digits; BinTools' binary format doesn't read back from memory
+    return out.getvalue()
+
+
+def _unpacked(data: bytes) -> TopoDS_Shape:
+    shape = TopoDS_Shape()
+    BRepTools.Read_s(shape, io.BytesIO(data), BRep_Builder())
+    return shape
 
 
 def bounds(shapes) -> Optional[tuple]:
@@ -576,10 +758,9 @@ def _pt(p) -> str:
     return f"{fmt(p.X())} {fmt(p.Y())}"
 
 
-def _edge_commands(edge, start_new: bool, last) -> tuple:
-    """SVG commands drawing edge in its direction of travel, in the xy plane: (commands,
-    its start point, its end point). Starts with M unless start_new is False and it starts
-    where last ended."""
+def _edge_commands(edge) -> tuple:
+    """SVG commands drawing edge in its direction of travel, in the xy plane, on from its
+    start point: (commands, its start point, its end point)."""
     edge = TopoDS.Edge_s(edge)
     c = BRepAdaptor_Curve(edge)
     u0, u1 = c.FirstParameter(), c.LastParameter()
@@ -587,8 +768,6 @@ def _edge_commands(edge, start_new: bool, last) -> tuple:
     a, b = (u1, u0) if back else (u0, u1)
     p0, p1 = c.Value(a), c.Value(b)
     out = []
-    if start_new or last is None or p0.Distance(last) > 1e-7:
-        out.append(f"M{_pt(p0)}")
     kind = c.GetType()
     if kind == GeomAbs_Line:
         out.append(f"L{_pt(p1)}")
@@ -629,7 +808,10 @@ def _spline_commands(c, kind, a: float, b: float) -> list:
     elif kind == GeomAbs_BezierCurve:
         from OCP.GeomConvert import GeomConvert
         curve = GeomConvert.CurveToBSplineCurve_s(c.Bezier())
-    pieces = _beziers(curve, a, b) if curve is not None else []
+    try:
+        pieces = _beziers(curve, a, b) if curve is not None else []
+    except Exception:  # OpenCascade's Standard_DomainError, for a piece too short: approximated
+        pieces = []
     if not pieces or any(rational or degree > 3 for degree, rational, _ in pieces):
         # Cubic pieces within TOLERANCE, over c's own range, from its first parameter to its
         # last (C2 would raise the degree instead of adding pieces).
@@ -654,19 +836,26 @@ def _spline_commands(c, kind, a: float, b: float) -> list:
 
 
 def region_d(face) -> str:
-    """A face in the xy plane as path data: each of its wires, closed. Fill it evenodd."""
+    """A face in the xy plane as path data: each of its wires, closed. Fill it evenodd.
+    Each wire is one loop: its edges are drawn on from where the last one ended, which
+    may be a little off where the next starts (within the vertex's tolerance), and joined
+    by a line where they're further apart."""
     face = TopoDS.Face_s(face)
     out = []
     for wire in _items(face, TopAbs_WIRE):
         explorer = BRepTools_WireExplorer(TopoDS.Wire_s(wire), face)
-        last, first = None, True
+        last = None
         while explorer.More():
             edge = explorer.Current()
-            cmds, _, last = _edge_commands(edge.Oriented(explorer.Orientation()), first, last)
+            cmds, start, end = _edge_commands(edge.Oriented(explorer.Orientation()))
+            if last is None:
+                out.append(f"M{_pt(start)}")
+            elif start.Distance(last) > JOIN:
+                out.append(f"L{_pt(start)}")
             out += cmds
-            first = False
+            last = end
             explorer.Next()
-        if not first:
+        if last is not None:
             out.append("Z")
     return " ".join(out)
 
@@ -675,6 +864,32 @@ def curves_d(edges) -> str:
     """Edges in the xy plane as path data, joined where one ends where the next starts."""
     out, last = [], None
     for edge in edges:
-        cmds, _, last = _edge_commands(edge, False, last)
+        cmds, start, end = _edge_commands(edge)
+        if last is None or start.Distance(last) > JOIN:
+            out.append(f"M{_pt(start)}")
         out += cmds
+        last = end
     return " ".join(out)
+
+
+def outline_direction(faces) -> float:
+    """The direction the outlines of faces in the xy plane mostly run in, and square to it,
+    in degrees from -45 to 45: sections are hatched at 45° to it (ISO 128-3). 0 for outlines
+    mostly along x and y, within SNAP, and for those without a main direction, such as
+    a ring's or an octagon's."""
+    c = s = total = 0.0
+    for face in faces:
+        for edge in _items(face, TopAbs_EDGE):
+            curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
+            u0, u1 = curve.FirstParameter(), curve.LastParameter()
+            n = 1 if curve.GetType() == GeomAbs_Line else 16
+            for k in range(n):
+                p, v = gp_Pnt(), gp_Vec()
+                curve.D1(u0 + (u1 - u0) * (k + 0.5) / n, p, v)
+                length = v.Magnitude() * abs(u1 - u0) / n
+                a = 4 * math.atan2(v.Y(), v.X())  # a direction, the opposite one and those square to it alike
+                c, s, total = c + length * math.cos(a), s + length * math.sin(a), total + length
+    if total <= 0 or math.hypot(c, s) < SPREAD * total:
+        return 0.0
+    angle = math.degrees(math.atan2(s, c)) / 4
+    return 0.0 if abs(angle) < SNAP else angle

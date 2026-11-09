@@ -90,7 +90,7 @@ A scene has **views**, each a tab of its own in the viewer, named after the scen
 | `bracket.step#x=12.5`, `#y=…`, `#z=…` | the section through the plane square to that axis at that coordinate, seen from +x (as from the right), −y (from the front) or +z (from above) |
 | `bracket.step#front`, `#back`, `#left`, `#right`, `#top`, `#bottom`, `#iso` | the scene seen from that direction, with hidden lines |
 
-The project page lists the scene and its named views; the person opens the others from the 3D view (§5). A named view's `name` MUST be letters, digits, `-`, `_` and `.`, starting with a letter or digit.
+The project page lists the scene and its named views; the person opens the others from the 3D view (§5). A named view's `name` MUST be letters, digits, `-`, `_` and `.`, starting with a letter or digit, and MUST NOT be a standard direction's (`front`, `back`, `left`, `right`, `top`, `bottom`, `iso`), which `#top` would mean too; the viewer and `tracepaper render` report such a view as an error.
 
 A named view is a plane:
 
@@ -106,9 +106,9 @@ A named view is a plane:
 
 The viewer draws every scene the same way; a scene can't change how.
 
-- **Exact.** Sections and projections are worked out on the exact geometry (OpenCascade, in the viewer's server) and drawn with SVG's lines, circular and elliptical arcs and Bézier curves: lines, arcs, ellipses and polynomial splines come out exactly, other curves (hyperbolas, rational splines) to within 0.1 µm. Projections use OpenCascade's exact hidden-line removal, which can take seconds for large or freeform scenes; each view is worked out once for each version of its files.
+- **Exact.** Sections and projections are worked out on the exact geometry (OpenCascade, in the viewer's server) and drawn with SVG's lines, circular and elliptical arcs and Bézier curves: lines, arcs, ellipses and polynomial splines come out exactly, other curves (hyperbolas, rational splines) to within 0.1 µm. Projections use OpenCascade's exact hidden-line removal, which can take seconds for large or freeform scenes. On some freeform faces, such as lofts through sections of lines and arcs, it goes wrong: outlines running far outside the part, or no answer at all. Then, and when it takes longer than 30 s, the viewer draws the projection from a fine mesh of the faces instead, to within 3·10⁻⁵ of the scene's size (0.02 mm for a scene 700 mm across). Each view is worked out once for each version of its files.
 - **Colours.** Each part has the colour the file gives it (§2.1), or else one of a fixed palette, given out in the order of the tree to the parts without; the same in 3D and in drawings. Sections and 2D scenes tint their regions with it, so dark colours still leave the hatching and outlines readable.
-- **Sections** draw what the plane cuts from each solid as regions, tinted in the part's colour, hatched at an angle and spacing of their own so that parts side by side stay apart in greys, and outlined. Surfaces cut become lines.
+- **Sections** draw what the plane cuts from each solid as regions, tinted in the part's colour, outlined, and hatched at 45° to each region's main outlines, as ISO 128-3 has it, not to the sheet's edges, so that a slanted wall's hatching doesn't run along it and make it look thicker; one way or the other and closer or wider, part by part, so that parts side by side stay apart in greys. A region whose outlines have no main direction, such as a ring's, is hatched at 45° to the sheet. Surfaces cut become lines. Where OpenCascade's Boolean leaves part of a solid's section out, as it can on freeform faces for a plane along a knot line, the section's edges are drawn as well, so that the part doesn't vanish.
 - **2D scenes** draw their regions tinted and outlined.
 - **Projections** draw each part's visible edges, its smooth edges (where faces meet tangentially) lighter, and its hidden edges dashed, on a layer of their own, *Hidden lines*, hidden at first.
 - **Curves** are thin and dashed, in their part's colour, so that one part's curves (a centre line) stay apart from another's (an older outline). **Points** are dots a few pixels across at any zoom, in their part's colour, named in a tooltip.
@@ -210,6 +210,7 @@ A slicer project is a 3MF file (`.3mf`) as OrcaSlicer or Bambu Studio saves it: 
 - **The tree:** `Plate` (or `Plate 1`, `Plate 2`, …, laid out side by side as the slicer lays them out), then each piece under its name without a mesh file's extension (`sash_tenon_01.stl` shows as `sash_tenon_01`; a repeated name gets ` (2)`), then `Build volume`, hidden at first. Modifiers, negative parts and support blockers and enforcers aren't shown.
 - **What it looks like:** pieces in their filament's colour, shaded flat as slicers show meshes, with edges where the surface folds by more than 25°. The plate is drawn 2 mm thick below z = 0, and the part of it the printer keeps for itself (`bed_exclude_area`) in orange.
 - **Coordinates** are the slicer's: millimetres, z up, the plate's origin as in `printable_area`. Fronts face −y.
+- **Checking it without a browser:** `tracepaper render <name>.3mf` draws it from above (each plate, the part the printer keeps for itself, and what of each piece faces up, in its filament's colour, outlined and named) and lists each piece's size, height and plate, saying which are off their plate's printable area, over the part the printer keeps for itself, or taller than `printable_height`.
 - **Sketching** over it works as over a scene's 3D view, and Save writes `<name>.3mf.sketch.svg` (§3.1).
 
 ### 2.10 Frames
@@ -346,7 +347,7 @@ The person can also draw over a scene's 3D view, or a slicer project's. Save the
 - **The View layer** holds a picture of the view as it was, an `image` covering `area`. The Sketch layer holds the ink, as in §3.
 - **The root** gets `tp:sketch-of="<name>.step"` (or `"<name>.3mf"`).
 
-Ink belongs to the direction it was drawn from, so the viewer doesn't turn the view while there is ink on it; it only pans and zooms. The view is orthographic while the person sketches. For exact coordinates under the ink, the person can sketch on a drawing instead (§2.4).
+Ink belongs to the direction it was drawn from, so the viewer doesn't turn the view while there is ink on it; it only pans and zooms. Turning it wipes the ink, once the person agrees, and leaves the sketch file waiting for the AI; since a sketch file holds one direction's ink, Save then asks before it replaces that file with ink from another. The view is orthographic while the person sketches. For exact coordinates under the ink, the person can sketch on a drawing instead (§2.4).
 
 ## 4. Working with an AI (informative)
 
@@ -354,7 +355,7 @@ Ink belongs to the direction it was drawn from, so the viewer doesn't turn the v
 
 1. Write the part of the model that matters as a STEP file into the build folder (§1), with the parts named and grouped as the person thinks of them. For a 2D view of something the model doesn't hold as faces, such as a profile, write a 2D scene (§2.2).
 2. Write the `.tp.json` beside it: where it comes from, what starts hidden, the sections and projections worth naming, and their dimensions. Which ones to show is worked out in conversation.
-3. Check each view with `tracepaper render build/part.step#section-a`, which draws it as the viewer does (SVG and PNG) and says what is wrong in the `.tp.json`, if anything. Look at the PNG.
+3. Check each view with `tracepaper render build/part.step#section-a`, which draws it as the viewer does (SVG and PNG) and says what is wrong in the `.tp.json`, if anything, and each slicer project with `tracepaper render build/print/plate.3mf` (§2.9). Look at the PNG.
 
 **Acting on a sketch**
 

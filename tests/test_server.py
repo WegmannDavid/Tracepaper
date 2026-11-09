@@ -166,6 +166,27 @@ except ImportError:
     HAVE_OCP = False
 
 
+class OpenPageTest(unittest.TestCase):
+    def test_the_browser_s_own_messages_stay_out_of_the_viewer_s_output(self):
+        # Such as Chromium's "zygote_linux.cc ... Broken pipe" when the page opens in a running one.
+        with mock.patch.object(S.sys, "platform", "linux"), mock.patch.dict(os.environ, clear=False) as env, \
+                mock.patch.object(S.shutil, "which", return_value="/usr/bin/xdg-open"), \
+                mock.patch.object(S.subprocess, "Popen") as popen, mock.patch.object(S.webbrowser, "open") as browser:
+            env.pop("BROWSER", None)
+            S.open_page("http://127.0.0.1:1/")
+            args, kwargs = popen.call_args
+            self.assertEqual(args[0], ["/usr/bin/xdg-open", "http://127.0.0.1:1/"])
+            self.assertEqual({kwargs[k] for k in ("stdin", "stdout", "stderr")}, {S.subprocess.DEVNULL})
+            env["BROWSER"] = "firefox"  # as Python's webbrowser reads it
+            S.open_page("http://127.0.0.1:1/")
+            for _ in range(100):  # on a thread of its own
+                if browser.called:
+                    break
+                threading.Event().wait(0.02)
+            browser.assert_called_once_with("http://127.0.0.1:1/")
+            self.assertEqual(popen.call_count, 1)
+
+
 class SceneServerTest(unittest.TestCase):
     """Scenes (STEP files) and the views of them: copies of tests/geometry's."""
 
@@ -194,8 +215,8 @@ class SceneServerTest(unittest.TestCase):
 
     def test_listing(self):
         # A 3D scene, its named views as sheets; a 2D scene as a sheet; frames' files not at all.
-        self.assertEqual(self.listing(), [("bracket.step", "model"), ("bracket.step#section-a", "sheet"),
-                                          ("bracket.step#top", "sheet"), ("clip.step", "sheet"),
+        self.assertEqual(self.listing(), [("bracket.step", "model"), ("bracket.step#plan", "sheet"),
+                                          ("bracket.step#section-a", "sheet"), ("clip.step", "sheet"),
                                           ("profile.step", "sheet")])
         self.assertEqual(view_of_sketch("bracket.step#x=20.sketch.svg"), "bracket.step#x=20")
         self.assertEqual(view_of_sketch("bracket.step.sketch.svg"), "bracket.step")

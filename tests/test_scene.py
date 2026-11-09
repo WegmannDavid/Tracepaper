@@ -194,6 +194,158 @@ def read_glb_bytes(data: bytes):
         return read_glb(f.name)
 
 
+def face(*loops):
+    """A face in the plane z = 0 bounded by loops of (x, y) corners, the first the outside."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+    from OCP.gp import gp_Pnt
+
+    def wire(points):
+        polygon = BRepBuilderAPI_MakePolygon()
+        for x, y in points:
+            polygon.Add(gp_Pnt(x, y, 0))
+        polygon.Close()
+        return polygon.Wire()
+
+    make = BRepBuilderAPI_MakeFace(wire(loops[0]), True)
+    for hole in loops[1:]:
+        w = wire(hole)
+        w.Reverse()
+        make.Add(w)
+    return make.Face()
+
+
+def turned(points, degrees):
+    a = math.radians(degrees)
+    return [(x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a)) for x, y in points]
+
+
+@unittest.skipIf(S is None, "needs OCP")
+class HardCasesTest(unittest.TestCase):
+    """What OpenCascade gets wrong, or gives in a form that is easy to get wrong."""
+
+    def test_a_loop_is_one_path_however_far_apart_its_edges_ends_are(self):
+        # A triangle whose middle edge runs 0.6 µm beside its corners, within their tolerance, as
+        # a section of a torus can: drawn as one loop, closed where it started.
+        from OCP.BRep import BRep_Builder
+        from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeVertex,
+                                        BRepBuilderAPI_MakeWire)
+        from OCP.gp import gp_Dir, gp_Lin, gp_Pnt
+
+        def vertex(x, y):
+            v = BRepBuilderAPI_MakeVertex(gp_Pnt(x, y, 0)).Vertex()
+            BRep_Builder().UpdateVertex(v, 1e-6)
+            return v
+
+        a, b, c = vertex(0, 0), vertex(10, 0), vertex(10, 10)
+        edges = [BRepBuilderAPI_MakeEdge(a, b).Edge(),
+                 BRepBuilderAPI_MakeEdge(gp_Lin(gp_Pnt(10 + 6e-7, 0, 0), gp_Dir(0, 1, 0)), b, c).Edge(),
+                 BRepBuilderAPI_MakeEdge(c, a).Edge()]
+        triangle = BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(*edges).Wire(), True).Face()
+        d = S.region_d(triangle)
+        self.assertEqual((d[0], d.count("M"), d.count("Z"), d[-1]), ("M", 1, 1, "Z"))
+        self.assertEqual(S.curves_d(edges).count("M"), 1)  # within the path data's 0.1 µm: one line
+
+    def test_pieces_of_curves_too_short_to_draw(self):
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        from OCP.Geom import Geom_BSplineCurve
+        from OCP.GeomAPI import GeomAPI_PointsToBSpline
+        from OCP.gp import gp_Pnt
+        from OCP.TColgp import TColgp_Array1OfPnt
+
+        points = TColgp_Array1OfPnt(1, 5)
+        for i, (x, y) in enumerate([(0, 0), (3, 2), (6, 1), (9, 4), (12, 0)], 1):
+            points.SetValue(i, gp_Pnt(x, y, 0))
+        curve = GeomAPI_PointsToBSpline(points).Curve()
+        c = BRepAdaptor_Curve(BRepBuilderAPI_MakeEdge(curve).Edge())
+        u = (c.FirstParameter() + c.LastParameter()) / 2
+        # Converting a piece this short to Béziers raises Standard_DomainError: approximated instead.
+        self.assertTrue(S._spline_commands(c, c.GetType(), u, u + 1e-12))
+        self.assertFalse(S._drawable(BRepBuilderAPI_MakeEdge(curve, u, u + 1e-9).Edge()))
+        self.assertTrue(S._drawable(BRepBuilderAPI_MakeEdge(curve).Edge()))
+
+    def test_projection_without_stray_outlines(self):
+        # Seen from the front, OpenCascade's exact hidden-line removal gives the duct an outline
+        # metres long: the drawing comes from a mesh instead, within the duct.
+        duct = S.read_step(GEOMETRY / "duct.step")
+        x0, y0, z0, x1, y1, z1 = duct.box()
+        found = S.project(duct, S.plane((0, 0, 0), *V.DIRECTIONS["front"]))
+        edges = [e for p in found for e in p.visible + p.smooth + p.hidden]
+        self.assertGreater(len(edges), 20)
+        box = S.bounds(edges)
+        self.assertGreater(box[0], x0 - 1)
+        self.assertLess(box[2], x1 + 1)
+        self.assertGreater(box[1], z0 - 1)
+        self.assertLess(box[3], z1 + 1)
+        self.assertGreater(box[2] - box[0], (x1 - x0) * 0.99)
+
+    def test_hidden_line_removal_that_never_ends_or_crashes(self):
+        import os
+        import signal
+        import time
+        from unittest import mock
+
+        bracket = S.read_step(GEOMETRY / "bracket.step")
+        front = S.plane((0, 0, 0), *V.DIRECTIONS["front"])
+        exact = S.project(bracket, front)
+        real = S._hidden_lines
+        for name, fail in (("hangs", lambda: time.sleep(60)), ("crashes", lambda: os.kill(os.getpid(), signal.SIGKILL))):
+            with self.subTest(name), mock.patch.object(S, "HLR_SECONDS", 2):
+                with mock.patch.object(S, "_hidden_lines", lambda shapes, pl, mesh: (
+                        fail() if mesh is None else real(shapes, pl, mesh))):
+                    start = time.monotonic()
+                    meshed = S.project(bracket, front)
+                self.assertLess(time.monotonic() - start, 20)
+                self.assertEqual([p.node.key for p in meshed], [p.node.key for p in exact])
+                self.assertTrue(all(p.visible for p in meshed))
+        with mock.patch.object(S, "HLR_SECONDS", 1), mock.patch.object(S, "_hidden_lines", lambda *a: time.sleep(60)):
+            with self.assertRaisesRegex(ValueError, "hidden-line removal failed"):
+                S.project(bracket, front)
+
+    def test_a_section_the_boolean_leaves_out_is_drawn_as_its_edges(self):
+        # On some lofts, OpenCascade's Boolean gives nothing for a plane along a knot line,
+        # without an error. Its section's edges are drawn then, so the part doesn't vanish.
+        from unittest import mock
+
+        class Nothing:
+            def __init__(self, *args):
+                pass
+
+            def IsDone(self):
+                return True
+
+            def Shape(self):
+                return S._compound([])
+
+        duct = S.read_step(GEOMETRY / "duct.step")
+        pl = S.plane((0, 0, 200), (0, 0, 1), (1, 0, 0))
+        [whole] = S.cut(duct, pl)
+        self.assertEqual((len(whole.regions), whole.outlines), (1, []))
+        with mock.patch.object(S, "BRepAlgoAPI_Common", Nothing):
+            [missed] = S.cut(duct, pl)
+            sheet = D.draw(duct, V.view_spec({}, "z=200"), {}, "duct.step#z=200")
+        self.assertEqual(missed.regions, [])
+        self.assertAlmostEqual(S._length(S._compound(missed.outlines)), S._length(S._compound(
+            [e for r in whole.regions for e in S._items(r, S.TopAbs_EDGE)])), places=3)
+        edges = ET.fromstring(sheet.tostring().split("\n", 1)[1]).find(f".//{SVG}path[@id='air-section-edges']")
+        self.assertIn("couldn't make regions", edges.find(f"{SVG}title").text)
+        # Solids of planes, cylinders, cones, spheres and tori are left to the Boolean alone.
+        with mock.patch.object(S, "BRepAlgoAPI_Common", Nothing):
+            self.assertEqual(S.cut(S.read_step(GEOMETRY / "primitives.step"),
+                                   S.plane((0, 0, 1), (0, 0, 1), (1, 0, 0))), [])
+
+    def test_hatching_runs_at_45_degrees_to_the_main_outlines(self):
+        wall = [(0, 0), (100, 0), (100, 6), (0, 6)]
+        self.assertEqual(S.outline_direction([face(wall)]), 0)
+        self.assertAlmostEqual(S.outline_direction([face(turned(wall, 30))]), 30, places=6)
+        self.assertAlmostEqual(S.outline_direction([face(turned(wall, -20))]), -20, places=6)
+        self.assertEqual(S.outline_direction([face(turned(wall, 3))]), 0)  # near enough the sheet's
+        # A reducer's walls, slanting either way: each hatched at 45° to itself.
+        self.assertAlmostEqual(S.outline_direction([face(turned(wall, 112))]), 22, places=6)
+        self.assertAlmostEqual(S.outline_direction([face(turned(wall, 68))]), -22, places=6)
+        ring = [(50 * math.cos(a), 50 * math.sin(a)) for a in (2 * math.pi * k / 90 for k in range(90))]
+        self.assertEqual(S.outline_direction([face(ring, [(0.8 * x, 0.8 * y) for x, y in ring])]), 0)
+
+
 @unittest.skipIf(S is None, "needs OCP")
 class DrawingTest(unittest.TestCase):
     def test_section_with_annotations(self):
@@ -362,8 +514,11 @@ class ViewsTest(unittest.TestCase):
 
     def test_named_views(self):
         meta = json.loads((GEOMETRY / "bracket.tp.json").read_text())
-        self.assertEqual([v["name"] for v in V.named_views(meta)], ["section-a", "top"])
-        self.assertEqual(V.view_spec(meta, "top")["xdir"], (1.0, 0.0, 0.0))
+        self.assertEqual([v["name"] for v in V.named_views(meta)], ["section-a", "plan"])
+        self.assertEqual(V.view_spec(meta, "plan")["xdir"], (1.0, 0.0, 0.0))
+        # A standard direction's name would make bracket.step#top either.
+        with self.assertRaisesRegex(ValueError, r"views\[0\]: top is the name of a standard direction"):
+            V.named_views({"views": [{"name": "top", "normal": [0, 0, 1]}]})
         with self.assertRaisesRegex(ValueError, "name must be"):
             V.named_views({"views": [{"name": "a b", "normal": [0, 0, 1]}]})
         with self.assertRaisesRegex(ValueError, "not parallel"):

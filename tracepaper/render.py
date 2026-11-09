@@ -1,9 +1,11 @@
-"""Draw a view of a scene, or a plot, as the viewer does, to check it:
-``tracepaper render scene.step#view`` or ``tracepaper render name.plot.json``.
+"""Draw a view of a scene, or a plot, as the viewer does, or a slicer project from above, to
+check it: ``tracepaper render scene.step#view``, ``tracepaper render name.plot.json`` or
+``tracepaper render plate.3mf``.
 
 Writes the sheet as SVG and renders it as PNG, with what the scene's .tp.json gives (its
 annotations, its fields, which nodes start hidden), and says what is wrong with it if
-anything is. Needs OCP for scenes, and rsvg-convert for the PNG.
+anything is: for a slicer project, pieces off their plate, over the part the printer keeps
+for itself or too tall. Needs OCP for scenes, and rsvg-convert for the PNG.
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from . import plots
+from . import plate, plots
 from . import views as scenes
 from .report import _render
 
@@ -45,18 +47,33 @@ def render_plot(path: Path, out: Optional[Path] = None) -> str:
                                f"{'s' if len(plot['panels']) > 1 else ''}, {series} series"])
 
 
+def render_plate(path: Path, out: Optional[Path] = None) -> str:
+    """Draw the slicer project at path from above and return a short report."""
+    try:
+        layout = plate.read(path)
+    except (ValueError, OSError) as err:
+        raise SystemExit(f"tracepaper: {err}") from None
+    sheet = plate.draw(layout, path.name)
+    out = Path(out) if out else Path(tempfile.mkdtemp(prefix="tracepaper-")) / f"{path.stem}.png"
+    count = len(layout.pieces)
+    lines = [f"{sheet.view.get('title')}: {count} piece{'' if count == 1 else 's'}"
+             + (f" on {len(layout.plates)} plates" if len(layout.plates) > 1 else "")]
+    return _write(sheet, out, lines + [f"  {line}" for line in plate.check(layout)])
+
+
 def render(target: str, frame: Optional[int] = None, out: Optional[Path] = None) -> str:
-    """Draw target ("dir/scene.step", "dir/scene.step#view" or "dir/name.plot.json") and
-    return a short report."""
+    """Draw target ("dir/scene.step", "dir/scene.step#view", "dir/name.plot.json" or
+    "dir/plate.3mf") and return a short report."""
     from .server import Scenes, View
-    if plots.is_plot(Path(target)):
+    if plots.is_plot(Path(target)) or Path(target).suffix.lower() == ".3mf":
         if frame is not None:
-            raise SystemExit("tracepaper: a plot has no frames")
-        return render_plot(Path(target), out)
+            raise SystemExit(f"tracepaper: a {'plot' if plots.is_plot(Path(target)) else 'slicer project'} "
+                             "has no frames")
+        return (render_plot if plots.is_plot(Path(target)) else render_plate)(Path(target), out)
     name, view = scenes.split_name(target)
     path = Path(name)
     if not path.is_file() or not scenes.is_scene(path):
-        raise SystemExit(f"tracepaper: {path} is not a .step or .plot.json file")
+        raise SystemExit(f"tracepaper: {path} is not a .step, .plot.json or .3mf file")
     drawn = Scenes()  # as the viewer draws it: text, field colours over the frames
     try:
         meta = scenes.read_meta(path)

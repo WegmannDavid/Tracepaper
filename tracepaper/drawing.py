@@ -6,8 +6,9 @@ every scene:
 - Each part has the colour the file gives it, or else one of PALETTE, in the order of
   the tree, and the 3D view uses the same ones.
 - A section draws what the plane cuts from each solid as regions, tinted in the part's
-  colour and hatched, at an angle and spacing of its own so that parts side by side
-  stay apart in greys, and outlined. Surfaces cut become lines in the part's colour.
+  colour, outlined and hatched at 45° to each region's main outlines (ISO 128-3), one
+  way or the other and closer or wider by turns, so that parts side by side stay apart
+  in greys. Surfaces cut become lines in the part's colour.
 - Fields go under the parts, which are then only outlined, so that the outlines, curves
   and points show over them.
 - A 2D scene draws its regions tinted and outlined.
@@ -32,7 +33,7 @@ from typing import Optional
 
 from . import fields as F
 from . import scene as S
-from .sheet import K, SCREEN_WIDTH, TP_NS, Sheet, fmt, notes as write_notes
+from .sheet import K, SCREEN_WIDTH, TP_NS, Sheet, fmt, font_size, notes as write_notes
 from . import views as V
 from .views import view_spec
 
@@ -86,16 +87,6 @@ def _tint(color: str, white: float = TINT) -> str:
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "part"
-
-
-def font_size(size: float) -> float:
-    """Text height for a drawing size mm across: about a 60th of it, so that labels are as big
-    on screen with the whole drawing in view, whether it is a detail of a few millimetres or
-    a building. It steps through the ISO 3098 text heights, 2.5, 3.5, 5, 7, 10 mm and so on, a
-    factor √2 apart, halved on below 2.5 (1.75, 1.25, 0.875 ...), so that it stays put while
-    the drawing changes a little."""
-    k = round(2 * math.log2(max(size, 1e-3) / 150))  # 150 mm across: 2.5 mm
-    return (2.5 if k % 2 == 0 else 3.5) * 2.0 ** (k // 2)
 
 
 def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(), fields=(), ranges=None,
@@ -168,16 +159,21 @@ def draw(scene: S.Scene, spec: Optional[dict], meta: dict, name: str, hidden=(),
         color = palette[key]
         k = order[key]
         if isinstance(it, (S.Cut, S.Flat)):
-            fill = sheet.hatch(45 if k % 2 == 0 else -45, hatch * (1 if k // 2 % 2 == 0 else 1.6))
             for i, face in enumerate(it.regions, 1):
                 d = S.region_d(face)
                 if covered:  # the field shows what's inside
                     layer.path(f"{slug}-{'cut-' if isinstance(it, S.Cut) else ''}{i}", d, source=key)
                 elif isinstance(it, S.Cut):
+                    turn = round(S.outline_direction([face]))  # each region's own: a slanted wall's
+                    fill = sheet.hatch(turn + (45 if k % 2 == 0 else -45), hatch * (1 if k // 2 % 2 == 0 else 1.6))
                     layer.path(f"{slug}-tint-{i}", d, stroke="none", fill=_tint(color), fill_rule="evenodd")
                     layer.path(f"{slug}-cut-{i}", d, fill=fill, fill_rule="evenodd", source=key)
                 else:
                     layer.path(f"{slug}-{i}", d, fill=_tint(color), fill_rule="evenodd", source=key)
+            if isinstance(it, S.Cut) and it.outlines:  # where OpenCascade's Boolean failed: the edges only
+                edges = layer.path(f"{slug}-section-edges", S.curves_d(it.outlines), source=key)
+                ET.SubElement(edges, "{http://www.w3.org/2000/svg}title").text = (
+                    f"{it.node.name}: OpenCascade couldn't make regions of this section, so only its edges are drawn")
             if it.curves:  # a surface cut, in the part's colour; a 2D scene's curves, dashed too
                 style = {"stroke": color} if isinstance(it, S.Cut) else {**CURVE, "stroke": color}
                 layer.path(f"{slug}-curves", S.curves_d(it.curves), source=key, **_kw(style))
@@ -366,7 +362,7 @@ def _kw(style: dict) -> dict:
 def _shapes(it) -> list:
     if isinstance(it, S.Projection):
         return it.visible + it.smooth + it.hidden
-    return it.regions + it.curves
+    return it.regions + it.curves + (it.outlines if isinstance(it, S.Cut) else [])
 
 
 def _pt(p, what: str) -> tuple:

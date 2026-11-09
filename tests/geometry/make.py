@@ -37,6 +37,9 @@ something the viewer has to get right when it shows, slices or projects them:
 - corner.step: a window's corner in the colours the CAD gives it, as CadQuery writes
   them: a steel frame, a glass pane that is see-through, two brass screws, and a seal
   left without one.
+- duct.step: the air in a duct going from a flat rounded rectangle to a round one off to
+  the side, a loft through 25 sections of lines and arcs: rational B-spline faces whose
+  outlines OpenCascade's exact hidden-line removal draws kilometres long from above.
 
 Coordinates are millimetres, z up. Only corner.step sets colours.
 """
@@ -671,10 +674,48 @@ def corner() -> cq.Assembly:
     return a
 
 
+def duct_section(t: float) -> cq.Wire:
+    """The duct's section a share t of the way up: a rounded rectangle, 411 x 73 mm with
+    1 mm corners at the bottom, growing round and moving aside, until at the top it is a
+    circle 125 mm across, as eight arcs where the rectangle's lines and corners were."""
+    s = t * t * (3 - 2 * t)
+    w, h, r, cx = 411 + (125 - 411) * s, 73 + (125 - 73) * s, 1 + (62.5 - 1) * s, 172.5 * s
+    z = 110 + 300 * t
+
+    def at(x, y):
+        return cq.Vector(cx + x, y, z)
+
+    if t >= 1:
+        cuts = [a + d for a in (0, 90, 180, 270) for d in (-10, 10)]
+        edges = []
+        for i, a in enumerate(cuts):
+            b = cuts[(i + 1) % 8] + (360 if i == 7 else 0)
+            point = [at(r * math.cos(math.radians(v)), r * math.sin(math.radians(v))) for v in (a, (a + b) / 2, b)]
+            edges.append(cq.Edge.makeThreePointArc(*point))
+        return cq.Wire.assembleEdges(edges)
+    hw, hh = w / 2, h / 2
+    centres = [(hw - r, hh - r), (r - hw, hh - r), (r - hw, r - hh), (hw - r, r - hh)]
+    edges = []
+    for i, (x, y) in enumerate(centres):
+        point = [at(x + r * math.cos(math.radians(a)), y + r * math.sin(math.radians(a)))
+                 for a in (90 * i, 90 * i + 45, 90 * i + 90)]
+        nx, ny = centres[(i + 1) % 4]
+        a = math.radians(90 * (i + 1))
+        edges.append(cq.Edge.makeThreePointArc(*point))
+        edges.append(cq.Edge.makeLine(point[2], at(nx + r * math.cos(a), ny + r * math.sin(a))))
+    return cq.Wire.assembleEdges(edges[-1:] + edges[:-1])  # from the right side's line, as the circle's arcs
+
+
+def duct() -> cq.Assembly:
+    air = cq.Solid.makeLoft([duct_section(i / 24) for i in range(25)], False)
+    return cq.Assembly(name="duct").add(air, name="air")
+
+
 if __name__ == "__main__":
     only = set(sys.argv[1:])
     for name, make in [("primitives", primitives), ("bracket", bracket), ("freeform", freeform),
-                       ("hinge", hinge), ("profile", profile), ("grid", grid), ("corner", corner), ("beam", beam)]:
+                       ("hinge", hinge), ("profile", profile), ("grid", grid), ("corner", corner), ("beam", beam),
+                       ("duct", duct)]:
         if not only or name in only:
             save(make(), f"{name}.step")
     if not only or "profile" in only:

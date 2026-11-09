@@ -105,8 +105,11 @@ const state = {
   choices: new Map(), // key -> hidden, what this window's person switched; kept when the model reloads
   message: { text: '', error: false }, // how loading went
   // Sketching: drawing with the mouse, in color; the undo list; whether the ink is unsaved;
-  // the sketch file's time, while there is one; gen counts saves, which polls in flight ignore.
-  drawing: false, color: INK_COLORS[0][1], undo: [], dirty: false, sketchMtime: null, gen: 0, saving: false,
+  // the sketch file's time, while there is one, and whether its ink was wiped from the view
+  // (turning it), so that saving would replace ink the AI hasn't seen; gen counts saves,
+  // which polls in flight ignore.
+  drawing: false, color: INK_COLORS[0][1], undo: [], dirty: false, sketchMtime: null, sketchWiped: false,
+  gen: 0, saving: false,
   transparent: false, // the transparent view
   perspective: false, radius: 1, // the perspective view, and the model's bounding radius for it
 };
@@ -623,6 +626,7 @@ function mayTurn(dragging = false) {
 controls.mayRotate = () => mayTurn(true);
 
 function wipe() {
+  if (state.sketchMtime && !ink.empty) state.sketchWiped = true;
   ui.inkLayer.replaceChildren();
   Object.assign(state, { undo: [], dirty: false });
   updateStatus();
@@ -764,6 +768,10 @@ function sketchDocument() {
 
 async function save() {
   if (!state.model || state.saving) return;
+  // A sketch file holds the ink of one direction: saving another's replaces it.
+  if (state.sketchMtime && state.sketchWiped && !confirm(`${sketchFile} still waits for the AI, with ink `
+      + 'drawn from another direction, which turning the view wiped from here. Saving replaces it with '
+      + 'the ink here.\n\nReplace it?')) return;
   if (state.perspective) setPerspective(false); // the picture is of the orthographic view, as its ink
   state.saving = true;
   state.gen++;
@@ -772,7 +780,7 @@ async function save() {
       method: 'PUT', headers: { 'Content-Type': 'image/svg+xml', 'X-Tracepaper': '1' }, body: sketchDocument(),
     });
     const { mtime } = await r.json();
-    Object.assign(state, { dirty: false, sketchMtime: mtime });
+    Object.assign(state, { dirty: false, sketchMtime: mtime, sketchWiped: false });
     toast(`Saved ${sketchFile}`);
   } catch (err) {
     toast(`Save failed: ${err.message}`, true);
@@ -786,7 +794,7 @@ async function save() {
 // The sketch file on disk: once the AI has deleted it, it is handled, and its ink goes.
 function followSketch(sketch) {
   if (state.sketchMtime && !sketch) {
-    state.sketchMtime = null;
+    Object.assign(state, { sketchMtime: null, sketchWiped: false });
     if (!state.dirty && !ink.empty) {
       wipe();
       toast('Sketch handled');

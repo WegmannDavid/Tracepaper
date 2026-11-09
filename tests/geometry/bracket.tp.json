@@ -23,6 +23,6 @@
         {"id": "c-square", "anchor": [0, 0], "label": "⊥", "offset": [-4, -4], "type": "perpendicular"}
       ]
     },
-    {"name": "top", "title": "from above", "kind": "projection", "normal": [0, 0, 1], "xdir": [1, 0, 0]}
+    {"name": "plan", "title": "plan", "kind": "projection", "normal": [0, 0, 1], "xdir": [1, 0, 0]}
   ]
 }
