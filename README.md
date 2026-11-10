@@ -64,13 +64,13 @@ tracepaper view build                           # the build folder, or a single 
 
 Press **Connect reMarkable** in a view's toolbar. The tablet's pen then draws in that window, and the mouse keeps doing everything else, even at the same time. The pen's other end erases whole strokes. **Disconnect** gives the tablet back.
 
-The tablet shows the sheet you draw on, lined up with the pen, so you can look at the tablet instead of the screen. Over a 3D view it shows only the frame of where the pen draws, and you look at the screen:
+The tablet shows the view you draw on, lined up with the pen, so you can look at the tablet instead of the screen. A 3D view shows there only while you sketch, with **Sketch** on or ink on the view; otherwise the tablet shows just the frame of where the pen draws, so turning the model doesn't keep its screen busy. A 3D view stays orthographic while the pen draws in it, since ink is drawn on the plane that view looks at:
 
-- **The picture** follows the window: it's sent again shortly after you pan, zoom, hide something or draw. A grey frame marks the part of the tablet the pen draws in.
+- **The picture** follows the window: it's sent again shortly after you pan, zoom, turn the model, hide something or draw. A grey frame marks the part of the tablet the pen draws in.
 - **While you draw,** the tablet draws the stroke itself, in black and as fast as the tablet's own app does. When you lift the pen, the viewer's version of it replaces that a moment later, in its colour as a shade of grey.
 - **Disconnect on the tablet:** the button in its top right corner, tapped twice with a finger. The pen only draws.
 
-- **Several windows.** The pen draws in the one you used last with the mouse, or the sheet you opened last; the toolbar says where it is. **Connect here** in another window moves it there. A 3D window shows where the pen is and can disconnect it.
+- **Several windows.** The pen draws in the one you used last with the mouse, or the sheet you opened last; the toolbar says where it is. **Connect here** in another window moves it there. Any window shows where the pen is and can disconnect it.
 - **Several viewers.** Only one can have the tablet. Connecting in one takes the tablet from any other Tracepaper viewer that has it, which then shows "taken by another viewer" and leaves it alone. So a viewer can keep running all day without holding the tablet.
 - **Closing the windows** lets the tablet go too, ten seconds after the viewer's last window closed, and so does stopping the viewer.
 - **Mapping.** The tablet covers the part of the sheet in view, so zooming in with the mouse gives finer control.

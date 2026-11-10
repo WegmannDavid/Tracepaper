@@ -453,7 +453,7 @@ If the result isn't right, the person sketches again or says so, and the loop re
 - moves a scene's parts by its sliders (§2.13), live in 3D and in sections, the same in every window of the scene;
 - steps through a scene's frames (§2.10) and shows its fields (§2.11), in the panel;
 - draws plots (§2.12), and reads their values under the pointer;
-- can take ink from a drawing tablet, such as a reMarkable 2, which the person connects and disconnects in a view's window; connecting takes the tablet from any other viewer that has it. The tablet covers the current view of the window the person used last with the mouse, fitted at one scale for both axes. A tablet with a screen shows a drawing, lined up with the pen; over a 3D view it shows only the frame of where the pen draws;
+- can take ink from a drawing tablet, such as a reMarkable 2, which the person connects and disconnects in a view's window; connecting takes the tablet from any other viewer that has it. The tablet covers the current view of the window the person used last with the mouse, fitted at one scale for both axes. A tablet with a screen shows the view, lined up with the pen: a drawing, or a 3D view while the person sketches on it (kept orthographic while the pen draws in it), and otherwise only the frame of where the pen draws;
 - writes the sketch file on Save (§3), and clears the ink once the AI has deleted that file;
 - never solves, checks or interprets anything, and never runs `regenerate`.
 

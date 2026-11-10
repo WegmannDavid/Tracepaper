@@ -1166,21 +1166,49 @@ class ViewerInFirefox(unittest.TestCase):
     def test_tablet_pen_on_a_model(self):
         hub, pen = self.server.pen_hub, self.server.pen
         self.open_viewer("bracket.glb")
+        self.m.run("window.tracepaper3d.ready.then(() => { window.tracepaper3d.setPerspective(true); done(true); });")
         hub.set_active(self.m.run("done(window.tracepaper3d.CLIENT);"))
         hub.publish_status("connected", "test tablet", screen=True)
         self.assertTrue(self.m.run(
             "until(() => /reMarkable · \\d+ × \\d+ mm/.test(document.getElementById('tpv-pen').textContent), done);"))
         self.assertEqual(self.pen_ui()[1], "Disconnect")
+        # The pen draws on the orthographic view, so the tablet shows that one.
+        self.assertEqual(self.m.run("done([window.tracepaper3d.state.perspective,"
+                                    " document.getElementById('tpv-perspective').disabled]);"), [False, True])
         tw, th = tablet_size(90)
+        shaded = """
+            const shaded = (canvas) => {
+              const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+              let n = 0;
+              for (let i = 0; i < data.length; i += 4) if (data[i] + data[i + 1] + data[i + 2] < 700) n++;
+              return n / (data.length / 4);
+            };
+        """
+        # Until the person sketches, the tablet shows only the frame of where the pen draws.
+        self.assertLess(self.m.run(shaded + "window.tracepaper3d.renderScreen().then((c) => done(shaded(c)));"), 0.01)
         sent = len(pen.shown)
         for i in range(11):
             hub.publish_frame({"x": tw / 2 - 5 + i, "y": th / 2, "p": 0.5, "tool": "pen", "touch": True, "done": 0})
         hub.publish_frame({"x": tw / 2 + 5, "y": th / 2, "p": 0, "tool": "pen", "touch": False, "done": 1700000000654321})
         self.assertTrue(self.m.run("until(() => document.getElementById('tp-sketch').children.length === 1"
                                    " && !window.tracepaper3d.pen.down, done);"))
-        # The tablet's screen gets a blank page, which takes its own drawing of the stroke away.
+        # The tablet's screen gets the view with the stroke on it, which takes its own drawing of
+        # the stroke away.
         self.wait_for(lambda: len(pen.shown) > sent and pen.done == 1700000000654321)
-        self.assertEqual(struct.unpack(">II", pen.shown[-1][16:24]), screen_size(90))
+        width, height = struct.unpack(">II", pen.shown[-1][16:24])
+        self.assertEqual((width, height), screen_size(90))
+        k = width / tw  # screen pixels per tablet mm
+        got = self.m.run(shaded + f"""
+            window.tracepaper3d.renderScreen().then((canvas) => {{
+              const ctx = canvas.getContext('2d');
+              const at = (x, y) => [...ctx.getImageData(x, y, 1, 1).data];
+              const inked = (x, y) => [-2, -1, 0, 1, 2].some((d) => {{ const [r, g, b] = at(x, y + d); return r - g > 60; }});
+              done({{ shaded: shaded(canvas), on: inked({round(tw / 2 * k)}, {round(th / 2 * k)}),
+                      above: inked({round(tw / 2 * k)}, {round((th / 2 - 5) * k)}) }});
+            }});
+        """)
+        self.assertGreater(got["shaded"], 0.02)  # the model now, not a blank page
+        self.assertEqual((got["on"], got["above"]), (True, False))
         self.m.run("window.tracepaper3d.state.dirty = false; document.getElementById('tpv-pen-button').click();"
                    "until(() => document.getElementById('tpv-pen').hidden, done);")
         self.assertEqual(hub.status["state"], "off")

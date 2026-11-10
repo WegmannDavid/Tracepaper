@@ -1,7 +1,8 @@
-// The picture of a sheet window's view that the tablet's screen shows (tracepaper/pen.py):
-// the tablet's whole screen as it is held, with the view drawn over the part of it that
-// the pen covers (pen.js), so the pen lines up with what it draws on, and a grey frame
-// round that part. A 3D window's view isn't shown: its picture is the frame alone.
+// The picture of a window's view that the tablet's screen shows (tracepaper/pen.py): the
+// tablet's whole screen as it is held, with the view drawn over the part of it that the
+// pen covers (pen.js), so the pen lines up with what it draws on, and a grey frame round
+// that part. A sheet's view is drawn from the sheet (renderView), a 3D view's from what
+// its window shows (renderLayers).
 import { activeArea } from './pen.js';
 import { SVG_NS } from './sheetdoc.js';
 
@@ -27,11 +28,39 @@ export async function renderView({ sheet, cam, stage, size, pixels, font }) {
   }
 }
 
-// The tablet's screen with only the frame of where its pen draws on a view of the stage's
-// size, for a 3D window: the person looks at the window while drawing.
-export function renderBlank({ stage, size, pixels }) {
-  const a = activeArea(size, stage);
-  return screen(pixels, a, pixels[0] / size.width, () => {});
+// The tablet's screen with layers drawn over the part the pen covers, the first lowest,
+// for a 3D window: each a canvas, or an SVG element to draw at the stage's size, such as
+// the ink over the model. All are taken now, so a WebGL canvas just drawn still holds its
+// picture.
+export async function renderLayers({ layers, stage, size, pixels }) {
+  const a = activeArea(size, stage), k = pixels[0] / size.width;
+  const images = layers.map((layer) => {
+    if (!(layer instanceof SVGSVGElement)) {
+      const copy = Object.assign(document.createElement('canvas'), { width: layer.width, height: layer.height });
+      copy.getContext('2d').drawImage(layer, 0, 0);
+      return copy;
+    }
+    const svg = layer.cloneNode(true);
+    svg.setAttribute('width', stage.width);
+    svg.setAttribute('height', stage.height);
+    return svg;
+  });
+  const drawn = [];
+  for (const image of images) {
+    if (!(image instanceof SVGSVGElement)) { drawn.push(image); continue; }
+    const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(image)], { type: 'image/svg+xml' }));
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      drawn.push(img);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  return screen(pixels, a, k, (ctx) => {
+    for (const img of drawn) ctx.drawImage(img, a.x * k, a.y * k, a.width * k, a.height * k);
+  });
 }
 
 // A white screen of pixels with draw(ctx) on it, and a grey frame round a: the part the

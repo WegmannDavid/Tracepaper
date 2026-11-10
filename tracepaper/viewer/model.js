@@ -13,7 +13,7 @@ import { FramePanel } from './frames.js';
 import { INK_COLORS, Ink, PenInput, coalesced, swatch } from './ink.js';
 import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import { ScreenFeed, Tablet } from './pen.js';
-import { renderBlank } from './screen.js';
+import { renderLayers } from './screen.js';
 import { SVG_NS, growViewBox, inkBounds, inkLayerOf, parseSvg } from './sheetdoc.js';
 import { SliderPanel } from './sliders.js';
 import { split, splitSegments, withMade } from './bend.js';
@@ -114,7 +114,9 @@ const state = {
   gen: 0, saving: false,
   transparent: false, // the transparent view
   perspective: false, radius: 1, // the perspective view, and the model's bounding radius for it
+  penHere: false, // whether the tablet's pen draws in this window
 };
+let feed = null; // the tablet's screen (below), sent the view again shortly after each change while sketching
 let resolveReady;
 const ready = new Promise((resolve) => { resolveReady = resolve; });
 
@@ -127,6 +129,7 @@ function render() {
   }
   renderAxes();
   placeInk();
+  if (feed && streaming()) screenChanged(); // feed: once the page is set up
 }
 
 // Each axis as the camera sees it, the ones pointing away drawn first. Pointing at the
@@ -400,7 +403,9 @@ function setTransparent(on) {
 }
 
 // Ink is drawn on the plane the orthographic view looks at, so sketching is done in it: the
-// perspective view is off while the mouse draws or there is ink.
+// perspective view is off while the mouse draws, there is ink, or the tablet's pen draws here.
+function sketching() { return state.drawing || !ink.empty || state.penHere; }
+
 function setPerspective(on) {
   state.perspective = on;
   ui.perspective.setAttribute('aria-pressed', String(on));
@@ -615,7 +620,7 @@ function updateStatus() {
   ui.undo.disabled = !state.undo.length;
   ui.clear.disabled = ink.empty;
   ui.save.disabled = !state.model;
-  ui.perspective.disabled = state.drawing || !ink.empty;
+  ui.perspective.disabled = sketching();
   ui.perspective.title = ui.perspective.disabled ? 'Sketching is done in the orthographic view'
     : 'Draw with perspective, as a camera sees it, instead of orthographic (O)';
   ui.hint.textContent = state.drawing ? 'Drag to draw · right-drag to pan · scroll to zoom'
@@ -663,7 +668,7 @@ const NS = { inkscape: 'http://www.inkscape.org/namespaces/inkscape', tp: TP_NS,
 
 const ink = new Ink({
   layer: () => ui.inkLayer, ref: () => ui.inkLayer, undo: () => state.undo,
-  changed: () => { state.dirty = true; updateStatus(); },
+  changed: () => { state.dirty = true; updateStatus(); screenChanged(); },
 });
 let gesture = null; // a stroke, or erasing, with the mouse or a pen on this computer
 
@@ -737,6 +742,7 @@ function setDrawing(on) {
   ui.sketch.setAttribute('aria-pressed', String(on));
   updateCursor();
   updateStatus();
+  screenChanged();
 }
 
 // Space held: the left button pans, as on the drawings.
@@ -952,9 +958,11 @@ function openDrawing() {
 
 // ---- Tablet pen
 // The toolbar's button connects the reMarkable (tracepaper/pen.py) and lets it go. Its pen
-// draws and erases over the view (ink.js's PenInput). The tablet's screen shows no
-// picture of a 3D view, only the frame of where the pen draws (screen.js), which also
-// takes the tablet's own ink of each stroke away once it ends: the person looks here.
+// draws and erases over the view (ink.js's PenInput). While the person sketches (Sketch is
+// on, or there is ink), the tablet's screen shows the view with the ink over it
+// (screen.js), sent again shortly after the view changes; otherwise only the frame of where
+// the pen draws, so that turning the model doesn't keep the e-ink screen busy. Each picture
+// also takes the tablet's own ink of the strokes in it away.
 
 const tablet = new Tablet({
   client: CLIENT, stage: ui.canvas, label: ui.pen, button: ui.penButton, toast,
@@ -963,6 +971,9 @@ const tablet = new Tablet({
       pen.end();
       pen.showCursor(null);
     }
+    state.penHere = s?.state === 'connected' && tablet.here;
+    if (state.penHere && state.perspective) setPerspective(false); // the tablet shows the view it draws on
+    else updateStatus();
     screenChanged();
   },
   onFrame: (f) => pen.frame(f),
@@ -973,16 +984,30 @@ const pen = new PenInput({
   ready: () => !!state.model && tablet.here, begin: beginStroke, ended: screenChanged,
 });
 
-const feed = new ScreenFeed({
-  tablet, pen, client: CLIENT, busy: () => !!gesture,
-  picture: () => {
-    const r = ui.canvas.getBoundingClientRect();
-    return r.width && r.height && tablet.status?.pixels
-      ? renderBlank({ stage: r, size: tablet.size, pixels: tablet.status.pixels }) : null;
-  },
-});
+feed = new ScreenFeed({ tablet, pen, client: CLIENT, picture: renderScreen, busy: () => !!gesture });
 
-function screenChanged() { feed.changed(); }
+function screenChanged() { feed?.changed(); }
+
+// Whether the tablet's screen shows the view: while the person sketches.
+function streaming() { return state.drawing || !ink.empty; }
+
+// The picture for the tablet's screen: the view as the window shows it, with the ink, or
+// the frame alone while not sketching. The WebGL canvas keeps no copy of what it shows, so
+// it is drawn again and taken at once, without asking for another picture.
+function renderScreen() {
+  const r = ui.canvas.getBoundingClientRect();
+  if (!r.width || !r.height || !tablet.status?.pixels) return null;
+  if (!streaming()) return renderLayers({ layers: [], stage: r, size: tablet.size, pixels: tablet.status.pixels });
+  const sending = feed;
+  feed = null;
+  try {
+    render();
+    return renderLayers({ layers: renderer ? [ui.canvas, ui.ink] : [ui.ink], stage: r, size: tablet.size,
+                          pixels: tablet.status.pixels });
+  } finally {
+    feed = sending;
+  }
+}
 
 // ---- Wiring
 
@@ -1036,7 +1061,7 @@ window.addEventListener('keydown', (e) => {
   else if (key === 'f') frame(null);
   else if (key === 'e') showEdges(!edges?.shown);
   else if (key === 't') setTransparent(!state.transparent);
-  else if (key === 'o' && !state.drawing && ink.empty) setPerspective(!state.perspective);
+  else if (key === 'o' && !sketching()) setPerspective(!state.perspective);
   else if (key === 'd' && isScene) openDrawing();
   else if (key === 'p') setDrawing(!state.drawing);
   else if (key === 'escape') setDrawing(false);
@@ -1057,4 +1082,4 @@ tablet.connect();
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten,
   showEdges, setTransparent, setPerspective, viewCamera, slices, ink, pen, save, undo, setDrawing, viewArea,
-  drawingView, frames, sliders };
+  drawingView, frames, sliders, renderScreen };
