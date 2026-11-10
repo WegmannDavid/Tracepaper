@@ -1895,6 +1895,56 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertEqual((back["fs"], back["own"], back["heads"], back["kept"]), (3.5, None, before["heads"], None))
         (self.dir / "text-sizes.sketch.svg").unlink()
 
+    def test_erase_with_the_mouse(self):
+        # On a sheet: Erase takes the strokes the mouse drags over, whole, and Undo brings them back.
+        self.open_viewer()
+        got = self.m.run("""
+            stroke([[10, 5], [20, 5]]);
+            stroke([[10, 15], [20, 15]]);
+            document.querySelector('[data-tool="erase"]').click();
+            const cursor = stage.style.cursor;
+            fire('pointerdown', screen(tp.state.ref, 15, 0), 'mouse');
+            fire('pointermove', screen(tp.state.ref, 15, 5), 'mouse');
+            fire('pointerup', screen(tp.state.ref, 15, 8), 'mouse');
+            const left = [...tp.state.ink.children].map((p) => p.getAttribute('d'));
+            tp.undo();
+            const ring = new Image();
+            ring.src = cursor.match(/url\\("(.*)"\\)/)[1];
+            ring.decode().then(() => done({ cursor: [ring.width, ring.height], left, back: tp.state.ink.children.length }),
+                               () => done({ cursor: null, left, back: tp.state.ink.children.length }));
+        """)
+        self.assertEqual(got["cursor"], [22, 22])  # the eraser's ring, as far as it reaches
+        self.assertEqual(got["left"], ["M10 15 L20 15"])
+        self.assertEqual(got["back"], 2)
+
+        # Over a 3D view: Erase beside Sketch, each switching the other off.
+        self.open_viewer("core.glb")
+        got = self.m.run("""
+            const t = window.tracepaper3d, canvas = document.getElementById('tpv-canvas');
+            const layer = document.getElementById('tp-sketch'), r = canvas.getBoundingClientRect();
+            const p = (fx, fy) => ({ x: r.left + fx * r.width, y: r.top + fy * r.height });
+            const send = (type, q) => canvas.dispatchEvent(new PointerEvent(type, {
+              bubbles: true, cancelable: true, pointerId: 9, pointerType: 'mouse', isPrimary: true, clientX: q.x,
+              clientY: q.y, button: type === 'pointermove' ? -1 : 0, buttons: type === 'pointerup' ? 0 : 1 }));
+            const drag = (a, b) => {
+              send('pointerdown', a);
+              for (let i = 1; i <= 10; i++) send('pointermove', { x: a.x + (b.x - a.x) * i / 10, y: a.y + (b.y - a.y) * i / 10 });
+              send('pointerup', b);
+            };
+            document.getElementById('tpv-sketch').click();
+            drag(p(0.3, 0.3), p(0.7, 0.3));
+            drag(p(0.3, 0.7), p(0.7, 0.7));
+            document.getElementById('tpv-erase').click();
+            const pressed = ['tpv-sketch', 'tpv-erase'].map((id) => document.getElementById(id).getAttribute('aria-pressed'));
+            const turn = t.camera.quaternion.toArray();
+            drag(p(0.5, 0.2), p(0.5, 0.4));
+            const still = t.camera.quaternion.toArray().every((v, i) => v === turn[i]);
+            done({ pressed, still, left: layer.children.length });
+            t.setMouse(null);
+            t.state.dirty = false;
+        """)
+        self.assertEqual(got, {"pressed": ["false", "true"], "still": True, "left": 1})
+
     def test_sketch_round_trip(self):
         self.open_viewer()
 

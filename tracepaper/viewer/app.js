@@ -2,7 +2,7 @@
 // constraint labels and sketch on top, with the mouse or a tablet's pen.
 // Save writes <sheet>.sketch.svg (SPEC.md §3).
 import * as A from './annotations.js';
-import { INK_COLORS, Ink, PenInput, coalesced, pxPerUnit, swatch, toLocal } from './ink.js';
+import { ERASER_CURSOR, INK_COLORS, Ink, PenInput, coalesced, pxPerUnit, swatch, toLocal } from './ink.js';
 import { FieldView } from './fieldview.js';
 import { FramePanel } from './frames.js';
 import { cutPath, loadParts } from './livecut.js';
@@ -669,6 +669,7 @@ function updateCursor() {
   const t = gesture?.type;
   ui.stage.style.cursor = t === 'pan' || t === 'pinch' || t === 'drag' ? 'grabbing'
     : spaceHeld ? 'grab'
+    : state.tool === 'erase' ? ERASER_CURSOR
     : state.tool === 'pen' || state.tool === 'pick' || state.tool === 'measure' ? 'crosshair'
     : hover ? 'grab' : 'default';
 }
@@ -752,8 +753,9 @@ function onPointerDown(e) {
     return;
   }
   if (gesture) return;
-  if (e.pointerType === 'pen' && (e.button === 5 || e.buttons & 32)) {
-    // A pen's eraser end erases, whatever the tool.
+  if ((e.pointerType === 'pen' && (e.button === 5 || e.buttons & 32))
+      || (state.tool === 'erase' && e.button === 0 && !spaceHeld && !e.shiftKey)) {
+    // A pen's eraser end erases, whatever the tool; so does the mouse with Erase.
     gesture = { type: 'erase', id: e.pointerId, removed: [] };
     ink.eraseAt(e.clientX, e.clientY, gesture.removed);
   } else if (e.button === 1 || e.button === 2 || (e.button === 0 && (spaceHeld || e.shiftKey))) {
@@ -1102,6 +1104,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (!spaceHeld) { spaceHeld = true; setHover(null); updateCursor(); }
   } else if (key === 'p') setTool('pen');
+  else if (key === 'x') setTool('erase');
   else if (key === 'v' || key === 'm') setTool('move');
   else if (key === 'i') setTool('pick');
   else if (key === 'escape' && state.tool === 'pick') setTool(state.prevTool);

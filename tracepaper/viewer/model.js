@@ -10,7 +10,7 @@ import { TP_NS, fmt } from './annotations.js';
 import { CadControls } from './controls.js';
 import { Edges } from './edges.js';
 import { FramePanel } from './frames.js';
-import { INK_COLORS, Ink, PenInput, coalesced, swatch } from './ink.js';
+import { ERASER_CURSOR, INK_COLORS, Ink, PenInput, coalesced, swatch } from './ink.js';
 import { $, CLIENT, fetchOk, listViews, panelDivider, renderViewsMenu, toaster, viewUrl } from './page.js';
 import { ScreenFeed, Tablet } from './pen.js';
 import { renderLayers } from './screen.js';
@@ -36,7 +36,7 @@ const ui = {
   canvas: $('tpv-canvas'), view: $('tpv-view'), status: $('tpv-status'), empty: $('tpv-empty'),
   toast: $('tpv-toast'), axes: $('tpv-axes'), edges: $('tpv-edges'), slices: $('tpv-slices'),
   penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), fit: $('tpv-fit'), tree: $('tpv-layers'),
-  bar: $('tpv-bar'), ink: $('tpv-ink'), inkLayer: $('tp-sketch'), sketch: $('tpv-sketch'), swatches: $('tpv-swatches'),
+  bar: $('tpv-bar'), ink: $('tpv-ink'), inkLayer: $('tp-sketch'), sketch: $('tpv-sketch'), erase: $('tpv-erase'), swatches: $('tpv-swatches'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), save: $('tpv-save'), hint: $('tpv-hint'),
   transparent: $('tpv-transparent'), perspective: $('tpv-perspective'),
   frames: $('tpv-frames'), framesHead: $('tpv-frames-head'), motion: $('tpv-motion'), motionHead: $('tpv-motion-head'),
@@ -111,7 +111,7 @@ const state = {
   // the sketch file's time, while there is one, and whether its ink was wiped from the view
   // (turning it), so that saving would replace ink the AI hasn't seen; gen counts saves,
   // which polls in flight ignore.
-  drawing: false, color: INK_COLORS[0][1], undo: [], dirty: false, sketchMtime: null, sketchWiped: false,
+  drawing: false, erasing: false, color: INK_COLORS[0][1], undo: [], dirty: false, sketchMtime: null, sketchWiped: false,
   gen: 0, saving: false,
   transparent: false, // the transparent view
   perspective: false, radius: 1, // the perspective view, and the model's bounding radius for it
@@ -405,7 +405,7 @@ function setTransparent(on) {
 
 // Ink is drawn on the plane the orthographic view looks at, so sketching is done in it: the
 // perspective view is off while the mouse draws, there is ink, or the tablet's pen draws here.
-function sketching() { return state.drawing || !ink.empty || state.penHere; }
+function sketching() { return state.drawing || state.erasing || !ink.empty || state.penHere; }
 
 function setPerspective(on) {
   state.perspective = on;
@@ -625,6 +625,7 @@ function updateStatus() {
   ui.perspective.title = ui.perspective.disabled ? 'Sketching is done in the orthographic view'
     : 'Draw with perspective, as a camera sees it, instead of orthographic (O)';
   ui.hint.textContent = state.drawing ? 'Drag to draw · right-drag to pan · scroll to zoom'
+    : state.erasing ? 'Drag over strokes to erase them · right-drag to pan · scroll to zoom'
     : ink.empty ? 'Drag to rotate · right-drag to pan · scroll to zoom'
     : 'Turning the view wipes the ink · right-drag to pan · scroll to zoom';
 }
@@ -739,8 +740,16 @@ function setDrawing(on) {
     setPerspective(false);
     toast('Sketching is done in the orthographic view');
   }
-  state.drawing = controls.drawing = on;
-  ui.sketch.setAttribute('aria-pressed', String(on));
+  setMouse(on ? 'draw' : null);
+}
+
+// What the mouse's left button does over the view: 'draw', 'erase', or null to turn it.
+function setMouse(mode) {
+  state.drawing = mode === 'draw';
+  state.erasing = mode === 'erase';
+  controls.drawing = !!mode; // the left button is the page's
+  ui.sketch.setAttribute('aria-pressed', String(state.drawing));
+  ui.erase.setAttribute('aria-pressed', String(state.erasing));
   updateCursor();
   updateStatus();
   screenChanged();
@@ -753,7 +762,7 @@ function holdSpace(on) {
 }
 
 function updateCursor() {
-  ui.canvas.style.cursor = controls.space ? 'grab' : state.drawing ? 'crosshair' : '';
+  ui.canvas.style.cursor = controls.space ? 'grab' : state.drawing ? 'crosshair' : state.erasing ? ERASER_CURSOR : '';
 }
 
 function setColor(i) {
@@ -774,14 +783,15 @@ function undo() {
   updateStatus();
 }
 
-// The mouse draws while Sketch is on; a pen's eraser end erases whatever the tool. The
-// camera controls take the rest.
+// The mouse draws while Sketch is on and erases while Erase is; a pen's eraser end erases
+// whatever the mouse does. The camera controls take the rest.
 function onPointerDown(e) {
   if (!state.model || gesture) return;
-  if (e.pointerType === 'pen' && (e.button === 5 || e.buttons & 32)) {
+  const left = e.button === 0 && !e.shiftKey && !controls.space && e.pointerType !== 'touch';
+  if ((e.pointerType === 'pen' && (e.button === 5 || e.buttons & 32)) || (state.erasing && left)) {
     gesture = { type: 'erase', id: e.pointerId, removed: [] };
     ink.eraseAt(e.clientX, e.clientY, gesture.removed);
-  } else if (state.drawing && e.button === 0 && !e.shiftKey && !controls.space && e.pointerType !== 'touch') {
+  } else if (state.drawing && left) {
     gesture = { type: 'stroke', id: e.pointerId, ...beginStroke(e.clientX, e.clientY) };
   } else return;
   try { ui.canvas.setPointerCapture(e.pointerId); } catch { /* not an active pointer */ }
@@ -993,6 +1003,7 @@ INK_COLORS.forEach((_, i) => {
   ui.swatches.append(b);
 });
 ui.sketch.addEventListener('click', () => setDrawing(!state.drawing));
+ui.erase.addEventListener('click', () => setMouse(state.erasing ? null : 'erase'));
 ui.undo.addEventListener('click', undo);
 ui.clear.addEventListener('click', () => ink.clear());
 ui.save.addEventListener('click', save);
@@ -1031,7 +1042,8 @@ window.addEventListener('keydown', (e) => {
   else if (key === 't') setTransparent(!state.transparent);
   else if (key === 'o' && !sketching()) setPerspective(!state.perspective);
   else if (key === 'p') setDrawing(!state.drawing);
-  else if (key === 'escape') setDrawing(false);
+  else if (key === 'x') setMouse(state.erasing ? null : 'erase');
+  else if (key === 'escape') setMouse(null);
 });
 window.addEventListener('keyup', (e) => { if (e.key === ' ') holdSpace(false); });
 window.addEventListener('blur', () => holdSpace(false)); // its keyup goes elsewhere
@@ -1049,4 +1061,4 @@ tablet.connect();
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten,
   showEdges, setTransparent, setPerspective, viewCamera, slices, ink, pen, save, undo, setDrawing, viewArea,
-  frames, sliders, renderScreen };
+  frames, sliders, renderScreen, setMouse };

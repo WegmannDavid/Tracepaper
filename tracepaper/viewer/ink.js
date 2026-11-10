@@ -8,6 +8,11 @@ import { NUMBER, SVG_NS } from './sheetdoc.js';
 
 export const INK_COLORS = [['Red', '#e11d48'], ['Blue', '#2563eb'], ['Green', '#16a34a'], ['Black', '#1f2937']];
 export const ERASER_PX = 10; // radius of the pen's eraser end, on screen
+// The mouse's cursor while it erases: a ring as far as the eraser reaches.
+export const ERASER_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${2 * ERASER_PX + 2}" height="${2 * ERASER_PX + 2}">`
+  + `<circle cx="${ERASER_PX + 1}" cy="${ERASER_PX + 1}" r="${ERASER_PX}" fill="rgba(255,255,255,0.4)" stroke="#444"/></svg>`,
+)}") ${ERASER_PX + 1} ${ERASER_PX + 1}, crosshair`;
 const INK_WIDTH_PX = 2.2; // stroke width on screen, at any zoom (SPEC-v0.md §2.1)
 const MIN_STEP_PX = 0.8; // pointer samples closer than this to the last one are dropped
 
