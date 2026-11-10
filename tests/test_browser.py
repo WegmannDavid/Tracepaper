@@ -750,10 +750,10 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertEqual(after, before)
 
     def pen_ui(self):
-        """The toolbar's tablet status, or None if hidden, and its button's label, or None."""
+        """The toolbar's tablet button: its label and the state its dot shows, or None if hidden."""
         return self.m.run("""
-            const status = document.getElementById('tpv-pen'), button = document.getElementById('tpv-pen-button');
-            done([status.hidden ? null : status.textContent, button.hidden ? null : button.textContent]);
+            const button = document.getElementById('tpv-pen-button');
+            done(button.hidden ? null : [button.textContent, button.dataset.state]);
         """)
 
     def test_edges_under_a_surface_stay_hidden(self):
@@ -974,7 +974,7 @@ class ViewerInFirefox(unittest.TestCase):
         self.open_viewer()
         main = self.m.call("WebDriver:GetWindowHandle")["value"]
         client = {"a": self.m.run("done(tp.CLIENT);")}
-        self.assertEqual(self.pen_ui(), [None, "Connect reMarkable"])  # nothing connects by itself
+        self.assertEqual(self.pen_ui(), ["Connect reMarkable", "off"])  # nothing connects by itself
         self.m.run("document.getElementById('tpv-pen-button').click(); "
                    "until(() => tp.tablet.status?.state === 'connected', done);")
         self.assertEqual(hub.status["active"], client["a"])
@@ -1014,15 +1014,14 @@ class ViewerInFirefox(unittest.TestCase):
             before, after = draw_and_wait("a")
             self.assertEqual(after, {"a": before["a"] + 1, "b": before["b"]})
             self.m.call("WebDriver:SwitchToWindow", {"handle": window["b"]})
-            self.assertEqual(self.m.run("done(document.getElementById('tpv-pen').textContent);"),
-                             "reMarkable · in another window")
+            self.assertEqual(self.pen_ui(), ["Connect here", "connected"])  # the pen draws in another window
             use("b")
             before, after = draw_and_wait("b")
             self.assertEqual(after, {"a": before["a"], "b": before["b"] + 1})
 
             # Connect here, in the other window, brings the pen back; Disconnect lets it go.
             self.m.call("WebDriver:SwitchToWindow", {"handle": window["a"]})
-            self.assertEqual(self.pen_ui(), ["reMarkable · in another window", "Connect here"])
+            self.assertEqual(self.pen_ui(), ["Connect here", "connected"])
             self.m.run("document.getElementById('tpv-pen-button').click(); done(true);")
             self.wait_for(lambda: hub.status["active"] == client["a"])
             before, after = draw_and_wait("a")
@@ -1032,7 +1031,7 @@ class ViewerInFirefox(unittest.TestCase):
                                        " === 'Disconnect', done);"))
             self.m.run("document.getElementById('tpv-pen-button').click(); "
                        "until(() => tp.tablet.status?.state === 'off', done);")
-            self.assertEqual(self.pen_ui(), [None, "Connect reMarkable"])
+            self.assertEqual(self.pen_ui(), ["Connect reMarkable", "off"])
         finally:
             self.m.call("WebDriver:SwitchToWindow", {"handle": other})
             self.m.call("WebDriver:CloseWindow")
@@ -1170,8 +1169,8 @@ class ViewerInFirefox(unittest.TestCase):
         hub.set_active(self.m.run("done(window.tracepaper3d.CLIENT);"))
         hub.publish_status("connected", "test tablet", screen=True)
         self.assertTrue(self.m.run(
-            "until(() => /reMarkable · \\d+ × \\d+ mm/.test(document.getElementById('tpv-pen').textContent), done);"))
-        self.assertEqual(self.pen_ui()[1], "Disconnect")
+            "until(() => / \\d+ × \\d+ mm /.test(document.getElementById('tpv-pen-button').title), done);"))
+        self.assertEqual(self.pen_ui(), ["Disconnect", "connected"])
         # The pen draws on the orthographic view, so the tablet shows that one.
         self.assertEqual(self.m.run("done([window.tracepaper3d.state.perspective,"
                                     " document.getElementById('tpv-perspective').disabled]);"), [False, True])
@@ -1210,8 +1209,38 @@ class ViewerInFirefox(unittest.TestCase):
         self.assertGreater(got["shaded"], 0.02)  # the model now, not a blank page
         self.assertEqual((got["on"], got["above"]), (True, False))
         self.m.run("window.tracepaper3d.state.dirty = false; document.getElementById('tpv-pen-button').click();"
-                   "until(() => document.getElementById('tpv-pen').hidden, done);")
+                   "until(() => document.getElementById('tpv-pen-button').textContent === 'Connect reMarkable', done);")
         self.assertEqual(hub.status["state"], "off")
+
+    def test_toolbar_wraps_when_narrow(self):
+        hub = self.server.pen_hub
+        hub.publish_status("off", "")  # with Connect reMarkable shown
+        measure = """
+            const bar = document.getElementById('tpv-bar'), inner = window.innerWidth;
+            const items = [...bar.querySelectorAll('a, select, button, .tpv-text-size')]
+              .filter((el) => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden')
+              .map((el) => ({ name: el.textContent.trim() || el.ariaLabel || el.id, r: el.getBoundingClientRect() }));
+            const cut = items.filter(({ r }) => r.left < -0.5 || r.right > inner + 0.5).map((i) => i.name);
+            const overlaps = [];
+            for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+              const a = items[i].r, b = items[j].r;
+              if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5)
+                overlaps.push([items[i].name, items[j].name]);
+            }
+            done({ cut, overlaps, rows: new Set(items.map(({ r }) => Math.round(r.top))).size });
+        """
+        try:
+            for view in (None, "bracket.glb"):
+                self.open_viewer(view)
+                self.assertTrue(self.m.run("until(() => !document.getElementById('tpv-pen-button').hidden, done);"))
+                for width in (1400, 1000, 700, 500, 360):
+                    with self.subTest(view=view, width=width):
+                        self.m.call("WebDriver:SetWindowRect", {"width": width, "height": 900})
+                        got = self.m.run("requestAnimationFrame(() => requestAnimationFrame(() => {" + measure + "}));")
+                        self.assertEqual((got["cut"], got["overlaps"]), ([], []))
+        finally:
+            self.m.call("WebDriver:SetWindowRect", {"width": 1400, "height": 900})
+            hub.publish_status("connected", "test tablet")
 
     def test_project_page_lists_the_views(self):
         base = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -1362,22 +1391,6 @@ class ViewerInFirefox(unittest.TestCase):
             self.assertIn("∠ABC 65.22°", got["text"])
             self.assertEqual(got["edge"], ["curve", 0, 12])
             self.assertTrue(got["drawn"])
-            # The 3D view of a scene, and the drawing of what it shows.
-            base = f"http://127.0.0.1:{self.server.server_address[1]}"
-            self.m.call("WebDriver:Navigate", {"url": f"{base}/view/scenes/bracket.step"})
-            got = self.m.run("""
-                until(() => window.tracepaper3d?.state.model, () => {
-                  const t = window.tracepaper3d, views = [];
-                  t.frame(t.LOOKS.front);
-                  views.push(t.drawingView());
-                  const x = t.slices.planes[0];
-                  Object.assign(x, { on: true, at: 20 });
-                  t.slices.update();
-                  views.push(t.drawingView());
-                  done({ views, button: !document.getElementById('tpv-drawing').hidden });
-                });
-            """)
-            self.assertEqual(got, {"views": ["front", "x=20"], "button": True})
             # A named section, its dimensions draggable.
             self.open_viewer("scenes/bracket.step#section-a")
             moved = self.m.run("""
@@ -1992,11 +2005,11 @@ class ViewerInFirefox(unittest.TestCase):
         hub.publish_status("connected", "test tablet")
         view = self.m.run("""
             tp.setTool('move');  // the pen draws whatever the mouse's tool
-            until(() => tp.tablet.status?.state === 'connected' && !document.getElementById('tpv-pen').hidden && (() => {
+            until(() => tp.tablet.status?.state === 'connected' && (() => {
               const r = document.getElementById('tpv-stage').getBoundingClientRect();
               const m = tp.state.ref.getScreenCTM();
               return { w: r.width, h: r.height, left: r.left, top: r.top, a: m.a, d: m.d, e: m.e, f: m.f,
-                       strokes: tp.state.ink.children.length, label: document.getElementById('tpv-pen').textContent };
+                       strokes: tp.state.ink.children.length, label: document.getElementById('tpv-pen-button').title };
             })(), done);
         """)
         self.assertTrue(view)

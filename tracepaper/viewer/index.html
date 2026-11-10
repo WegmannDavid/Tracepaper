@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="tpv-bar" id="tpv-bar">
-  <a class="tpv-brand" href="/" title="All views in this project">Tracepaper</a>
+  <a class="tpv-home" href="/" title="All views in this project" aria-label="All views"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 2.5l5.5 5M4 6.5v7h3v-4h2v4h3v-7"/></svg></a>
   <select id="tpv-sheet" aria-label="View"></select>
   <div class="tpv-group" role="group" aria-label="Tool">
     <button data-tool="move" title="Move labels, pan (V)">Move</button>
@@ -17,7 +17,7 @@
   </div>
   <div class="tpv-group" id="tpv-swatches" role="group" aria-label="Ink colour"></div>
   <div class="tpv-group">
-    <button id="tpv-undo" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="tpv-undo" class="tpv-icon" title="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.2 5.2A5 5 0 1 1 3 9"/><path d="M3.6 1.8v3.8h3.8"/></svg></button>
     <button id="tpv-clear" title="Remove all ink">Clear</button>
     <button id="tpv-fit" title="Fit the sheet (F)">Fit</button>
   </div>
@@ -27,7 +27,6 @@
     <button id="tpv-text-larger" title="Larger text in the dimensions and symbols; this browser remembers it for the view">A+</button>
   </div>
   <div class="tpv-end">
-    <span id="tpv-pen" class="tpv-pen" hidden></span>
     <button id="tpv-pen-button" hidden>Connect reMarkable</button>
     <span id="tpv-status" class="tpv-status" role="status"></span>
   </div>

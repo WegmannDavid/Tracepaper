@@ -34,7 +34,7 @@ const ui = {
   host: $('tpv-host'), sheet: $('tpv-sheet'), layers: $('tpv-layers'), status: $('tpv-status'),
   coords: $('tpv-coords'), toast: $('tpv-toast'), empty: $('tpv-empty'), save: $('tpv-save'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), fit: $('tpv-fit'), swatches: $('tpv-swatches'),
-  pen: $('tpv-pen'), penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), pickBox: $('tpv-pick-box'),
+  penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), pickBox: $('tpv-pick-box'),
   frames: $('tpv-frames'), framesHead: $('tpv-frames-head'), fields: $('tpv-fields'), fieldsHead: $('tpv-fields-head'),
   textSmaller: $('tpv-text-smaller'), textLarger: $('tpv-text-larger'), textSize: $('tpv-text'),
   motion: $('tpv-motion'), motionHead: $('tpv-motion-head'),
@@ -999,7 +999,7 @@ async function poll() {
 // server sends it to the one used last with the mouse, or where Connect was pressed.
 
 const tablet = new Pen.Tablet({
-  client: CLIENT, stage: ui.stage, label: ui.pen, button: ui.penButton, toast,
+  client: CLIENT, stage: ui.stage, button: ui.penButton, toast,
   onStatus: (s) => {
     if (s?.state !== 'connected' || !tablet.here) {
       pen.end();

@@ -39,11 +39,18 @@ body {
 
 .tpv-brand { font-weight: 600; margin-right: 4px; color: inherit; text-decoration: none; }
 .tpv-brand:hover { text-decoration: underline; }
+/* Icons drawn in the text's colour: the link to the project page, and Undo. */
+.tpv-home, .tpv-icon { display: grid; place-items: center; width: 28px; height: 26px; padding: 0; border-radius: 6px; color: inherit; }
+.tpv-home:hover { background: var(--hover); }
+.tpv-home svg, .tpv-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5;
+                                stroke-linecap: round; stroke-linejoin: round; }
 .tpv-spacer { flex: 1; }
-/* The toolbar's right end, before Save: the tablet and the status, which give way, cut
-   short, rather than wrap the toolbar onto another row and shrink the view. */
-.tpv-end { flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+/* The toolbar's right end, before Save: the tablet's button and the status. When the window is too
+   narrow, the toolbar wraps onto another row rather than hide a button; the status alone
+   gives way, cut short, and takes no room of its own. */
+.tpv-end { flex: 1 1 auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .tpv-end > button { flex: none; }
+.tpv-end > .tpv-status { flex: 1 1 auto; contain: inline-size; text-align: right; }
 
 select {
   font: inherit;
@@ -144,21 +151,14 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) var(--tpv-panel, 220
 }
 #tpv-pen-cursor.eraser { stroke-dasharray: 3 2; }
 
-.tpv-pen {
-  padding: 2px 8px;
-  border-radius: 999px;
-  white-space: nowrap;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  background: var(--well);
-  color: var(--muted);
-  cursor: default;
-}
-.tpv-pen.connected { color: var(--ok); }
-#tpv-pen-button { background: var(--well); border-radius: 8px; padding: 6px 12px; }
+/* The tablet's button: what it does, with a dot for how the tablet is. */
+#tpv-pen-button { display: flex; align-items: center; gap: 6px; background: var(--well); border-radius: 8px;
+                  padding: 6px 12px; white-space: nowrap; }
 #tpv-pen-button:hover:not(:disabled) { background: var(--hover); }
-.tpv-pen.error, .tpv-pen.off { color: var(--warn); }
+.tpv-pen-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+#tpv-pen-button[data-state="off"] .tpv-pen-dot { display: none; }
+#tpv-pen-button[data-state="connected"] .tpv-pen-dot { background: var(--ok); }
+#tpv-pen-button[data-state="error"] .tpv-pen-dot { background: var(--warn); }
 
 .tpv-empty {
   position: absolute;

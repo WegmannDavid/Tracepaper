@@ -35,14 +35,17 @@ export async function tablet(action, client) {
 }
 
 // The tablet as a page sees it: its status, which the server sends to every window, which
-// window the pen draws in, and the toolbar's status (label) and button for it. The page
-// gets the pen's frames (onFrame) while the pen draws in it, over stage, the element the
-// tablet covers. It can connect the tablet or let it go, and takes the pen when the
-// person uses the page with the mouse (claim).
+// window the pen draws in, and the toolbar's button for it, which says the status in a word
+// and a dot (details in its tooltip) and connects or lets go. The page gets the pen's frames
+// (onFrame) while the pen draws in it, over stage, the element the tablet covers. It takes
+// the pen when the person uses the page with the mouse (claim).
 export class Tablet {
-  constructor({ client, stage, label, button, toast, onStatus = () => {}, onFrame = () => {} }) {
-    Object.assign(this, { client, stage, label, button, toast, onStatus, onFrame });
+  constructor({ client, stage, button, toast, onStatus = () => {}, onFrame = () => {} }) {
+    Object.assign(this, { client, stage, button, toast, onStatus, onFrame });
     this.status = null; // null: the server has no tablet
+    this.dot = Object.assign(document.createElement('span'), { className: 'tpv-pen-dot' });
+    this.text = document.createElement('span');
+    button.replaceChildren(this.dot, this.text);
     button.addEventListener('click', () => this.toggle());
   }
 
@@ -75,7 +78,7 @@ export class Tablet {
   async toggle() {
     const action = this.button.dataset.action;
     this.button.disabled = true;
-    if (action === 'disconnect') this.button.textContent = 'Disconnecting…';
+    if (action === 'disconnect') this.text.textContent = 'Disconnecting…';
     try {
       await tablet(action, this.client);
     } catch (err) {
@@ -88,39 +91,39 @@ export class Tablet {
 
   render() {
     const s = this.status;
-    const mine = !!s && s.state !== 'off' && this.here;
-    this.label.hidden = !s || (s.state === 'off' && !s.message);
     this.button.hidden = !s;
     if (!s) return;
+    const mine = s.state !== 'off' && this.here;
     this.button.dataset.action = mine ? 'disconnect' : 'connect';
-    if (!this.button.disabled) {
-      this.button.textContent = mine ? 'Disconnect' : s.state === 'off' ? 'Connect reMarkable' : 'Connect here';
-    }
-    this.button.title = mine ? 'Let the tablet go: its own app starts again'
-      : s.state === 'off' ? "Draw with the reMarkable's pen in this window. Its own app is closed until you "
-        + 'disconnect; another Tracepaper viewer that has it lets it go.'
-      : "Draw with the reMarkable's pen in this window";
-    let text = 'reMarkable: connecting…', title = s.message;
-    if (s.state === 'connected' && !this.here) {
-      text = 'reMarkable · in another window';
-      title = 'The pen draws in the window you used last. Click into this one, or press Connect here, to draw here.';
+    // The dot: green while connected, amber for a problem, grey while connecting; none while off.
+    const state = s.state === 'off' ? (s.message ? 'error' : 'off') : s.state;
+    this.button.dataset.state = state;
+    let text, title;
+    if (!mine) {
+      text = s.state === 'off' ? 'Connect reMarkable' : 'Connect here';
+      title = s.state === 'off'
+        ? `${s.message ? `reMarkable: ${s.message}. ` : ''}Draw with the reMarkable's pen in this window. Its own `
+          + 'app is closed until you disconnect; another Tracepaper viewer that has it lets it go.'
+        : 'The reMarkable is connected, and its pen draws in another window: the one you used last. Click '
+          + 'into this one, or here, to draw here.';
     } else if (s.state === 'connected') {
-      ({ text, title } = this.describe(s));
-    } else if (s.state === 'error' || s.state === 'off') {
-      text = `reMarkable: ${s.message || s.state}`;
+      text = 'Disconnect';
+      title = `${this.describe(s)} Click to let the tablet go: its own app starts again.`;
+    } else {
+      text = s.state === 'error' ? 'Disconnect' : 'Connecting…';
+      title = `reMarkable: ${s.message || s.state}. Click to let the tablet go.`;
     }
-    this.label.textContent = text;
-    this.label.title = title;
-    this.label.className = `tpv-pen ${s.state}`;
+    if (!this.button.disabled) this.text.textContent = text;
+    this.button.title = title;
   }
 
-  // The label while the pen draws here: how much of the tablet covers the view.
+  // While the pen draws here: how much of the tablet covers the view.
   describe(s) {
     const r = this.stage.getBoundingClientRect();
-    if (!r.width || !r.height) return { text: 'reMarkable', title: s.message };
+    if (!r.width || !r.height) return `reMarkable: ${s.message}.`;
     const a = activeArea(this.size, r), size = `${Math.round(a.width)} × ${Math.round(a.height)} mm`;
-    return { text: `reMarkable · ${size}`, title: `${s.message}. The middle ${size} of the tablet covers this `
-      + 'view, so drawings keep their proportions; the rest of the tablet does nothing.' };
+    return `reMarkable: ${s.message}. The middle ${size} of the tablet covers this view, so drawings keep `
+      + 'their proportions; the rest of the tablet does nothing.';
   }
 }
 

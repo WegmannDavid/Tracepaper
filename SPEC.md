@@ -199,7 +199,7 @@ As SPEC-v0.md §2.7: arrowheads, extension lines, labels and leaders, in multipl
 
 ### 2.8 The 3D view
 
-The viewer shows a scene in 3D as the server tessellates it (to within 0.05 mm and 0.3 rad): each part in its colour (§2.5), see-through as far as the file makes it, with the edges between its faces. Slices don't close a part that is see-through. The person can turn, pan and zoom it, slice it, see through it, and open the exact drawing of what it shows (§5). Curves, points and fields aren't shown in 3D yet.
+The viewer shows a scene in 3D as the server tessellates it (to within 0.05 mm and 0.3 rad): each part in its colour (§2.5), see-through as far as the file makes it, with the edges between its faces. Slices don't close a part that is see-through. The person can turn, pan and zoom it, slice it and see through it (§5). Curves, points and fields aren't shown in 3D yet.
 
 ### 2.9 Slicer projects
 
@@ -445,7 +445,7 @@ If the result isn't right, the person sketches again or says so, and the loop re
 `tracepaper view <build folder, or one view>` serves the viewer on 127.0.0.1 and opens it in a browser. It needs OpenCascade's Python binding, OCP (which CadQuery and build123d install), for scenes. The viewer:
 
 - shows the build folder (§1) on a project page, as a tree of its views: its subfolders, empty ones too, which the person can fold, and the scenes, their named views, the plots, and the other views in them. A folded folder says when a sketch inside it is waiting. Each view opens in a tab of its own, which the person can drag out into a window to watch several side by side, and reloads when its files change on disk;
-- shows scenes in 3D, orthographic or in perspective: rotate, pan, zoom, standard directions, slices along the axes, or just the sections there, and a transparent view. *Drawing* opens the exact drawing of what the 3D view shows, in a tab of its own: the section through the slice plane that is on, or the scene from the standard direction it looks from;
+- shows scenes in 3D, orthographic or in perspective: rotate, pan, zoom, standard directions, slices along the axes, or just the sections there, and a transparent view;
 - shows each view's tree in a panel beside it, where the person can hide and show nodes in that window, as in the OCP viewer: a node's eye shows or hides it with everything inside it, also a node inside a hidden one; `Ctrl`+click on a name shows only that node, `Alt`+click hides it. The person's choices last while the window is open, including when the files are rewritten, and aren't stored;
 - lets the person drag annotations' labels, and provides a pen with a few colours, on drawings and over 3D views, where the view only pans and zooms while there is ink;
 - measures on drawings: the person picks points, which snap to vertices (the ends of lines, arcs and curves), the centres of circles and arcs, points and the points annotations measure from, or else to the nearest point on a line or curve, and reads the distance between two, with Δx and Δy, and the angle at the middle one of three. The measurement is drawn over the drawing, not saved;

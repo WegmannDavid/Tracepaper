@@ -34,11 +34,11 @@ const LOOKS = {
 };
 const ui = {
   canvas: $('tpv-canvas'), view: $('tpv-view'), status: $('tpv-status'), empty: $('tpv-empty'),
-  toast: $('tpv-toast'), axes: $('tpv-axes'), edges: $('tpv-edges'), slices: $('tpv-slices'), pen: $('tpv-pen'),
+  toast: $('tpv-toast'), axes: $('tpv-axes'), edges: $('tpv-edges'), slices: $('tpv-slices'),
   penButton: $('tpv-pen-button'), penCursor: $('tpv-pen-cursor'), fit: $('tpv-fit'), tree: $('tpv-layers'),
   bar: $('tpv-bar'), ink: $('tpv-ink'), inkLayer: $('tp-sketch'), sketch: $('tpv-sketch'), swatches: $('tpv-swatches'),
   undo: $('tpv-undo'), clear: $('tpv-clear'), save: $('tpv-save'), hint: $('tpv-hint'),
-  transparent: $('tpv-transparent'), perspective: $('tpv-perspective'), drawing: $('tpv-drawing'),
+  transparent: $('tpv-transparent'), perspective: $('tpv-perspective'),
   frames: $('tpv-frames'), framesHead: $('tpv-frames-head'), motion: $('tpv-motion'), motionHead: $('tpv-motion-head'),
 };
 const viewName = decodeURIComponent(location.pathname.slice('/view/'.length));
@@ -52,6 +52,7 @@ const AXIS_PX = 30;
 // so a CAD direction (x, y, z) is (x, z, -y) in the scene.
 const toScene = ([x, y, z]) => new THREE.Vector3(x, z, -y);
 const fromScene = (v) => [v.x, -v.z, v.y];
+const isScene = /\.(step|stp)$/i.test(viewName); // a scene (.step), with sliders and frames
 
 // Without WebGL (switched off, or no working GPU process) there is nothing to draw with:
 // say so, and keep the rest of the page working.
@@ -925,37 +926,6 @@ async function reopenSketch() {
   updateStatus();
 }
 
-// ---- Exact drawings of a scene (SPEC.md §5)
-// A scene (.step) is drawn exactly by the server, as a sheet in a window of its own: the
-// section through the one slice plane that is on, or the scene seen from the standard
-// direction the view looks from, with its hidden lines.
-
-const isScene = /\.(step|stp)$/i.test(viewName);
-const DIRECTIONS = { front: [0, -1, 0], back: [0, 1, 0], right: [1, 0, 0], left: [-1, 0, 0], top: [0, 0, 1],
-                     bottom: [0, 0, -1], iso: [1, -1, 1] };
-
-// The scene's view that draws what this one shows ("x=12.5", "front"), or null if none does.
-function drawingView() {
-  const on = slices.planes.filter((p) => p.on);
-  if (on.length === 1) return `${on[0].axis}=${fmt(on[0].at, 3)}`;
-  if (on.length) return null;
-  const back = fromScene(viewAxes().back);
-  return Object.keys(DIRECTIONS).find((k) => {
-    const d = DIRECTIONS[k], n = Math.hypot(...d);
-    return d.every((c, i) => Math.abs(c / n - back[i]) < 1e-4);
-  }) ?? null;
-}
-
-function openDrawing() {
-  const view = drawingView();
-  if (!view) {
-    toast('Slice with one plane, or look from a standard direction (0, 1, 3, 7), for a drawing');
-    return;
-  }
-  const name = `${viewName}#${view}`;
-  window.open(viewUrl(name), `tracepaper:${name}`);
-}
-
 // ---- Tablet pen
 // The toolbar's button connects the reMarkable (tracepaper/pen.py) and lets it go. Its pen
 // draws and erases over the view (ink.js's PenInput). While the person sketches (Sketch is
@@ -965,7 +935,7 @@ function openDrawing() {
 // also takes the tablet's own ink of the strokes in it away.
 
 const tablet = new Tablet({
-  client: CLIENT, stage: ui.canvas, label: ui.pen, button: ui.penButton, toast,
+  client: CLIENT, stage: ui.canvas, button: ui.penButton, toast,
   onStatus: (s) => {
     if (s?.state !== 'connected' || !tablet.here) {
       pen.end();
@@ -1016,8 +986,6 @@ ui.fit.addEventListener('click', () => frame(null));
 ui.edges.addEventListener('click', () => showEdges(!edges?.shown));
 ui.transparent.addEventListener('click', () => setTransparent(!state.transparent));
 ui.perspective.addEventListener('click', () => setPerspective(!state.perspective));
-ui.drawing.hidden = !isScene;
-ui.drawing.addEventListener('click', openDrawing);
 buildSliceControls();
 INK_COLORS.forEach((_, i) => {
   const b = swatch(i, false); // the number keys look from the standard directions here
@@ -1062,7 +1030,6 @@ window.addEventListener('keydown', (e) => {
   else if (key === 'e') showEdges(!edges?.shown);
   else if (key === 't') setTransparent(!state.transparent);
   else if (key === 'o' && !sketching()) setPerspective(!state.perspective);
-  else if (key === 'd' && isScene) openDrawing();
   else if (key === 'p') setDrawing(!state.drawing);
   else if (key === 'escape') setDrawing(false);
 });
@@ -1082,4 +1049,4 @@ tablet.connect();
 // For debugging from the console and for tests/test_browser.py.
 window.tracepaper3d = { THREE, scene, camera, controls, state, ready, frame, LOOKS, toScene, CLIENT, tablet, flatten,
   showEdges, setTransparent, setPerspective, viewCamera, slices, ink, pen, save, undo, setDrawing, viewArea,
-  drawingView, frames, sliders, renderScreen };
+  frames, sliders, renderScreen };
