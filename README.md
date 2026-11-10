@@ -34,7 +34,7 @@ python3 -m tracepaper view tests/geometry     # the test scenes, from this direc
 - **Measuring:** **Measure** (`R`) on a drawing: click points, which snap to end points (a square), centres (a circle), points and dimensions' points, or onto a line or curve (a cross). Two give the distance, with Δx and Δy, a third the angle at the middle one, on the drawing and beside the coordinates. Right-click or `Esc` starts again.
 - **Text size:** **A−** and **A+** on a drawing make the dimensions' and symbols' text smaller or larger, through the ISO heights, with their arrowheads; the notes keep theirs. For a drawing that spans much more than its details, such as a section through a wall with a window profile in it. The browser remembers it for each view.
 - **3D views:** the mouse works much as in the OCP CAD viewer. Drag to rotate: near the middle it tips the model over, near the edge it turns it about the line of sight; with `Ctrl` only up/down counts, with `Alt` only sideways. Pan as on drawings, with the right or middle button or with `Shift` or `Space` + drag, and scroll to zoom. Iso, Top, Front and Right (keys `0`, `7`, `1`, `3`) look from the standard directions, Fit (`F`) frames what's shown, Edges (`E`) switches the edges off and on, Transparent (`T`) makes every face half see-through, as in the OCP viewer, to see what's inside, and Perspective (`O`) draws the model as a camera would see it instead of orthographic, from the same direction and at the same size where it turns. Sketching switches back to orthographic. **Slice**, below the tree, cuts the model with planes along X, Y and Z, as the OCP viewer does: switch a plane on, drag its slider or type where it goes in mm, and `⇄` keeps the other side. Cut parts are closed in their own colours. *Section only* leaves just those cut faces, seen straight on when one plane is on, and *Cut a corner* takes away only what lies beyond all the planes.
-- **Sketching over a 3D view:** press **Sketch** (`P`) and draw with the mouse, or with the reMarkable's pen. You draw on the plane you're looking at, so while there's ink the view only pans and zooms; turning it first asks to wipe the ink. The saved sketch file stays for the AI, and saving ink from the new direction asks before it replaces that file. Save writes `<name>.step.sketch.svg`, a picture of the view with your ink over it, placed in the model. In *Section only*, looking straight at the section, the ink is on the section's plane. For exact coordinates under your ink, sketch on a drawing instead.
+- **Sketching over a 3D view:** press **Sketch** (`P`) and draw with the mouse, or with the reMarkable's pen. **Erase** (`X`) takes away whole strokes the mouse drags over, as the pen's other end does. You draw on the plane you're looking at, so while there's ink the view only pans and zooms; turning it first asks to wipe the ink. The saved sketch file stays for the AI, and saving ink from the new direction asks before it replaces that file. Save writes `<name>.step.sketch.svg`, a picture of the view with your ink over it, placed in the model. In *Section only*, looking straight at the section, the ink is on the section's plane. For exact coordinates under your ink, sketch on a drawing instead.
 - **Slicer projects** open in the 3D view, where the tree has the plate, each piece by name, and the printer's build volume, hidden at first: show it to check that tall pieces fit. The orange corner of the plate is the part the printer keeps for itself. `tracepaper render plate.3mf` draws it from above and says which pieces are off the plate, over that corner or too tall.
 - **The tree panel:** every view shows its named parts in the same panel: a scene's assembly tree, in 3D and in its drawings, an older sheet's named groups. It starts folded, showing only the top level; `▸` unfolds a node. Hiding works as in the OCP viewer, in that window only:
   - A node's eye hides or shows it with everything inside it. Inside a hidden node, a node can be shown again on its own; half an eye means only part of what's inside shows.
@@ -52,6 +52,7 @@ tracepaper view build                           # the build folder, or a single 
 | | |
 |---|---|
 | `P` / `V` | mouse draws / mouse moves labels and pans (the default) |
+| `X` | mouse erases whole strokes, as the reMarkable's eraser does |
 | `1`–`4` | ink colour |
 | `I`, then click | pick the ink colour from something on the sheet; `5` selects it again later |
 | scroll | zoom |
@@ -106,6 +107,27 @@ ln -s "$PWD/skills/tracepaper" ~/.claude/skills/tracepaper            # the Clau
   - viewer changes, after a page reload;
   - server or tablet connection changes, after restarting that `tracepaper view`.
 - **New skills** are only noticed by new Claude sessions. Once a session knows the skill, it reads the current files each time it uses it.
+
+### Versions and migrating
+
+Each project records the Tracepaper version it last worked with in `.tracepaper-version` at its root. With this hook in `~/.claude/settings.json`, every Claude session that starts in a project using Tracepaper checks it first:
+
+```json
+"hooks": {
+  "SessionStart": [
+    { "matcher": "startup|resume",
+      "hooks": [{ "type": "command", "command": "\"$HOME/.local/bin/tracepaper\" check 2>/dev/null || true", "timeout": 30 }] }
+  ]
+}
+```
+
+The full path keeps it working in a project whose own Python environment is active. `tracepaper check` says nothing when all is well. Otherwise Claude opens the session by telling you:
+
+- **A newer version is on GitHub:** what changed, and whether you want it. Updating pulls this checkout, which updates Tracepaper for every project, then migrates this one. Keeping your version (`tracepaper adopt --skip`) means it isn't offered again.
+- **This checkout moved past the project's version,** because you updated it from another project: the old version is gone, so Claude migrates the project once you agree.
+- **A viewer of the project runs older server code:** restart it.
+
+After migrating, `tracepaper adopt` records the new version. The check fetches from GitHub, which takes a second, and works offline with what it last fetched.
 
 `tracepaper render scene.step#view` (or `name.plot.json`, or `plate.3mf`) and `tracepaper inspect [path]` are the AI's side of the loop. `render` draws a view as the viewer does, as SVG and PNG, so the AI can look at it first, and says what's wrong in its `.tp.json`; a slicer project it draws from above and checks against the plate. `inspect` reports on the newest sketch file under `path` (strokes, picked colours, moved labels, frames) and renders the whole view plus close-ups of the ink.
 

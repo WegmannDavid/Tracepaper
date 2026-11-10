@@ -39,12 +39,31 @@ def main(argv=None) -> None:
     look.add_argument("path", nargs="?", default=".",
                       help="a .sketch.svg file, or a directory to take the newest one from (default: .)")
     look.add_argument("--out", type=Path, help="directory for the images (default: a new temporary one)")
+    check = commands.add_parser(
+        "check", help="say whether this project's Tracepaper version is behind the checkout, or the checkout "
+                      "behind GitHub, and whether its viewers run old code (silent if all is well); "
+                      "a Claude Code SessionStart hook runs it")
+    check.add_argument("path", nargs="?", default=".", help="a folder of the project (default: .)")
+    check.add_argument("--offline", action="store_true", help="don't fetch from GitHub")
+    adopt = commands.add_parser(
+        "adopt", help="record the checkout's version as this project's, once the project is migrated to it")
+    adopt.add_argument("path", nargs="?", default=".", help="a folder of the project (default: .)")
+    adopt.add_argument("--skip", action="store_true",
+                       help="keep the current version instead, and don't offer GitHub's newest again")
     args = parser.parse_args(argv)
     if args.command == "view":
         serve(Path(args.path), args.port, not args.no_browser, RemarkablePen(args.tablet_host, args.rotate))
     elif args.command == "render":
         from .render import render
         print(render(args.view, args.frame, args.out, args.pose))
+    elif args.command == "check":
+        from .versions import check
+        report = check(Path(args.path), fetch=not args.offline)
+        if report:
+            print(report)
+    elif args.command == "adopt":
+        from .versions import adopt
+        print(adopt(Path(args.path), args.skip))
     elif args.command == "inspect":
         from .report import inspect
         print(inspect(Path(args.path), args.out))
